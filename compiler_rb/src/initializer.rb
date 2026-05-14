@@ -33,7 +33,14 @@ class Initializer
 
   sig { returns(String) }
   def generate_taskfile
-    "-" * 80
+    <<~YML
+      version: '3'
+
+      tasks:
+        build:
+          cmds:
+            - mochi -i "./" -o "./build"
+    YML
   end
 
   sig { returns(String) }
