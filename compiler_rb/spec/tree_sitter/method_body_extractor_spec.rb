@@ -1,5 +1,6 @@
 # typed: false
 require_relative "../test_helper"
+require_relative "../../src/data_models/ruby_def"
 require_relative "../../src/tree_sitter/method_body_extractor"
 
 class MethodBodyExtractorTest < Minitest::Test
