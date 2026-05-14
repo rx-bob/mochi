@@ -8,6 +8,7 @@ GEM
       sorbet-static (= 0.6.13219)
     sorbet-runtime (0.6.13219)
     sorbet-static (0.6.13219-universal-darwin)
+    webrick (1.9.2)
 
 PLATFORMS
   arm64-darwin-25
@@ -18,6 +19,7 @@ DEPENDENCIES
   rake
   sorbet
   sorbet-runtime
+  webrick
 
 BUNDLED WITH
    2.3.7

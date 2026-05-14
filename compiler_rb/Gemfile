@@ -1,5 +1,8 @@
 source "https://rubygems.org"
 
+# stdlib backfills for Ruby 3.0+
+gem "webrick"
+
 gem "sorbet-runtime"
 gem "ffi"
 
