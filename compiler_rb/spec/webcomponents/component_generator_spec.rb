@@ -175,3 +175,72 @@ class ComponentGeneratorTraverseTest < Minitest::Test
     assert_equal [0, 1, 0], b.path
   end
 end
+
+class ComponentGeneratorGenerateTest < Minitest::Test
+  def test_generates_correct_bindings_and_paths
+    # Mixed text node (static prefix + variable) -> :text binding
+    # Pure variable node -> :html binding (uses innerHTML for SVG/HTML content)
+    html = "<div><span>Count: {count}</span><p class=\"{active}\">Test</p></div>"
+    reactables = "['count', 'active']"
+    bindings = {}
+
+    gen = ComponentGenerator.new
+    comp = gen.generate("TestCmp", "test-cmp", "", html, reactables, bindings)
+
+    js = comp.js_code
+
+    # Check structure
+    assert_includes js, "class TestCmpWebComp extends MochiComponent"
+    assert_includes js, "constructor()"
+    assert_includes js, "this.rubyComp = Opal.TestCmp.$new()"
+    assert_includes js, "mount(target)"
+    assert_includes js, "this.rubyComp.$__mochi_mounted(this)"
+    assert_includes js, "customElements.define('test-cmp', TestCmpWebComp)"
+
+    # Check paths
+    # div -> span (0) -> text (0) for {count}
+    # r.childNodes[0].childNodes[0]
+    assert_includes js, ".childNodes[0].childNodes[0]"
+
+    # div -> p (1) for {active}
+    # r.childNodes[1]
+    assert_includes js, ".childNodes[1]"
+
+    # Check update methods - mixed text node uses textContent template replacement
+    assert_includes js, "update_count(val)"
+    assert_includes js, "r.template.replace('{count}', val)"
+
+    assert_includes js, "update_active(val)"
+    assert_includes js, "setAttribute(r.name, val)"
+
+    # Check template registry
+    assert_includes js, "window._mochi_templates['TestCmp']"
+    # Original text node content is kept for runtime template replacement
+    assert_includes js, "Count: {count}"
+    assert_includes js, "_tmpl.replace('{count}'"
+    assert_includes js, "r.template.replace('{count}'"
+  end
+
+  def test_uses_innerhtml_for_pure_variable_text_nodes
+    html = "<div>{rendered_svg}</div>"
+    reactables = "['rendered_svg']"
+    bindings = {}
+
+    gen = ComponentGenerator.new
+    comp = gen.generate("TestCmp", "test-cmp", "", html, reactables, bindings)
+
+    js = comp.js_code
+
+    # Pure variable node: span injected, innerHTML used
+    assert_includes js, "document.createElement('span')"
+    assert_includes js, "insertBefore"
+    assert_includes js, "innerHTML = this.rubyComp.$get_rendered_svg()"
+    assert_includes js, "r.type === 'html') r.node.innerHTML = val"
+  end
+
+  def test_generate_static_returns_empty_string
+    gen = ComponentGenerator.new
+    result = gen.generate_static
+    assert_equal "", result
+  end
+end
