@@ -1,6 +1,7 @@
 source "https://rubygems.org"
 
 gem "sorbet-runtime"
+gem "ffi"
 
 group :development do
   gem "sorbet"

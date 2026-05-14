@@ -1,2 +1,4 @@
 --dir
 src/
+--ignore
+tree_sitter/
