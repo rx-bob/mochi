@@ -1,3 +1,6 @@
+# typed: true
+# frozen_string_literal: true
+
 module Mochi
   # Stub class for standalone typechecking logic.
   # Full implementation deferred per RUBY_PORT.md Appendix D.

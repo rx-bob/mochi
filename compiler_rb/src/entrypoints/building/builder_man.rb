@@ -16,8 +16,8 @@ class BuilderMan
 
   sig { params(input_dir: String).void }
   def initialize(input_dir)
-    @input_dir = input_dir
-    @build_id = generate_build_id
+    @input_dir = T.let(input_dir, String)
+    @build_id = T.let(generate_build_id, String)
 
     create_mochi_dir_if_missing
 

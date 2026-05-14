@@ -1,6 +1,6 @@
 # typed: true
 
-class QuickJS
+module QuickJS
   module Lib
     extend FFI::Library
 

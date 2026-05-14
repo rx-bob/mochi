@@ -136,7 +136,7 @@ module QuickJS
         QuickJSBindings.js_newnumber(@context, value)
       when TrueClass, FalseClass
         value ? QuickJS::TRUE : QuickJS::FALSE
-      when Nil
+      when NilClass
         QuickJS::NULL
       when Value
         QuickJSBindings.js_dupvalue(@context, value.handle)

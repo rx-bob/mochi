@@ -89,7 +89,7 @@ class Compiler
 
     use_quickjs = true
 
-    cache = T.let(Caching::Cache.new, Caching::Cache)
+    cache = Caching::Cache.new
 
     transpiled_ruby_code = if use_quickjs
       builder = QuickJS::Opal::Builder.new(include_runtime: false)
@@ -140,10 +140,6 @@ class Compiler
       File.write(transpiled_ruby_code_path, result)
       builder.finalize
       result
-    else
-      puts "Using Opal CLI (Old Logic)..."
-      # Old CLI path - not used in Ruby port
-      T.let(File.read(transpiled_ruby_code_path), String)
     end
 
     cache.close
@@ -170,15 +166,17 @@ class Compiler
     print_cmp_start_separator(cls_name, i)
     puts "ClassName:'#{cls_name}'"
 
-    return nil if cls_name.nil? || cls_name.empty?
+    return nil if cls_name.empty?
 
     methods = RubyUnderstander.extract_method_bodies(rb_file, cls_name)
 
     amped_ruby_code = rb_file
-    if methods.key?("css")
+    css_method = methods["css"]
+    html_method = methods["html"]
+    if css_method && html_method
       imports = RubyUnderstander.get_imports(rb_file)
-      css = RubyUnderstander.extract_raw_string_from_def_body(methods["css"].body, "css")
-      html = RubyUnderstander.extract_raw_string_from_def_body(methods["html"].body, "html")
+      css = RubyUnderstander.extract_raw_string_from_def_body(css_method.body, "css")
+      html = RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
 
       # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
       attr_hash_result = AttributeHashExtractor.process(html)
@@ -314,7 +312,9 @@ class Compiler
         if insertion_point && insertion_point > 0
           insertion_point += 3
           methods_code = "\n\n  #{injected_methods.join("\n\n  ")}\n"
-          amped_ruby_code = amped_ruby_code[0...insertion_point] + methods_code + amped_ruby_code[insertion_point..-1]
+          prefix = amped_ruby_code[0...insertion_point]
+          suffix = amped_ruby_code[insertion_point..-1]
+          amped_ruby_code = T.must(prefix) + methods_code + T.must(suffix)
         else
           amped_ruby_code += "\n\n#{injected_methods.join("\n\n")}\n"
         end
