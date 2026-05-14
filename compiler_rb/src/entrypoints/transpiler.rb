@@ -55,7 +55,7 @@ class Compiler
       rb_file = File.read(absolute_path)
 
       begin
-        component = transpile_component(absolute_path, i, absolute_path)
+        component = transpile_component(rb_file, i, absolute_path)
         i += 1
 
         if component
@@ -131,7 +131,7 @@ class Compiler
 
       root_path = "#{lib_dir}/Root.rb"
       if File.exist?(root_path)
-        builder.compile_with_cache(File.read(root_path), "lib/Root.rb", cache, false)
+        builder.compile_with_cache(File.read(root_path), "lib/Root.rb", cache, requirable: false)
       else
         puts "ERROR: Root.rb not found at #{root_path}"
       end
