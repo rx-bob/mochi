@@ -102,6 +102,11 @@ module Lexbor
       @doc = FFI::Pointer::NULL
     end
 
+    # Serialize the full document to an HTML string
+    def to_html
+      root&.to_html || ""
+    end
+
     # Serialize a node's children to an HTML string
     def self.inner_html(node)
       node.inner_html
@@ -208,6 +213,26 @@ module Lexbor
     # Serialize children only (same as Crystal Node#inner_html)
     def inner_html
       children.map(&:to_html).join
+    end
+
+    # Return true if this is a regular element node (not text/comment/doctype)
+    def element?
+      !["_text", "_em_comment", "_em_doctype"].include?(tag_name)
+    end
+
+    # Recursively collect all descendant element nodes
+    def all_elements
+      result = []
+      walk_tree do |node, _level|
+        result << node if node.element?
+      end
+      result
+    end
+
+    # Depth-first walk over this node and all descendants
+    def walk_tree(level = 0, &block)
+      yield self, level
+      children.each { |child| child.walk_tree(level + 1, &block) }
     end
 
     private
