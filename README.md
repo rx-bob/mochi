@@ -76,21 +76,33 @@ end
 
 ### Compiling
 Prerequisites:
-* <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/yampug/mochi/blob/main/github/assets/crystal_dark.png?raw=true">
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/yampug/mochi/blob/main/github/assets/crystal_light.png?raw=true">
-    <img alt="Crystallang Icon" style="height: 16px; background: white; border-radius: 50%; padding: 1px;" src="https://github.com/yampug/mochi/blob/main/github/assets/crystal_light.png?raw=true">
-  </picture> https://crystal-lang.org
+* <img alt="Ruby Icon" style="height: 16px;" src="https://www.ruby-lang.org/favicon.ico"/> [Ruby](https://www.ruby-lang.org/) (3.1+)
 * <img alt="Opal Ruby Icon" style="height: 16px;" src="https://github.com/yampug/mochi/blob/main/github/assets/opal_icon.ico?raw=true"> [Opal](https://opalrb.com)
 * <img alt="Task Go Icon" style="height: 16px;" src="https://github.com/yampug/mochi/blob/main/github/assets/task_icon.ico?raw=true"> [Task](https://taskfile.dev)
-* <img alt="Ruby Icon" style="height: 16px;" src="https://www.ruby-lang.org/favicon.ico"/> [Ruby](https://www.ruby-lang.org/)
 * <img alt="Sorbet Icon" style="height: 16px;" src="https://sorbet.org/img/favicon.ico"/> [Sorbet](https://sorbet.org/)
 
 ```
 git clone http://github.com/yampug/mochi
 cd mochi
-task build
+task run-ruby
 ```
+
+Mochi ships with a **Ruby compiler** (`compiler_rb/`) that is now the default. The legacy Crystal compiler is still available as `task run-crystal` for fallback. Both produce identical output and pass all E2E tests.
+
+### Compiler Tasks
+
+| Task | Description |
+|---|---|
+| `task run` | Build with the Ruby compiler (**default**) |
+| `task run-crystal` | Build with the legacy Crystal compiler |
+| `task run-ruby` | Alias for `task run` |
+| `task e2e` | Build with Ruby + run Playwright E2E tests |
+| `task e2e-crystal` | Build with Crystal + run Playwright E2E tests |
+| `task specs-ruby` | Run the Ruby compiler's Minitest suite |
+| `task regression` | Compare Crystal vs Ruby compiler output |
+| `task dev` | Start dev server using Ruby compiler |
+| `task dev-crystal` | Start dev server using Crystal compiler |
+| `task sorbet` | Run Sorbet typechecker on compiler_rb/ |
 
 ### Usage
 

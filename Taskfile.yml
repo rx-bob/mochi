@@ -11,10 +11,24 @@ vars:
   LINK_FLAGS: '--link-flags="-L{{.ROOT_DIR}}/fragments/libs"'
   DEFAULT_RUN_PARAMS: '-i "../devground/components" -o "../devground/public"'
 
+  RUBY_RUN_CONFIG:
+    sh: |
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo 'export DYLD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs:$DYLD_LIBRARY_PATH" && export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)'
+      else
+        echo 'export LD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs:$LD_LIBRARY_PATH"'
+      fi
+  RUBY_DEFAULT_PARAMS: '-i "../devground/components" -o "../devground/public"'
+
 tasks:
   specs:
     cmds:
       - '{{.FRAG_CONFIG}} && cd compiler && crystal spec {{.LINK_FLAGS}}'
+
+  specs-ruby:
+    cmds:
+      - |
+        {{.RUBY_RUN_CONFIG}} && cd compiler_rb && bundle exec ruby -Isrc -Ispec -e 'Dir["spec/**/*_spec.rb"].each { |f| require File.expand_path(f) }'
 
   init-test:
     cmds:
@@ -28,21 +42,57 @@ tasks:
     deps:
       - wipe-build-dir
     cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}}'
-  run-new-engine:
-    deps:
-      - wipe-build-dir
-    cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}} --experimental-new-engine'
-  run-no-internal-logs:
+      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}}'
+
+  run-crystal:
     deps:
       - wipe-build-dir
     cmds:
       - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}}'
 
+  run-ruby:
+    deps:
+      - wipe-build-dir
+    cmds:
+      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}}'
+
+  run-new-engine:
+    deps:
+      - wipe-build-dir
+    cmds:
+      - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}} --experimental-new-engine'
+
+  run-no-internal-logs:
+    deps:
+      - wipe-build-dir
+    cmds:
+      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}}'
+
   typecheck:
     cmds:
       - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- typecheck ../devground/components'
+
+  e2e-ruby:
+    deps:
+      - run-ruby
+    cmds:
+      - echo "-----------------------------------------------------------------------------------------------------"
+      - 'cd e2e && npx playwright test'
+
+  regression:
+    cmds:
+      - echo "building with crystal..."
+      - |
+        {{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}} >/dev/null 2>&1 && cp ../devground/public/bundle.js /tmp/crystal_bundle.js && cp ../devground/public/runtime.js /tmp/crystal_runtime.js
+      - echo "building with ruby..."
+      - |
+        {{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}} >/dev/null 2>&1 && cp ../devground/public/bundle.js /tmp/ruby_bundle.js && cp ../devground/public/runtime.js /tmp/ruby_runtime.js
+      - echo "comparing runtime.js..."
+      - |
+        diff -q /tmp/crystal_runtime.js /tmp/ruby_runtime.js && echo "runtime.js is IDENTICAL" || echo "runtime.js DIFFERS"
+      - echo "comparing bundle.js..."
+      - |
+        diff -q /tmp/crystal_bundle.js /tmp/ruby_bundle.js && echo "bundle.js is IDENTICAL" || echo "bundle.js DIFFERS (may be ordering -- see notes/RUBY_CRYSTAL_COMPARISON.md)"
 
   build:
     cmds:
@@ -56,7 +106,15 @@ tasks:
 
   dev:
     cmds:
+      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && bundle exec ruby -Isrc src/mochi.rb --dev --config=../config/dev_server_config.json --root="../devground/public"'
+
+  dev-crystal:
+    cmds:
       - '{{.FRAG_CONFIG}} && cd compiler && crystal run src/mochi.cr {{.LINK_FLAGS}} -- --dev --config=../config/dev_server_config.json --root="../devground/public"'
+
+  dev-ruby:
+    cmds:
+      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && bundle exec ruby -Isrc src/mochi.rb --dev --config=../config/dev_server_config.json --root="../devground/public"'
 
   e2e:
     deps:
@@ -65,9 +123,16 @@ tasks:
       - echo "-----------------------------------------------------------------------------------------------------"
       - 'cd e2e && npx playwright test'
 
+  e2e-crystal:
+    deps:
+      - run-crystal
+    cmds:
+      - echo "-----------------------------------------------------------------------------------------------------"
+      - 'cd e2e && npx playwright test'
+
   sorbet:
     cmds:
-      - cd devground/components && srb tc
+      - cd compiler_rb && bundle exec srb tc
 
   generate-batteries:
     cmds:
