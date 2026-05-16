@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mochi PoC — YARV/WASM Architecture</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 720px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #1a1a2e;
+      background: #f8f9fa;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    .subtitle { color: #666; margin-bottom: 2rem; font-size: 0.9rem; }
+
+    /* Component container */
+    .component-slot {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    /* Counter styles (rendered by Ruby) */
+    .counter h2 { font-size: 1.1rem; color: #555; margin-bottom: 0.5rem; }
+    .counter .count {
+      display: block;
+      font-size: 3rem;
+      font-weight: 700;
+      text-align: center;
+      padding: 1rem 0;
+      color: #16213e;
+    }
+    .counter .buttons {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .counter .buttons button {
+      padding: 0.5rem 1.25rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .counter .buttons button:hover { background: #f0f0f0; }
+    .counter .buttons button:active { background: #e0e0e0; }
+
+    /* Todo styles (rendered by Ruby) */
+    .todo h2 { font-size: 1.1rem; color: #555; margin-bottom: 0.5rem; }
+    .todo ul { list-style: none; margin: 0.5rem 0; }
+    .todo li { padding: 0.4rem 0; border-bottom: 1px solid #f0f0f0; }
+    .todo li.done { text-decoration: line-through; color: #aaa; }
+    .todo .buttons { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+    .todo .buttons button {
+      padding: 0.4rem 1rem; font-size: 0.9rem;
+      border: 1px solid #ccc; border-radius: 4px;
+      background: #fff; cursor: pointer;
+    }
+    .todo .buttons button:hover { background: #f0f0f0; }
+
+    /* Stats panel */
+    .stats {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      font-size: 0.85rem;
+      color: #555;
+    }
+    .stats h3 { font-size: 0.95rem; margin-bottom: 0.5rem; color: #333; }
+    .stats table { width: 100%; border-collapse: collapse; }
+    .stats td { padding: 0.25rem 0; }
+    .stats td:last-child { text-align: right; font-family: monospace; }
+    .stats .loaded { color: #16a34a; }
+    .stats .pending { color: #999; }
+  </style>
+</head>
+<body>
+  <h1>Mochi PoC — Ruby in WASM</h1>
+  <p class="subtitle">Full Ruby components via mruby bytecode + shared memory rendering</p>
+
+  <!-- Component mount point — all rendering happens inside here -->
+  <div class="component-slot"
+       data-mochi="counter-1"
+       data-mochi-class="Counter"
+       data-mochi-src="counter.mrb">
+    <!-- Placeholder shown before WASM loads -->
+    <div class="counter">
+      <h2>Loading...</h2>
+      <span class="count">-</span>
+    </div>
+  </div>
+
+  <!-- Second component — same WASM, different bytecode, zero extra JS -->
+  <div class="component-slot"
+       data-mochi="todo-1"
+       data-mochi-class="TodoList"
+       data-mochi-src="todo.mrb">
+    <div class="todo">
+      <h2>Loading...</h2>
+    </div>
+  </div>
+
+  <!-- Stats panel -->
+  <div class="stats" id="stats">
+    <h3>Payload Breakdown</h3>
+    <table>
+      <tr><td>WASM runtime (mruby VM)</td><td id="stat-wasm" class="pending">...</td></tr>
+      <tr><td>WASM gzipped</td><td id="stat-wasm-gz" class="pending">...</td></tr>
+      <tr><td>Emscripten glue (mochi.js)</td><td id="stat-glue" class="pending">...</td></tr>
+      <tr><td>Bootstrapper + Painter JS</td><td id="stat-js" class="pending">...</td></tr>
+      <tr><td>Component bytecode (.mrb)</td><td id="stat-mrb" class="pending">...</td></tr>
+      <tr><td>Component JS code</td><td class="loaded">0 bytes</td></tr>
+      <tr><td colspan="2" style="border-top:1px solid #eee;padding-top:0.5rem;font-weight:600">
+        Total JS framework code: bootstrapper.js + painter.js only
+      </td></tr>
+    </table>
+  </div>
+
+  <!-- Load order: Emscripten glue → Painter → Bootstrapper -->
+  <script src="mochi.js"></script>
+  <script src="painter.js"></script>
+  <script src="bootstrapper.js"></script>
+  <script>
+    // Measure payload sizes after load
+    // Use PerformanceObserver to measure sizes from already-loaded resources
+    function measurePayloads() {
+      var entries = performance.getEntriesByType('resource');
+      var sizes = {};
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var name = e.name.split('/').pop();
+        sizes[name] = { transfer: e.transferSize, decoded: e.decodedBodySize };
+      }
+
+      function show(id, file, fmt) {
+        var s = sizes[file];
+        if (!s) return;
+        var el = document.getElementById(id);
+        el.textContent = fmt(s);
+        el.className = 'loaded';
+      }
+
+      show('stat-wasm', 'mochi.wasm', function(s) { return (s.decoded / 1024).toFixed(1) + ' KB'; });
+      show('stat-wasm-gz', 'mochi.wasm', function(s) {
+        return s.transfer > 0 ? (s.transfer / 1024).toFixed(1) + ' KB' : '~' + (s.decoded * 0.37 / 1024).toFixed(1) + ' KB (est)';
+      });
+      show('stat-glue', 'mochi.js', function(s) { return (s.decoded / 1024).toFixed(1) + ' KB'; });
+
+      var bsSize = (sizes['bootstrapper.js'] || {}).decoded || 0;
+      var ptSize = (sizes['painter.js'] || {}).decoded || 0;
+      if (bsSize + ptSize > 0) {
+        var el = document.getElementById('stat-js');
+        el.textContent = ((bsSize + ptSize) / 1024).toFixed(1) + ' KB';
+        el.className = 'loaded';
+      }
+
+      var mrbTotal = 0;
+      var mrbCount = 0;
+      for (var name in sizes) {
+        if (name.endsWith('.mrb')) { mrbTotal += sizes[name].decoded; mrbCount++; }
+      }
+      if (mrbTotal > 0) {
+        var el = document.getElementById('stat-mrb');
+        el.textContent = mrbTotal + ' bytes (' + mrbCount + ' components)';
+        el.className = 'loaded';
+      }
+    }
+    // Wait for all resources to finish loading
+    window.addEventListener('load', function() { setTimeout(measurePayloads, 100); });
+  </script>
+</body>
+</html>
