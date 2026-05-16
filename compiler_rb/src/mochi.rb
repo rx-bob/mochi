@@ -182,7 +182,7 @@ module Mochi
         return
       end
 
-      puts "Mochi v0.3"
+      puts "Mochi v0.4"
       if !@project_name.empty?
         Initializer.new(@project_name)
       else
