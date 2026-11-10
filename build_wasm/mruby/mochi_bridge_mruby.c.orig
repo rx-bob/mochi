@@ -1,0 +1,270 @@
+// mochi_bridge_mruby.c
+// Single-file mruby C bridge for Mochi browser components.
+// Compiled with Emscripten into the mochi-ruby-micro.wasm binary.
+
+#include <mruby.h>
+#include <mruby/class.h>
+#include <mruby/string.h>
+#include <mruby/variable.h>
+#include <mruby/irep.h>
+#include <mruby/error.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Mrblib stub (libmruby_core.a with disable_libmruby needs this) */
+void mrb_init_mrblib(mrb_state *mrb) { (void)mrb; }
+
+/* IO HAL stubs — mruby io gem references these in browser builds */
+void mrb_hal_io_init(mrb_state *mrb) { (void)mrb; }
+void mrb_hal_io_free(mrb_state *mrb) { (void)mrb; }
+int  mrb_hal_io_pipe(int fildes[2]) { (void)fildes; return -1; }
+int  mrb_hal_io_readlink(const char *path, char *buf, size_t bufsize) { (void)path; (void)buf; (void)bufsize; return -1; }
+char* mrb_hal_io_realpath(const char *path) { (void)path; return NULL; }
+int  mrb_hal_io_rename(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+int  mrb_hal_io_select(int nfds, void *rfds, void *wfds, void *efds, long tv_sec, long tv_usec) { (void)nfds; (void)rfds; (void)wfds; (void)efds; (void)tv_sec; (void)tv_usec; return -1; }
+int  mrb_hal_io_spawn_process(const char *command) { (void)command; return -1; }
+int  mrb_hal_io_stat(const char *path, void *st) { (void)path; (void)st; return -1; }
+int  mrb_hal_io_symlink(const char *path1, const char *path2) { (void)path1; (void)path2; return -1; }
+int  mrb_hal_io_umask(int cmask) { (void)cmask; return 0; }
+int  mrb_hal_io_unlink(const char *path) { (void)path; return -1; }
+int  mrb_hal_io_close(int fd) { (void)fd; return -1; }
+void mrb_hal_io_fd_clr(int fd, void *fds) { (void)fd; (void)fds; }
+int  mrb_hal_io_fd_isset(int fd, void *fds) { (void)fd; (void)fds; return 0; }
+void mrb_hal_io_fd_set(int fd, void *fds) { (void)fd; (void)fds; }
+void mrb_hal_io_fd_zero(void *fds) { (void)fds; }
+int  mrb_hal_io_fsync(int fd) { (void)fd; return -1; }
+int  mrb_hal_io_getfd(void *io) { (void)io; return -1; }
+int  mrb_hal_io_isatty(int fd) { (void)fd; return 0; }
+int  mrb_hal_io_open(const char *pathname, int flags, int mode) { (void)pathname; (void)flags; (void)mode; return -1; }
+int  mrb_hal_io_read(int fd, void *buf, size_t count) { (void)fd; (void)buf; (void)count; return 0; }
+int  mrb_hal_io_lseek(int fd, long offset, int whence) { (void)fd; (void)offset; (void)whence; return -1; }
+int  mrb_hal_io_write(int fd, const void *buf, size_t count) { (void)fd; (void)buf; (void)count; return 0; }
+
+/* Emscripten libc stubs for symbols mruby references but we don't need */
+void exit(int status) { (void)status; }
+int  __c_longjmp(void *env, int val) { (void)env; (void)val; return 0; }
+
+/* Socket HAL stubs */
+int  mrb_hal_socket_init(void) { return -1; }
+int  mrb_hal_socket_final(void) { return -1; }
+int  mrb_hal_socket_inet_ntop(int af, const void *src, char *dst, unsigned int size) { (void)af; (void)src; (void)dst; (void)size; return -1; }
+int  mrb_hal_socket_inet_pton(int af, const char *src, void *dst) { (void)af; (void)src; (void)dst; return -1; }
+void mrb_hal_socket_set_errno_from_last_error(void) {}
+int  mrb_hal_socket_set_nonblock(int fd, int f) { (void)fd; (void)f; return -1; }
+void mrb_hal_socket_sockaddr_un(const char *path, void *ss, void *len) { (void)path; (void)ss; (void)len; }
+int  mrb_hal_socket_socketpair(int domain, int type, int protocol, int sv[2]) { (void)domain; (void)type; (void)protocol; (void)sv; return -1; }
+int  mrb_hal_socket_ip_address_list(void) { return -1; }
+const char* mrb_hal_socket_unix_path(void *ss, void *len) { (void)ss; (void)len; return NULL; }
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define MOCHI_EXPORT EMSCRIPTEN_KEEPALIVE
+#else
+#define MOCHI_EXPORT __attribute__((used))
+#endif
+
+// ── Globals ──────────────────────────────────────────────────────
+static mrb_state *g_mrb = NULL;
+
+#define MAX_COMPONENTS 256
+#define RENDER_BUF_SIZE 65536
+#define EVENT_BUF_SIZE  4096
+
+static struct {
+  char id[64];
+  char class_name[64];
+  mrb_value instance;
+  int active;
+} g_components[MAX_COMPONENTS];
+
+static uint8_t g_render_buffer[RENDER_BUF_SIZE];
+static uint8_t g_event_buffer[EVENT_BUF_SIZE];
+static size_t  g_render_len = 0;
+static size_t  g_event_len  = 0;
+
+// ── Internal helpers ───────────────────────────────────────────
+static void ensure_mrb(void) {
+  if (!g_mrb) {
+    g_mrb = mrb_open();
+  }
+}
+
+MOCHI_EXPORT
+int mochi_init_runtime(void) {
+  ensure_mrb();
+  if (!g_mrb) return -1;
+  return 0;
+}
+
+static int find_slot(const char *id) {
+  for (int i = 0; i < MAX_COMPONENTS; i++) {
+    if (g_components[i].active && strcmp(g_components[i].id, id) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static int alloc_slot(void) {
+  for (int i = 0; i < MAX_COMPONENTS; i++) {
+    if (!g_components[i].active) {
+      g_components[i].active = 1;
+      return i;
+    }
+  }
+  return -1;
+}
+
+// ── 1. mochi_render_buffer_offset ──────────────────────────────
+MOCHI_EXPORT
+int mochi_render_buffer_offset(void) {
+  return (int)(intptr_t)g_render_buffer;
+}
+
+// ── 2. mochi_event_buffer_offset ───────────────────────────────
+MOCHI_EXPORT
+int mochi_event_buffer_offset(void) {
+  return (int)(intptr_t)g_event_buffer;
+}
+
+// ── 3. mochi_malloc ────────────────────────────────────────────
+MOCHI_EXPORT
+int mochi_malloc(int size) {
+  ensure_mrb();
+  if (!g_mrb) return 0;
+  void *p = mrb_malloc(g_mrb, (size_t)size);
+  return (int)(intptr_t)p;
+}
+
+// ── 4. mochi_hydrate_component ────────────────────────────────
+MOCHI_EXPORT
+int mochi_hydrate_component(const char *id, const char *class_name, const char *raw) {
+  ensure_mrb();
+  if (!g_mrb || !id || !class_name) return -1;
+
+  int slot = find_slot(id);
+  if (slot < 0) {
+    slot = alloc_slot();
+    if (slot < 0) return -2;
+  }
+
+  strncpy(g_components[slot].id, id, 63);
+  g_components[slot].id[63] = '\0';
+  strncpy(g_components[slot].class_name, class_name, 63);
+  g_components[slot].class_name[63] = '\0';
+
+  mrb_sym cls_sym = mrb_intern_cstr(g_mrb, class_name);
+  mrb_value cls_val = mrb_const_get(g_mrb, mrb_obj_value(g_mrb->object_class), cls_sym);
+
+  if (!mrb_class_p(cls_val)) {
+    return -3;  // class not found
+  }
+
+  struct RClass *cls = mrb_class_ptr(cls_val);
+  mrb_value inst = mrb_obj_new(g_mrb, cls, 0, NULL);
+  g_components[slot].instance = inst;
+
+  (void)raw;
+  return slot;
+}
+
+// ── 5. mochi_process_events ─────────────────────────────────────
+MOCHI_EXPORT
+int mochi_process_events(void) {
+  ensure_mrb();
+  if (!g_mrb || g_event_len == 0) return 0;
+
+  int processed = 0;
+  size_t len = g_event_len;
+  if (len >= EVENT_BUF_SIZE) len = EVENT_BUF_SIZE - 1;
+  g_event_buffer[len] = '\0';
+
+  char *line = (char *)g_event_buffer;
+  char *end  = (char *)g_event_buffer + len;
+
+  while (line < end && *line) {
+    char *nl = strchr(line, '\n');
+    if (!nl) nl = end;
+    *nl = '\0';
+
+    char *p1 = strchr(line, '|');
+    if (p1) {
+      *p1 = '\0';
+      char *p2 = strchr(p1 + 1, '|');
+      if (p2) {
+        *p2 = '\0';
+        char *method = p2 + 1;
+
+        int slot = find_slot(line);
+        if (slot >= 0) {
+          mrb_sym ms = mrb_intern_cstr(g_mrb, method);
+          mrb_funcall_argv(g_mrb, g_components[slot].instance, ms, 0, NULL);
+          processed++;
+        }
+      }
+    }
+
+    line = nl + 1;
+    if (line >= end) break;
+  }
+
+  g_event_len = 0;
+  return processed;
+}
+
+// ── 6. mochi_load_iseq ─────────────────────────────────────────
+MOCHI_EXPORT
+int mochi_load_iseq(const uint8_t *data, int len) {
+  ensure_mrb();
+  if (!g_mrb || !data || len <= 0) return -1;
+
+  mrb_value result = mrb_load_irep_buf(g_mrb, data, (size_t)len);
+
+  if (mrb_exception_p(result)) {
+    return -2;
+  }
+  return 0;
+}
+
+// ── 7. mochi_render ────────────────────────────────────────────
+MOCHI_EXPORT
+int mochi_render(const char *id) {
+  ensure_mrb();
+  if (!g_mrb || !id) return -1;
+
+  int slot = find_slot(id);
+  if (slot < 0) return -1;
+
+  mrb_sym html_sym = mrb_intern_cstr(g_mrb, "html");
+  mrb_value html = mrb_funcall_argv(g_mrb, g_components[slot].instance, html_sym, 0, NULL);
+
+  if (!mrb_string_p(html)) {
+    return -2;
+  }
+
+  size_t slen = RSTRING_LEN(html);
+  if (slen > RENDER_BUF_SIZE - 1) slen = RENDER_BUF_SIZE - 1;
+  memcpy(g_render_buffer, RSTRING_PTR(html), slen);
+  g_render_buffer[slen] = '\0';
+  g_render_len = slen;
+  return (int)slen;
+}
+
+// ── 8. mochi_write_event ─────────────────────────────────────
+MOCHI_EXPORT
+int mochi_write_event(const char *line) {
+  if (!line) return -1;
+  size_t len = strlen(line);
+  if (g_event_len + len + 1 >= EVENT_BUF_SIZE) return -2;
+  memcpy(g_event_buffer + g_event_len, line, len + 1);
+  g_event_len += len;
+  return (int)len;
+}
+
+// ── 9. mochi_reset_events ───────────────────────────────────
+MOCHI_EXPORT
+void mochi_reset_events(void) {
+  g_event_len = 0;
+  if (EVENT_BUF_SIZE > 0) g_event_buffer[0] = '\0';
+}

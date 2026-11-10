@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+# Custom mruby gembox for Mochi browser runtime
+# Minimal subset of stdlib minus gems that need native system calls
+
+MRuby::GemBox.new do |conf|
+  # Core gems (no stdio, no socket)
+  conf.gem :core => "mruby-sprintf"
+  conf.gem :core => "mruby-print"        # puts/print
+  conf.gem :core => "mruby-math"        # Math module
+  conf.gem :core => "mruby-time"        # Time class
+  conf.gem :core => "mruby-struct"      # Struct
+  conf.gem :core => "mruby-enum-ext"     # Enumerable extensions
+  conf.gem :core => "mruby-string-ext"   # String extensions
+  conf.gem :core => "mruby-numeric-ext"  # Numeric extensions
+  conf.gem :core => "mruby-array-ext"   # Array extensions
+  conf.gem :core => "mruby-hash-ext"    # Hash extensions
+  conf.gem :core => "mruby-range-ext"   # Range extensions
+  conf.gem :core => "mruby-proc-ext"     # Proc extensions
+  conf.gem :core => "mruby-symbol-ext"   # Symbol extensions
+  conf.gem :core => "mruby-object-ext"   # Object extensions
+  conf.gem :core => "mruby-kernel-ext"  # Kernel extensions
+  conf.gem :core => "mruby-class-ext"    # Class extensions
+  conf.gem :core => "mruby-module-ext"   # Module extensions
+  conf.gem :core => "mruby-method"      # Method/UnboundMethod
+  conf.gem :core => "mruby-eval"        # eval/instance_eval (needed for some dynamic features)
+  conf.gem :core => "mruby-enum-lazy"    # Lazy enumerators
+  conf.gem :core => "mruby-fiber"       # Fiber
+  conf.gem :core => "mruby-rational"     # Rational numbers
+  conf.gem :core => "mruby-complex"     # Complex numbers
+  conf.gem :core => "mruby-random"      # Random/Kernel#rand
+  conf.gem :core => "mruby-unicode-normalize"
+  conf.gem :core => "mruby-pack"        # Array#pack/String#unpack
+  conf.gem :core => "mruby-io"          # IO/File/Dir (needed for require/load)
+
+  # Parser for Ruby syntax
+  conf.gem :core => "mruby-compiler"
+
+  # Encoding support
+  conf.gem :core => "mruby-encoding"
+
+  # mruby-specific extensions
+  conf.gem :mgem => "mruby-metaprog"
+
+  # Optional: JSON support
+  conf.gem :github => "mattn/mruby-json"
+
+  # Optional: msgpack support
+  conf.gem :github => "mruby-msgpack/mruby-msgpack" rescue nil
+
+  # mruby-require for loading .rb/.mrb files
+  conf.gem :github => "mattn/mruby-require" rescue nil
+end

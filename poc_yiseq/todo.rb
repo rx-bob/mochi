@@ -1,24 +1,37 @@
+# typed: true
+# TodoList component — Sorbet-typed Ruby that compiles to mruby/WASM
+
 class TodoList
+  extend T::Sig
+
+  Item = T.type_alias { { id: Integer, text: String, done: T::Boolean } }
+
+  sig { void }
   def initialize
-    @items = []
-    @next_id = 1
+    @items = T.let([], T::Array[Item])
+    @next_id = T.let(1, Integer)
   end
 
+  sig { void }
   def add_item
-    @items << { id: @next_id, text: "Task #{@next_id}", done: false }
+    item = { id: @next_id, text: "Task #{@next_id}", done: false }
+    @items << item
     @next_id += 1
   end
 
+  sig { void }
   def toggle_last
     return if @items.empty?
-    last = @items.last
+    last = T.must(@items.last)
     last[:done] = !last[:done]
   end
 
+  sig { void }
   def remove_last
     @items.pop unless @items.empty?
   end
 
+  sig { returns(String) }
   def html
     items_html = @items.map { |item|
       cls = item[:done] ? 'done' : ''

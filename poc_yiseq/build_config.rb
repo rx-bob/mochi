@@ -1,20 +1,28 @@
-# Minimal mruby build for Mochi PoC — Emscripten cross-compile
+# Ultra-minimal mruby build — only what UI components actually need
 MRuby::CrossBuild.new('emscripten') do |conf|
   conf.toolchain :emscripten
 
   conf.cc.flags << '-Oz'
 
-  # Core stdlib (no IO, no socket, no bin tools)
-  conf.gembox "stdlib"
-  conf.gembox "stdlib-ext"
+  # Only the extensions components actually use
+  conf.gem core: 'mruby-string-ext'    # String#include?, interpolation extras
+  conf.gem core: 'mruby-array-ext'     # Array#map, #select, #each, #last, etc.
+  conf.gem core: 'mruby-hash-ext'      # Hash extensions
+  conf.gem core: 'mruby-enum-ext'      # Enumerable#map, #select, etc.
+  conf.gem core: 'mruby-numeric-ext'   # Integer methods
+  conf.gem core: 'mruby-object-ext'    # Object extensions
+  conf.gem core: 'mruby-kernel-ext'    # Kernel extensions
+  conf.gem core: 'mruby-sprintf'       # String interpolation uses this
+  conf.gem core: 'mruby-error'         # begin/rescue
+  conf.gem core: 'mruby-toplevel-ext'  # toplevel methods
+  conf.gem core: 'mruby-compar-ext'    # Comparable
+  conf.gem core: 'mruby-catch'         # catch/throw
 
-  # Compiler needed for eval
-  conf.gem core: 'mruby-compiler'
-  conf.gem core: 'mruby-error'
-  conf.gem core: 'mruby-method'
-
-  # Metaprogramming
-  conf.gembox "metaprog"
+  # NO compiler — bytecode is pre-compiled
+  # NO regexp — not needed for basic components
+  # NO fiber/enumerator — not needed
+  # NO time/struct/set/objectspace/random/pack — not needed
+  # NO metaprog/eval/binding — not needed
 end
 
 # Host build for mrbc (bytecode compiler runs natively)

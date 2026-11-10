@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Mochi PoC — YARV/WASM Architecture</title>
+  <link rel="compression-dictionary" href="/mochi-dict.dat">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -65,6 +66,25 @@
     }
     .todo .buttons button:hover { background: #f0f0f0; }
 
+    /* Users styles (rendered by Ruby — fetches from API) */
+    .users h2 { font-size: 1.1rem; color: #555; margin-bottom: 0.5rem; }
+    .users .fetch-status { font-size: 0.85rem; color: #888; margin-bottom: 0.5rem; }
+    .users ul { list-style: none; margin: 0.5rem 0; }
+    .users li { padding: 0.4rem 0; border-bottom: 1px solid #f0f0f0; }
+    .users .buttons { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+    .users .buttons button {
+      padding: 0.4rem 1rem; font-size: 0.9rem;
+      border: 1px solid #ccc; border-radius: 4px;
+      background: #fff; cursor: pointer;
+    }
+    .users .buttons button:hover { background: #f0f0f0; }
+
+    /* Canonical Mochi web component (CSS arrives from Ruby #css) */
+    my-counter {
+      display: block;
+      margin-bottom: 1.5rem;
+    }
+
     /* Stats panel */
     .stats {
       background: #fff;
@@ -90,7 +110,7 @@
   <div class="component-slot"
        data-mochi="counter-1"
        data-mochi-class="Counter"
-       data-mochi-src="counter.mrb">
+       data-mochi-src="counter.chi">
     <!-- Placeholder shown before WASM loads -->
     <div class="counter">
       <h2>Loading...</h2>
@@ -102,11 +122,27 @@
   <div class="component-slot"
        data-mochi="todo-1"
        data-mochi-class="TodoList"
-       data-mochi-src="todo.mrb">
+       data-mochi-src="todo.chi">
     <div class="todo">
       <h2>Loading...</h2>
     </div>
   </div>
+
+  <!-- Third component — fetches data from API via shared memory bridge -->
+  <div class="component-slot"
+       data-mochi="users-1"
+       data-mochi-class="UserList"
+       data-mochi-src="users.chi">
+    <div class="users">
+      <h2>Loading...</h2>
+    </div>
+  </div>
+
+  <!-- Canonical Mochi component: @tag_name, {bindings}, css, mounted -->
+  <my-counter
+       data-mochi="my-counter-1"
+       data-mochi-class="MyCounter"
+       data-mochi-src="my_counter.chi"></my-counter>
 
   <!-- Stats panel -->
   <div class="stats" id="stats">
@@ -114,20 +150,16 @@
     <table>
       <tr><td>WASM runtime (mruby VM)</td><td id="stat-wasm" class="pending">...</td></tr>
       <tr><td>WASM gzipped</td><td id="stat-wasm-gz" class="pending">...</td></tr>
-      <tr><td>Emscripten glue (mochi.js)</td><td id="stat-glue" class="pending">...</td></tr>
-      <tr><td>Bootstrapper + Painter JS</td><td id="stat-js" class="pending">...</td></tr>
-      <tr><td>Component bytecode (.mrb)</td><td id="stat-mrb" class="pending">...</td></tr>
+      <tr><td>mochi.js (glue + painter + bootstrap)</td><td id="stat-js" class="pending">...</td></tr>
+      <tr><td>Component bytecode (.chi)</td><td id="stat-mrb" class="pending">...</td></tr>
       <tr><td>Component JS code</td><td class="loaded">0 bytes</td></tr>
       <tr><td colspan="2" style="border-top:1px solid #eee;padding-top:0.5rem;font-weight:600">
-        Total JS framework code: bootstrapper.js + painter.js only
+        Total JS framework code: mochi.js only
       </td></tr>
     </table>
   </div>
 
-  <!-- Load order: Emscripten glue → Painter → Bootstrapper -->
   <script src="mochi.js"></script>
-  <script src="painter.js"></script>
-  <script src="bootstrapper.js"></script>
   <script>
     // Measure payload sizes after load
     // Use PerformanceObserver to measure sizes from already-loaded resources
@@ -152,20 +184,12 @@
       show('stat-wasm-gz', 'mochi.wasm', function(s) {
         return s.transfer > 0 ? (s.transfer / 1024).toFixed(1) + ' KB' : '~' + (s.decoded * 0.37 / 1024).toFixed(1) + ' KB (est)';
       });
-      show('stat-glue', 'mochi.js', function(s) { return (s.decoded / 1024).toFixed(1) + ' KB'; });
-
-      var bsSize = (sizes['bootstrapper.js'] || {}).decoded || 0;
-      var ptSize = (sizes['painter.js'] || {}).decoded || 0;
-      if (bsSize + ptSize > 0) {
-        var el = document.getElementById('stat-js');
-        el.textContent = ((bsSize + ptSize) / 1024).toFixed(1) + ' KB';
-        el.className = 'loaded';
-      }
+      show('stat-js', 'mochi.js', function(s) { return (s.decoded / 1024).toFixed(1) + ' KB'; });
 
       var mrbTotal = 0;
       var mrbCount = 0;
       for (var name in sizes) {
-        if (name.endsWith('.mrb')) { mrbTotal += sizes[name].decoded; mrbCount++; }
+        if (name.endsWith('.chi')) { mrbTotal += sizes[name].decoded; mrbCount++; }
       }
       if (mrbTotal > 0) {
         var el = document.getElementById('stat-mrb');

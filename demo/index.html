@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Live canonical Mochi component running on the Direction C Goose WASM runtime.">
+  <title>Mochi Direction C — MyCounter Live</title>
+  <link rel="stylesheet" href="/demo/demo.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">m</span>
+        <span>Mochi / Direction C</span>
+      </div>
+      <nav class="topbar-meta" aria-label="Demo links">
+        <a href="/poc_yiseq/my_counter.rb">my_counter.rb</a>
+        <a href="/poc_yiseq/mochi_component_compiler.rb">compiler</a>
+        <a href="/poc_yiseq/index.html">original PoC</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="intro">
+          <p class="eyebrow">E4.S3 / canonical component</p>
+          <h1 id="hero-title">Mochi syntax. <em>Goose VM.</em></h1>
+          <p class="lede">
+            A real <code>my-counter</code> component authored with <code>@tag_name</code>,
+            <code>{count}</code> bindings, <code>onclick="{increment}"</code>,
+            <code>def css</code>, and <code>def mounted</code> — compiled to
+            <code>my_counter.chi</code> and executed by one shared WebAssembly VM.
+          </p>
+
+          <div class="chips" aria-label="Implemented features">
+            <span class="chip"><strong>@tag_name</strong> my-counter</span>
+            <span class="chip"><strong>{count}</strong> template binding</span>
+            <span class="chip"><strong>onclick</strong> event binding</span>
+            <span class="chip"><strong>css</strong> shadow style</span>
+            <span class="chip"><strong>mounted</strong> lifecycle</span>
+          </div>
+
+          <div class="hero-metrics" aria-label="Build metrics">
+            <div class="hero-metric">
+              <span>component bytecode</span>
+              <strong id="metric-chi">—</strong>
+            </div>
+            <div class="hero-metric">
+              <span>WASM raw</span>
+              <strong id="metric-wasm">—</strong>
+            </div>
+            <div class="hero-metric">
+              <span>WASM gzip</span>
+              <strong id="metric-wasm-gz">—</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage" aria-label="Live MyCounter component">
+          <div class="stage-head">
+            <span>live component / &lt;my-counter&gt;</span>
+            <span class="status" id="runtime-status">loading</span>
+          </div>
+
+          <my-counter
+            data-mochi="my-counter-1"
+            data-mochi-class="MyCounter"
+            data-mochi-src="/poc_yiseq/my_counter.chi">
+            <div class="component-fallback">
+              Loading my_counter.chi into the Goose VM…
+            </div>
+          </my-counter>
+
+          <div class="stage-actions" aria-label="Demo actions">
+            <button type="button" class="primary" data-demo-action="increment">Dispatch +1</button>
+            <button type="button" data-demo-action="decrement">Dispatch −1</button>
+            <button type="button" data-demo-action="reload">Reload page</button>
+          </div>
+
+          <div class="telemetry" aria-label="Live component telemetry">
+            <div class="telemetry-item">
+              <span>tag name</span>
+              <strong id="live-tag">waiting</strong>
+            </div>
+            <div class="telemetry-item">
+              <span>mounted</span>
+              <strong id="live-mounted">waiting</strong>
+            </div>
+            <div class="telemetry-item">
+              <span>render</span>
+              <strong id="live-count">waiting</strong>
+            </div>
+            <div class="telemetry-item">
+              <span>shadow css</span>
+              <strong id="live-css">waiting</strong>
+            </div>
+            <div class="telemetry-item">
+              <span>shadow root</span>
+              <strong id="live-shadow">waiting</strong>
+            </div>
+            <div class="telemetry-item">
+              <span>event bridge</span>
+              <strong id="live-actions">waiting</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="runtime-title">
+        <div class="panel-head">
+          <h2 id="runtime-title">What the runtime did</h2>
+          <p>No component-specific JavaScript. Ruby bytecode crosses one C ABI and one shared render buffer.</p>
+        </div>
+        <ol class="timeline">
+          <li data-step="01">
+            <h3>Load bytecode</h3>
+            <p>Browser fetches <code>my_counter.chi</code>, restores the stripped RITE header, and loads the IREP into the singleton VM.</p>
+          </li>
+          <li data-step="02">
+            <h3>Hydrate class</h3>
+            <p>C finds <code>MyCounter</code>, constructs the Ruby object, registers it, and the compiler-injected <code>tag_name</code> survives as Ruby code.</p>
+          </li>
+          <li data-step="03">
+            <h3>Run mounted</h3>
+            <p><code>mochi_hydrate_component</code> calls <code>mounted</code>. <code>@mounted = 1</code> lands in component state before first paint.</p>
+          </li>
+          <li data-step="04">
+            <h3>Apply css</h3>
+            <p><code>def css</code> returns a string through the C buffer. It becomes one persistent <code>&lt;style&gt;</code> in an open shadow root.</p>
+          </li>
+          <li data-step="05">
+            <h3>Render + click</h3>
+            <p><code>def html</code> paints <code>Count: 0</code>. A shadow click writes an event line; C calls Ruby; the new HTML patches the same DOM.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="panel" aria-labelledby="source-title">
+        <div class="panel-head">
+          <h2 id="source-title">Source → bytecode</h2>
+          <p>The compiler only touches <code>def html</code>. CSS selectors keep their braces.</p>
+        </div>
+        <div class="code-grid">
+          <article class="code-card">
+            <header>
+              <span>/poc_yiseq/my_counter.rb</span>
+              <span>canonical source</span>
+            </header>
+            <pre><code id="source-view">Loading source…</code></pre>
+          </article>
+
+          <article class="code-card">
+            <header>
+              <span>mochi_component_compiler.rb</span>
+              <span>source pass</span>
+            </header>
+            <div class="transform-list">
+              <div class="transform">
+                <span class="transform-label">tag metadata</span>
+                <code>@tag_name = "my-counter"</code>
+                <span class="arrow">→</span>
+                <code>def tag_name; "my-counter"; end</code>
+              </div>
+              <div class="transform">
+                <span class="transform-label">event binding</span>
+                <code>onclick="{increment}"</code>
+                <span class="arrow">→</span>
+                <code>data-action="increment"</code>
+              </div>
+              <div class="transform">
+                <span class="transform-label">text binding</span>
+                <code>{count}</code>
+                <span class="arrow">→</span>
+                <code>#{@count}</code>
+              </div>
+              <div class="transform">
+                <span class="transform-label">class body</span>
+                <code>@count</code>
+                <span class="arrow">→</span>
+                <code>removed</code>
+              </div>
+              <div class="transform">
+                <span class="transform-label">then</span>
+                <code>type_strip.rb</code>
+                <span class="arrow">→</span>
+                <code>mrbc → tail -c +11</code>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="other-title">
+        <div class="panel-head">
+          <h2 id="other-title">Same VM, other components</h2>
+          <p>These are the existing PoC bytecode files. One singleton VM, three more class definitions.</p>
+        </div>
+        <div class="other-grid">
+          <article class="other-card">
+            <h3>counter.chi / Counter</h3>
+            <div data-mochi="counter-1"
+                 data-mochi-class="Counter"
+                 data-mochi-src="/poc_yiseq/counter.chi"></div>
+            <p class="component-note">Scalar ivars, arithmetic, event actions, render buffer.</p>
+          </article>
+
+          <article class="other-card">
+            <h3>todo.chi / TodoList</h3>
+            <div data-mochi="todo-1"
+                 data-mochi-class="TodoList"
+                 data-mochi-src="/poc_yiseq/todo.chi"></div>
+            <p class="component-note">Arrays, hashes, branching, and collection mutation.</p>
+          </article>
+
+          <article class="other-card">
+            <h3>users.chi / UserList</h3>
+            <div data-mochi="users-1"
+                 data-mochi-class="UserList"
+                 data-mochi-src="/poc_yiseq/users.chi"></div>
+            <p class="component-note">Ruby → JS fetch outbox, JS → Ruby callback, re-render.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel log-panel" aria-labelledby="log-title">
+        <div class="panel-head">
+          <h2 id="log-title">Live event log</h2>
+          <p>Captured from the hosted shadow root. No framework hooks added to the runtime.</p>
+        </div>
+        <pre class="event-log" id="event-log">booting demo…</pre>
+        <pre class="shadow-view" id="shadow-view">waiting for MyCounter shadow root…</pre>
+        <div class="stage-actions">
+          <button type="button" class="demo-button" id="clear-log">Clear log</button>
+          <a class="demo-button" href="/poc_yiseq/my_counter.rb">Open Ruby source</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Mochi Direction C / E4.S3 / Goose WASM</span>
+      <span>one VM · four classes · zero component JS</span>
+    </footer>
+  </div>
+
+  <script src="/poc_yiseq/mochi.js"></script>
+  <script src="/demo/demo.js"></script>
+</body>
+</html>

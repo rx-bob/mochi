@@ -1,0 +1,37 @@
+# Custom mruby gembox for Mochi browser runtime.
+# Excludes POSIX-dependent gems (io, socket, dir, filestat, time, process, etc.)
+# to avoid undefined HAL symbols in the Emscripten/WASM link.
+
+MRuby::GemBox.new do |conf|
+  # Core language
+  conf.gem core: 'mruby-compiler'
+  conf.gem core: 'mruby-error'
+  conf.gem core: 'mruby-eval'
+  conf.gem core: 'mruby-fiber'
+  conf.gem core: 'mruby-metaprog'
+
+  # Standard library extensions
+  conf.gem core: 'mruby-class-ext'
+  conf.gem core: 'mruby-enum-ext'
+  conf.gem core: 'mruby-numeric-ext'
+  conf.gem core: 'mruby-string-ext'
+  conf.gem core: 'mruby-symbol-ext'
+  conf.gem core: 'mruby-range-ext'
+  conf.gem core: 'mruby-hash-ext'
+  conf.gem core: 'mruby-array-ext'
+  conf.gem core: 'mruby-kernel-ext'
+  conf.gem core: 'mruby-object-ext'
+  conf.gem core: 'mruby-struct'
+  conf.gem core: 'mruby-proc-ext'
+  conf.gem core: 'mruby-method'
+  conf.gem core: 'mruby-enum-lazy'
+  conf.gem core: 'mruby-toplevel-ext'
+
+  # Optional: regexp if needed (uses C regex engine, no HAL)
+  # conf.gem core: 'mruby-regexp'
+
+  # NOTE: mruby-io, mruby-socket, mruby-dir, mruby-filestat,
+  #       mruby-time, mruby-process, mruby-bin-debugger
+  #       are intentionally excluded because they need POSIX HAL
+  #       symbols unavailable in browser WASM.
+end

@@ -1,21 +1,32 @@
+# typed: true
+# Counter component — Sorbet-typed Ruby that compiles to mruby/WASM
+# All type annotations are stripped at build time; only the mruby bytecode ships.
+
 class Counter
+  extend T::Sig
+
+  sig { void }
   def initialize
-    @count = 0
-    @label = "Click me"
+    @count = T.let(0, Integer)
+    @label = T.let("Click me", String)
   end
 
+  sig { void }
   def increment
     @count += 1
   end
 
+  sig { void }
   def decrement
     @count -= 1
   end
 
+  sig { void }
   def reset
     @count = 0
   end
 
+  sig { returns(String) }
   def html
     "<div class='counter'>" \
       "<h2>#{@label}</h2>" \
