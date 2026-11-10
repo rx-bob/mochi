@@ -73,12 +73,14 @@ describe MrbcCompiler do
     begin
       mrbc = File.join(dir, "fake_mrbc")
       wasm = File.join(dir, "source.wasm")
+      js = File.join(dir, "source.js")
       loader = File.join(dir, "mochi-loader.js")
       stripped_source_path = File.join(dir, "stripped.rb")
       output = File.join(dir, "out")
 
       write_fake_mrbc(mrbc, stripped_source_path)
       File.write(wasm, "WASM")
+      File.write(js, "JS")
       File.write(loader, "LOADER")
 
       component = build_mrbc_fixture(dir)
@@ -88,16 +90,19 @@ describe MrbcCompiler do
       chi_path = File.join(output, "components", "my-counter.chi")
       File.read(chi_path).should eq("RUBYBYTECODE")
       File.read(File.join(output, "mochi-gvm.wasm")).should eq("WASM")
+      File.read(File.join(output, "mochi-gvm.js")).should eq("JS")
       File.read(File.join(output, "mochi-loader.js")).should eq("LOADER")
       compiler.chi_paths.should eq([chi_path])
 
       stripped_source = File.read(stripped_source_path)
       stripped_source.should_not contain("extend T::Sig")
       stripped_source.should_not contain("sig {")
+      stripped_source.should_not contain("@tag_name")
       stripped_source.should contain("@count = 0")
 
       json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
       json["wasm_file"].as_s.should eq("mochi-gvm.wasm")
+      json["js_file"].as_s.should eq("mochi-gvm.js")
       json["loader_file"].as_s.should eq("mochi-loader.js")
 
       components = json["components"].as_a
@@ -133,6 +138,7 @@ describe MrbcCompiler do
         compiler = MrbcCompiler.new(
           mrbc_path: real_mrbc,
           wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
           loader_source: File.join(dir, "missing.js")
         )
         compiler.compile([component], output)
@@ -141,7 +147,7 @@ describe MrbcCompiler do
         File.exists?(chi_path).should be_true
         File.size(chi_path).should be < 1024
         File.read(chi_path).includes?("MATZ").should be_true
-        compiler.warnings.size.should eq(2)
+        compiler.warnings.size.should eq(3)
       ensure
         FileUtils.rm_rf(dir)
       end

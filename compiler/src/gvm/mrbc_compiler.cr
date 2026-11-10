@@ -2,6 +2,7 @@ require "json"
 require "file_utils"
 require "../mochi_cmp"
 require "../sorbet/type_stripper"
+require "./source_preparer"
 
 class MrbcCompiler
   RITE_HEADER    = "RITE0400\u0000\u0000"
@@ -10,6 +11,7 @@ class MrbcCompiler
   getter manifest_path : String?
   getter chi_paths : Array(String)
   getter wasm_path : String?
+  getter js_path : String?
   getter loader_path : String?
   getter warnings : Array(String)
 
@@ -17,10 +19,12 @@ class MrbcCompiler
     @mrbc_path : String? = ENV["MRBC"]?,
     @wasm_source : String? = ENV["MOCHI_GVM_WASM"]?,
     @loader_source : String? = ENV["MOCHI_LOADER"]?,
+    @js_source : String? = ENV["MOCHI_GVM_JS"]?,
   )
     @manifest_path = nil
     @chi_paths = [] of String
     @wasm_path = nil
+    @js_path = nil
     @loader_path = nil
     @warnings = [] of String
   end
@@ -63,10 +67,14 @@ class MrbcCompiler
 
     @chi_paths = sorted_components.compact_map { |component| chi_paths_by_tag[component.manifest.tag_name]? }
     @wasm_path = copy_asset(resolved_wasm_source, output_dir, "mochi-gvm.wasm")
+    @js_path = copy_asset(resolved_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
 
     if @wasm_path.nil?
       @warnings << "mochi-gvm.wasm not found; set MOCHI_GVM_WASM or place ../mochi-gvm/dist/mochi-gvm.wasm"
+    end
+    if @js_path.nil?
+      @warnings << "mochi-gvm.js not found; set MOCHI_GVM_JS or place ../mochi-gvm/dist/mochi-gvm.js"
     end
     if @loader_path.nil?
       @warnings << "mochi-loader.js not found; set MOCHI_LOADER or add runtime/mochi-loader.js"
@@ -79,6 +87,7 @@ class MrbcCompiler
   private def compile_component(component : MochiComponent, components_dir : String) : String
     manifest = component.manifest
     source = SorbetTypeStripper.strip(component.ruby_code)
+    source = GvmSourcePreparer.strip_class_ivars(source)
 
     ruby_file = File.tempfile("mochi-#{safe_name(manifest.tag_name)}", ".rb")
     mrb_file = File.tempfile("mochi-#{safe_name(manifest.tag_name)}", ".mrb")
@@ -136,6 +145,17 @@ class MrbcCompiler
     @wasm_source || self.class.find_wasm
   end
 
+  private def resolved_js_source : String?
+    return @js_source if @js_source
+
+    if wasm_source = @wasm_source
+      sibling = wasm_source.sub(/\.wasm\z/, ".js")
+      return sibling if File.file?(sibling)
+    end
+
+    self.class.find_js
+  end
+
   private def resolved_loader_source : String?
     @loader_source || self.class.find_loader
   end
@@ -155,6 +175,17 @@ class MrbcCompiler
       File.join(Dir.current, "..", "..", "mochi-gvm", "dist", "mochi-gvm.wasm"),
       File.join(Dir.current, "mochi-gvm", "dist", "mochi-gvm.wasm"),
       File.join(Dir.current, "dist", "mochi-gvm.wasm"),
+    ]
+
+    first_existing_file(candidates)
+  end
+
+  def self.find_js : String?
+    candidates = [
+      File.join(Dir.current, "..", "mochi-gvm", "dist", "mochi-gvm.js"),
+      File.join(Dir.current, "..", "..", "mochi-gvm", "dist", "mochi-gvm.js"),
+      File.join(Dir.current, "mochi-gvm", "dist", "mochi-gvm.js"),
+      File.join(Dir.current, "dist", "mochi-gvm.js"),
     ]
 
     first_existing_file(candidates)
@@ -199,6 +230,7 @@ class MrbcCompiler
           end
         end
         json.field "wasm_file", @wasm_path ? File.basename(@wasm_path.not_nil!) : nil
+        json.field "js_file", @js_path ? File.basename(@js_path.not_nil!) : nil
         json.field "loader_file", @loader_path ? File.basename(@loader_path.not_nil!) : nil
       end
     end

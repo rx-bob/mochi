@@ -1,0 +1,12 @@
+{
+  "name": "mochi-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^31.0.0"
+  }
+}
