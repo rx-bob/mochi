@@ -10,6 +10,7 @@ const HTML_TEMPLATE = [
   "<!--if-anchor-0-->",
   '<button data-mochi-click="increment">Increment</button>',
   '<button data-mochi-change="reset">Reset</button>',
+  '<input class="probe">',
 ].join("\n");
 
 const COMPONENT = {
@@ -37,17 +38,39 @@ function manifest(components) {
   };
 }
 
-function fakeModule(log) {
+function encodePatches(records) {
   const encoder = new TextEncoder();
+  const encoded = records.map((record) => encoder.encode(record.value));
+  const size = records.reduce((total, record, index) => total + 6 + encoded[index].length, 0);
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  records.forEach((record, index) => {
+    bytes[at] = record.id & 0xff;
+    bytes[at + 1] = (record.id >>> 8) & 0xff;
+    const length = encoded[index].length;
+    bytes[at + 2] = length & 0xff;
+    bytes[at + 3] = (length >>> 8) & 0xff;
+    bytes[at + 4] = (length >>> 16) & 0xff;
+    bytes[at + 5] = (length >>> 24) & 0xff;
+    bytes.set(encoded[index], at + 6);
+    at += 6 + length;
+  });
+  return bytes;
+}
+
+function fakeModule(log) {
   const decoder = new TextDecoder();
   const symbols = new Map();
+  const patchOffset = 4096;
   log.symbols = symbols;
   let nextSymbol = 100;
   let nextPointer = 1024;
   let nextInstance = 1;
+  let patchLength = 0;
 
   const module = {
     HEAPU8: new Uint8Array(65536),
+    patchQueue: [],
     _malloc(size) {
       const pointer = nextPointer;
       nextPointer += size + 16;
@@ -79,6 +102,20 @@ function fakeModule(log) {
       log.dispatched.push({ instance, methodSymbol });
       return 1;
     },
+    _mochi_flush_patches(instance) {
+      log.flushes.push(instance);
+      const frame = module.patchQueue.shift() || { patches: [] };
+      const bytes = encodePatches(frame.patches || []);
+      module.HEAPU8.set(bytes, patchOffset);
+      patchLength = bytes.length;
+      return frame.count === undefined ? (frame.patches || []).length : frame.count;
+    },
+    _mochi_patch_buffer_offset() {
+      return patchOffset;
+    },
+    _mochi_patch_buffer_len() {
+      return patchLength;
+    },
     _mochi_last_error_offset() {
       return 0;
     },
@@ -102,7 +139,7 @@ async function setup(components) {
   global.Event = dom.window.Event;
   global.MouseEvent = dom.window.MouseEvent;
 
-  const log = { calls: [], fetches: [], loads: [], interned: [], bindings: [], dispatched: [] };
+  const log = { calls: [], fetches: [], loads: [], interned: [], bindings: [], dispatched: [], flushes: [] };
   const body = manifest(components);
   global.fetch = async (url) => {
     log.fetches.push(String(url));
@@ -216,9 +253,213 @@ test("binding paths resolve through text nodes and comments exactly as emitted",
 
   assert.equal(element.bindingTargets[7].textContent, "text");
   assert.equal(element.bindingTargets[8].nodeType, 8);
-  assert.equal(element.bindingTargets[9].nodeType, 3);
+  assert.equal(element.bindingTargets[9].nodeType, 1);
   assert.equal(element.bindingTargets[9].textContent, "x");
   assert.equal(element.shadowRoot.querySelectorAll("style").length, 1);
   assert.equal(element.shadowRoot.querySelectorAll("template").length, 0);
   assert.equal(loader.components[0].tag_name, "path-check");
+});
+
+test("initial flush applies text and conditional patches", async () => {
+  const { module } = await setup([COMPONENT]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "7" },
+      { id: 1, value: "true" },
+    ],
+  });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const count = element.shadowRoot.querySelector(".count");
+  assert.equal(count.textContent, "Count: 7");
+  assert.equal(element.bindingTargets[0], count.firstChild);
+  assert.equal(element.bindingTargets[1].nodeType, 8);
+  assert.equal(element.shadowRoot.textContent.includes("hot"), true);
+  assert.equal(element.shadowRoot.querySelectorAll("template").length, 0);
+});
+
+test("100 text updates keep sibling DOM nodes identical", async () => {
+  const { module } = await setup([COMPONENT]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "0" },
+      { id: 1, value: "false" },
+    ],
+  });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const count = element.shadowRoot.querySelector(".count");
+  const countText = count.firstChild;
+  const button = element.shadowRoot.querySelector('button[data-mochi-click="increment"]');
+  const input = element.shadowRoot.querySelector("input.probe");
+  const anchor = element.bindingTargets[1];
+
+  for (let i = 1; i <= 100; i++) {
+    module.patchQueue.push({ patches: [{ id: 0, value: String(i) }, { id: 1, value: "false" }] });
+    button.click();
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(count.textContent, "Count: 100");
+  assert.equal(count.firstChild, countText);
+  assert.equal(element.shadowRoot.querySelector('button[data-mochi-click="increment"]'), button);
+  assert.equal(element.shadowRoot.querySelector("input.probe"), input);
+  assert.equal(element.bindingTargets[1], anchor);
+  assert.equal(anchor.nodeType, 8);
+});
+
+test("zero-record flushes leave the DOM untouched", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "0" },
+      { id: 1, value: "false" },
+    ],
+  });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const count = element.shadowRoot.querySelector(".count");
+  const text = count.firstChild;
+  const button = element.shadowRoot.querySelector('button[data-mochi-click="increment"]');
+  const input = element.shadowRoot.querySelector("input.probe");
+  const flushCount = log.flushes.length;
+
+  button.click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(log.flushes.length, flushCount + 1);
+  assert.equal(count.textContent, "Count: 0");
+  assert.equal(count.firstChild, text);
+  assert.equal(element.shadowRoot.querySelector('button[data-mochi-click="increment"]'), button);
+  assert.equal(element.shadowRoot.querySelector("input.probe"), input);
+});
+
+test("conditional patches mount and unmount content while preserving the anchor", async () => {
+  const { module } = await setup([COMPONENT]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "0" },
+      { id: 1, value: "false" },
+    ],
+  });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const anchor = element.bindingTargets[1];
+  assert.equal(element.shadowRoot.textContent.includes("hot"), false);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "true" }] });
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(element.shadowRoot.textContent.includes("hot"), true);
+  assert.equal(element.bindingTargets[1], anchor);
+  assert.equal(anchor.nodeType, 8);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "false" }] });
+  element.shadowRoot.querySelector('button[data-mochi-change="reset"]').dispatchEvent(
+    new global.Event("change", { bubbles: true })
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(element.shadowRoot.textContent.includes("hot"), false);
+  assert.equal(element.bindingTargets[1], anchor);
+});
+
+test("html and attribute patches update their cached targets", async () => {
+  const htmlComponent = {
+    tag_name: "html-check",
+    class_name: "HtmlCheck",
+    chi_file: "html-check.chi",
+    html_template: '<span class="icon">{rendered_svg}</span>',
+    css: "",
+    bindings: [
+      { id: 0, path: [0, 0], kind: "html", attr_name: null, template_text: "{rendered_svg}", getter_sym: "__mochi_bind_0" },
+    ],
+    events: [],
+  };
+  const attrComponent = {
+    tag_name: "attr-check",
+    class_name: "AttrCheck",
+    chi_file: "attr-check.chi",
+    html_template: '<a href="{url}">link</a>',
+    css: "",
+    bindings: [
+      { id: 0, path: [0], kind: "attr", attr_name: "href", template_text: "{url}", getter_sym: "__mochi_bind_0" },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([htmlComponent, attrComponent]);
+  module.patchQueue.push({ patches: [{ id: 0, value: "<b>icon</b>" }] });
+  const htmlElement = document.createElement("html-check");
+  document.body.appendChild(htmlElement);
+  await htmlElement._mochiReady;
+
+  assert.equal(htmlElement.bindingTargets[0].nodeType, 1);
+  assert.equal(htmlElement.bindingTargets[0].innerHTML, "<b>icon</b>");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "https://example.test/path" }] });
+  const attrElement = document.createElement("attr-check");
+  document.body.appendChild(attrElement);
+  await attrElement._mochiReady;
+
+  const link = attrElement.bindingTargets[0];
+  assert.equal(link.getAttribute("href"), "https://example.test/path");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "" }] });
+  loader.applyPatches(attrElement);
+  assert.equal(link.hasAttribute("href"), false);
+  assert.equal(attrElement.bindingTargets[0], link);
+});
+
+test("each patches reconcile keyed fragments and preserve unchanged nodes", async () => {
+  const eachComponent = {
+    tag_name: "each-check",
+    class_name: "EachCheck",
+    chi_file: "each-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      { id: 0, path: [0], kind: "each", attr_name: null, template_text: "<li>{name}</li>", getter_sym: "__mochi_bind_0" },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([eachComponent]);
+  module.patchQueue.push({
+    patches: [{ id: 0, value: JSON.stringify([{ id: "a", name: "A" }, { id: "b", name: "B" }]) }],
+  });
+  const element = document.createElement("each-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const anchor = element.bindingTargets[0];
+  const firstA = element.shadowRoot.querySelectorAll("li")[0];
+  const firstB = element.shadowRoot.querySelectorAll("li")[1];
+  assert.equal(firstA.textContent, "A");
+  assert.equal(firstB.textContent, "B");
+
+  module.patchQueue.push({
+    patches: [{ id: 0, value: JSON.stringify([{ id: "a", name: "A" }, { id: "c", name: "C" }]) }],
+  });
+  loader.applyPatches(element);
+
+  const items = Array.from(element.shadowRoot.querySelectorAll("li"));
+  assert.deepEqual(items.map((item) => item.textContent), ["A", "C"]);
+  assert.equal(items[0], firstA);
+  assert.equal(items[1] === firstB, false);
+  assert.equal(element.bindingTargets[0], anchor);
+  assert.equal(anchor.nodeType, 8);
 });

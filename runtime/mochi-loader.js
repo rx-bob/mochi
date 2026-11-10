@@ -12,7 +12,8 @@
     modulePromise: null,
     irepPromises: new Map(),
     internCache: new Map(),
-    tags: new Set()
+    tags: new Set(),
+    elements: new Map()
   };
 
   function absoluteUrl(path, base) {
@@ -190,7 +191,6 @@
 
     var mounted = intern(module, "mounted");
     if (mounted) module._mochi_dispatch_event(instance, mounted);
-    if (typeof loader.applyPatches === "function") await loader.applyPatches(instance, module);
 
     return { module: module, instance: instance };
   }
@@ -212,6 +212,255 @@
       node = node.parentNode;
     }
     return null;
+  }
+
+  function readU16LE(bytes, offset) {
+    return bytes[offset] | (bytes[offset + 1] << 8);
+  }
+
+  function readU32LE(bytes, offset) {
+    return (bytes[offset] | (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+  }
+
+  function decodePatches(module, count) {
+    var offset = module._mochi_patch_buffer_offset();
+    var length = module._mochi_patch_buffer_len();
+    var heap = module.HEAPU8;
+    var end = offset + length;
+    var patches = [];
+    var at = offset;
+
+    while (at + 6 <= end && patches.length < count) {
+      var bindingId = readU16LE(heap, at);
+      var byteLength = readU32LE(heap, at + 2);
+      at += 6;
+      if (at + byteLength > end) break;
+      patches.push({
+        bindingId: bindingId,
+        value: decode(heap.subarray(at, at + byteLength))
+      });
+      at += byteLength;
+    }
+
+    if (patches.length !== count) {
+      throw new Error("mochi-loader: truncated patch frame (" + patches.length + "/" + count + ")");
+    }
+
+    return patches;
+  }
+
+  function substitute(template, ids, values) {
+    var index = 0;
+    return String(template || "").replace(/\{([^}]+)\}/g, function (match) {
+      var id = ids[index++];
+      if (id === undefined || !Object.prototype.hasOwnProperty.call(values, id)) return match;
+      return values[id];
+    });
+  }
+
+  function textBindingState(target, binding) {
+    if (!target.__mochiText) {
+      target.__mochiText = {
+        template: binding.template_text || target.textContent || "",
+        ids: [],
+        values: {}
+      };
+    }
+    if (target.__mochiText.ids.indexOf(binding.id) === -1) {
+      target.__mochiText.ids.push(binding.id);
+    }
+    return target.__mochiText;
+  }
+
+  function attrBindingState(target, binding) {
+    if (!target.__mochiAttrs) target.__mochiAttrs = {};
+    var name = binding.attr_name;
+    if (!target.__mochiAttrs[name]) {
+      target.__mochiAttrs[name] = {
+        template: binding.template_text || "",
+        ids: [],
+        values: {}
+      };
+    }
+    var state = target.__mochiAttrs[name];
+    if (state.ids.indexOf(binding.id) === -1) state.ids.push(binding.id);
+    return state;
+  }
+
+  function fragmentFor(html) {
+    var template = global.document.createElement("template");
+    template.innerHTML = html || "";
+    return template.content;
+  }
+
+  function applyTextPatch(target, binding, value) {
+    var state = textBindingState(target, binding);
+    if (state.values[binding.id] === value) return;
+    state.values[binding.id] = value;
+    target.textContent = substitute(state.template, state.ids, state.values);
+  }
+
+  function applyHtmlPatch(target, binding, value) {
+    if (target.__mochiHtmlValue === value) return;
+    target.__mochiHtmlValue = value;
+    target.innerHTML = value;
+  }
+
+  function applyAttrPatch(target, binding, value) {
+    var state = attrBindingState(target, binding);
+    if (state.values[binding.id] === value) return;
+    state.values[binding.id] = value;
+    if (value === "" || value === "false") {
+      target.removeAttribute(binding.attr_name);
+    } else {
+      target.setAttribute(binding.attr_name, substitute(state.template, state.ids, state.values));
+    }
+  }
+
+  function removeNodes(nodes) {
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].parentNode) nodes[i].parentNode.removeChild(nodes[i]);
+    }
+  }
+
+  function applyCondPatch(target, binding, value) {
+    var state = target.__mochiCond;
+    if (!state) state = target.__mochiCond = { visible: false, nodes: [] };
+    var show = value === "true";
+    if (state.visible === show) return;
+
+    if (show) {
+      var parent = target.parentNode;
+      if (!parent) return;
+      var fragment = fragmentFor(binding.template_text);
+      var nodes = Array.from(fragment.childNodes);
+      parent.insertBefore(fragment, target.nextSibling);
+      state.nodes = nodes;
+      state.visible = true;
+    } else {
+      removeNodes(state.nodes);
+      state.nodes = [];
+      state.visible = false;
+    }
+  }
+
+  function itemKey(item, index) {
+    if (item && typeof item === "object") {
+      if (item.key !== undefined && item.key !== null) return String(item.key);
+      if (item.id !== undefined && item.id !== null) return String(item.id);
+    }
+    return String(index);
+  }
+
+  function itemLookup(item, expression) {
+    var path = expression.trim();
+    var parts = path.split(".");
+    var value = item;
+    for (var i = 0; i < parts.length; i++) {
+      if (value === null || value === undefined) break;
+      value = value[parts[i]];
+    }
+    if (value !== undefined || parts.length <= 1) return value;
+    return item[parts[parts.length - 1]];
+  }
+
+  function renderEachTemplate(template, item, index) {
+    return String(template || "").replace(/\{([^}]+)\}/g, function (match, expression) {
+      if (expression.trim() === "index") return String(index);
+      var value = itemLookup(item, expression);
+      if (value === undefined || value === null) return "";
+      if (typeof value === "object") return match;
+      return String(value);
+    });
+  }
+
+  function eachItemHtml(binding, item, index) {
+    if (item && typeof item === "object" && typeof item.html === "string") return item.html;
+    if (typeof item === "string") return item;
+    return renderEachTemplate(binding.template_text, item, index);
+  }
+
+  function applyEachPatch(target, binding, value) {
+    var items;
+    if (!value) {
+      items = [];
+    } else {
+      try {
+        items = JSON.parse(value);
+      } catch (error) {
+        throw new Error("mochi-loader: invalid each patch for binding " + binding.id);
+      }
+      if (!Array.isArray(items)) {
+        throw new Error("mochi-loader: each patch must be an array for binding " + binding.id);
+      }
+    }
+
+    var state = target.__mochiEach;
+    if (!state) state = target.__mochiEach = { items: new Map() };
+    var previous = state.items;
+    var next = new Map();
+    var parent = target.parentNode;
+    if (!parent) return;
+
+    previous.forEach(function (entry) { removeNodes(entry.nodes); });
+
+    var cursor = target;
+
+    items.forEach(function (item, index) {
+      var key = itemKey(item, index);
+      var html = eachItemHtml(binding, item, index);
+      var entry = previous.get(key);
+      if (!entry || entry.html !== html) {
+        entry = { html: html, nodes: Array.from(fragmentFor(html).childNodes) };
+      }
+      next.set(key, entry);
+      entry.nodes.forEach(function (node) {
+        parent.insertBefore(node, cursor.nextSibling);
+        cursor = node;
+      });
+    });
+
+    state.items = next;
+  }
+
+  function applyPatchRecord(element, record) {
+    var binding = element.bindingData[record.bindingId];
+    var target = element.bindingTargets[record.bindingId];
+    if (!binding || !target) {
+      throw new Error("mochi-loader: patch for unknown binding " + record.bindingId);
+    }
+
+    if (binding.kind === "text") {
+      applyTextPatch(target, binding, record.value);
+    } else if (binding.kind === "html") {
+      applyHtmlPatch(target, binding, record.value);
+    } else if (binding.kind === "attr") {
+      applyAttrPatch(target, binding, record.value);
+    } else if (binding.kind === "cond") {
+      applyCondPatch(target, binding, record.value);
+    } else if (binding.kind === "each") {
+      applyEachPatch(target, binding, record.value);
+    }
+  }
+
+  function applyPatches(target, module) {
+    var element = target && target.bindingTargets ? target : state.elements.get(String(target));
+    if (!element) return;
+    var activeModule = module || element._mochiModule;
+    var instance = element._mochiInstance;
+    if (!activeModule || instance === null || instance === undefined) return;
+    if (typeof activeModule._mochi_flush_patches !== "function") return;
+
+    var count = activeModule._mochi_flush_patches(instance);
+    if (count < 0) {
+      throw new Error("mochi-loader: patch flush failed: " + lastError(activeModule));
+    }
+    if (count === 0) return;
+
+    decodePatches(activeModule, count).forEach(function (record) {
+      applyPatchRecord(element, record);
+    });
   }
 
   function defineComponent(component, manifestUrl) {
@@ -256,6 +505,8 @@
         this._mochiReady = mountInstance(component, state.manifest, manifestUrl).then(function (mounted) {
           element._mochiModule = mounted.module;
           element._mochiInstance = mounted.instance;
+          state.elements.set(String(mounted.instance), element);
+          applyPatches(element, mounted.module);
           return mounted;
         }).catch(function (error) {
           element.mochiError = error;
@@ -271,6 +522,18 @@
           if (!node) {
             throw new Error("mochi-loader: missing binding path [" + (binding.path || []).join(", ") + "] for " + tag);
           }
+
+          if (binding.kind === "html" && node.nodeType === 3) {
+            var span = global.document.createElement("span");
+            span.textContent = node.textContent;
+            node.parentNode.replaceChild(span, node);
+            node = span;
+          } else if (binding.kind === "text" && node.nodeType === 3) {
+            textBindingState(node, binding);
+          } else if (binding.kind === "attr" && node.nodeType === 1) {
+            attrBindingState(node, binding);
+          }
+
           this.bindingTargets[binding.id] = node;
           this.bindingData[binding.id] = binding;
         }
@@ -296,9 +559,7 @@
           if (mounted.module._mochi_dispatch_event(mounted.instance, symbol) !== 1) {
             throw new Error("mochi-loader: event dispatch failed for " + method + ": " + lastError(mounted.module));
           }
-          if (typeof loader.applyPatches === "function") {
-            return loader.applyPatches(mounted.instance, mounted.module);
-          }
+          applyPatches(element, mounted.module);
         }).catch(function (error) {
           element.mochiError = error;
           console.error("[mochi] " + tag + " event failed", error);
@@ -337,7 +598,7 @@
   var loader = {
     boot: boot,
     moduleFactory: null,
-    applyPatches: null,
+    applyPatches: applyPatches,
     get manifest() { return state.manifest; },
     get components() { return state.manifest ? state.manifest.components : []; }
   };
