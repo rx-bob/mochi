@@ -46,6 +46,23 @@
     return new TextDecoder().decode(bytes);
   }
 
+  // Flattens top-level and conditional-branch bindings so every getter can be
+  // registered with the VM at mount time, even while its branch is unmounted.
+  function collectBindings(bindings, result) {
+    (bindings || []).forEach(function (binding) {
+      result.push(binding);
+      (binding.branches || []).forEach(function (branch) {
+        collectBindings(branch.bindings, result);
+      });
+    });
+  }
+
+  function flattenBindings(bindings) {
+    var result = [];
+    collectBindings(bindings, result);
+    return result;
+  }
+
   function lastError(module) {
     if (!module._mochi_last_error_offset || !module._mochi_last_error_len) return "";
     var offset = module._mochi_last_error_offset();
@@ -237,7 +254,7 @@
       throw new Error("mochi-loader: mount failed for " + component.class_name + ": " + lastError(module));
     }
 
-    (component.bindings || []).forEach(function (binding) {
+    flattenBindings(component.bindings).forEach(function (binding) {
       var symbol = intern(module, binding.getter_sym);
       if (module._mochi_register_binding(instance, binding.id, symbol) !== 0) {
         throw new Error("mochi-loader: binding registration failed for " + binding.getter_sym + ": " + lastError(module));
@@ -259,6 +276,29 @@
       node = node.childNodes[path[i]];
     }
     return node || null;
+  }
+
+  function installBindingTarget(element, root, binding, context) {
+    var path = binding.path || [];
+    var node = resolveTarget(root, path);
+    if (!node) {
+      throw new Error("mochi-loader: missing binding path [" + path.join(", ") + "] for " + context);
+    }
+
+    if (binding.kind === "html" && node.nodeType === 3) {
+      var span = global.document.createElement("span");
+      span.textContent = node.textContent;
+      node.parentNode.replaceChild(span, node);
+      node = span;
+    } else if (binding.kind === "text" && node.nodeType === 3) {
+      textBindingState(node, binding);
+    } else if (binding.kind === "attr" && node.nodeType === 1) {
+      attrBindingState(node, binding);
+    }
+
+    element.bindingTargets[binding.id] = node;
+    element.bindingData[binding.id] = binding;
+    return node;
   }
 
   function eventTarget(event, root, eventName) {
@@ -381,24 +421,97 @@
     }
   }
 
-  function applyCondPatch(target, binding, value) {
-    var state = target.__mochiCond;
-    if (!state) state = target.__mochiCond = { visible: false, nodes: [] };
-    var show = value === "true" || value === "0";
-    if (state.visible === show) return;
+  function conditionalBranches(binding) {
+    if (binding.branches && binding.branches.length) return binding.branches;
+    return [{ html_template: binding.template_text || "", bindings: [], events: [] }];
+  }
 
-    if (show) {
-      var parent = target.parentNode;
-      if (!parent) return;
-      var fragment = fragmentFor(binding.template_text);
-      var nodes = Array.from(fragment.childNodes);
-      parent.insertBefore(fragment, target.nextSibling);
-      state.nodes = nodes;
-      state.visible = true;
+  function branchIndexFor(value, branchCount) {
+    if (value === "true") return branchCount > 0 ? 0 : -1;
+    if (value === "false" || value === "-1" || value === "" || value === null || value === undefined) return -1;
+
+    var index = Number(value);
+    if (!Number.isInteger(index) || index < 0 || index >= branchCount) return -1;
+    return index;
+  }
+
+  function unmountConditionalBranch(element, state) {
+    var anchor = state.anchor;
+    var endNode = state.endNode;
+    if (anchor && anchor.parentNode) {
+      // Remove the whole inserted range, including nodes mounted by nested
+      // conditionals or each bindings after top-level anchors in this branch.
+      var node = anchor.nextSibling;
+      while (node && node !== endNode) {
+        var next = node.nextSibling;
+        if (node.parentNode) node.parentNode.removeChild(node);
+        node = next;
+      }
     } else {
-      removeNodes(state.nodes);
-      state.nodes = [];
-      state.visible = false;
+      removeNodes(state.nodes || []);
+    }
+
+    (state.bindingIds || []).forEach(function (bindingId) {
+      delete element.bindingTargets[bindingId];
+    });
+    state.nodes = [];
+    state.bindingIds = [];
+    state.endNode = null;
+    state.index = -1;
+  }
+
+  function mountConditionalBranch(element, target, branch, state, index) {
+    var parent = target.parentNode;
+    if (!parent) return;
+
+    var fragment = fragmentFor(branch.html_template || "");
+    var branchBindings = branch.bindings || [];
+    var endNode = target.nextSibling;
+
+    branchBindings.forEach(function (binding) {
+      installBindingTarget(element, fragment, binding, "conditional branch");
+    });
+
+    var nodes = Array.from(fragment.childNodes);
+    parent.insertBefore(fragment, endNode);
+
+    state.anchor = target;
+    state.endNode = endNode;
+    state.nodes = nodes;
+    state.index = index;
+    state.bindingIds = flattenBindings(branchBindings).map(function (binding) { return binding.id; });
+
+    branchBindings.forEach(function (binding) {
+      if (!Object.prototype.hasOwnProperty.call(element.bindingValues, binding.id)) return;
+      var childTarget = element.bindingTargets[binding.id];
+      if (childTarget) applyBindingValue(element, childTarget, binding, element.bindingValues[binding.id]);
+    });
+  }
+
+  function applyCondPatch(element, target, binding, value) {
+    var branches = conditionalBranches(binding);
+    var nextIndex = branchIndexFor(value, branches.length);
+    var state = target.__mochiCond;
+    if (!state) state = target.__mochiCond = { index: -1, anchor: target, endNode: null, nodes: [], bindingIds: [] };
+    if (state.index === nextIndex) return;
+
+    if (state.index >= 0) unmountConditionalBranch(element, state);
+    if (nextIndex >= 0 && branches[nextIndex]) {
+      mountConditionalBranch(element, target, branches[nextIndex], state, nextIndex);
+    }
+  }
+
+  function applyBindingValue(element, target, binding, value) {
+    if (binding.kind === "text") {
+      applyTextPatch(target, binding, value);
+    } else if (binding.kind === "html") {
+      applyHtmlPatch(target, binding, value);
+    } else if (binding.kind === "attr") {
+      applyAttrPatch(target, binding, value);
+    } else if (binding.kind === "cond") {
+      applyCondPatch(element, target, binding, value);
+    } else if (binding.kind === "each") {
+      applyEachPatch(target, binding, value);
     }
   }
 
@@ -504,22 +617,17 @@
 
   function applyPatchRecord(element, record) {
     var binding = element.bindingData[record.bindingId];
-    var target = element.bindingTargets[record.bindingId];
-    if (!binding || !target) {
+    if (!binding) {
       throw new Error("mochi-loader: patch for unknown binding " + record.bindingId);
     }
 
-    if (binding.kind === "text") {
-      applyTextPatch(target, binding, record.value);
-    } else if (binding.kind === "html") {
-      applyHtmlPatch(target, binding, record.value);
-    } else if (binding.kind === "attr") {
-      applyAttrPatch(target, binding, record.value);
-    } else if (binding.kind === "cond") {
-      applyCondPatch(target, binding, record.value);
-    } else if (binding.kind === "each") {
-      applyEachPatch(target, binding, record.value);
-    }
+    // Cache every value even when its branch is unmounted. Mounting a branch
+    // replays this cache so late-arriving patches are not lost.
+    element.bindingValues[record.bindingId] = record.value;
+    var target = element.bindingTargets[record.bindingId];
+    if (!target) return;
+
+    applyBindingValue(element, target, binding, record.value);
   }
 
   function applyPatches(target, module) {
@@ -548,9 +656,16 @@
     var template = global.document.createElement("template");
     template.innerHTML = component.html_template || "";
     var bindings = component.bindings || [];
+    var allBindings = flattenBindings(bindings);
     var eventNames = [];
-    (component.events || []).forEach(function (event) {
-      if (event.event && eventNames.indexOf(event.event) === -1) eventNames.push(event.event);
+    function addEventName(name) {
+      if (name && eventNames.indexOf(name) === -1) eventNames.push(name);
+    }
+    (component.events || []).forEach(function (event) { addEventName(event.event); });
+    allBindings.forEach(function (binding) {
+      (binding.branches || []).forEach(function (branch) {
+        (branch.events || []).forEach(function (event) { addEventName(event.event); });
+      });
     });
 
     var Element = class extends global.HTMLElement {
@@ -558,6 +673,10 @@
         super();
         this.bindingTargets = {};
         this.bindingData = {};
+        this.bindingValues = {};
+        allBindings.forEach(function (binding) {
+          this.bindingData[binding.id] = binding;
+        }, this);
         this.refs = this.bindingTargets;
         this._mochiComponent = component;
         this._mochiManifestUrl = manifestUrl;
@@ -642,25 +761,7 @@
 
       _resolveBindings(root) {
         for (var i = 0; i < bindings.length; i++) {
-          var binding = bindings[i];
-          var node = resolveTarget(root, binding.path || []);
-          if (!node) {
-            throw new Error("mochi-loader: missing binding path [" + (binding.path || []).join(", ") + "] for " + tag);
-          }
-
-          if (binding.kind === "html" && node.nodeType === 3) {
-            var span = global.document.createElement("span");
-            span.textContent = node.textContent;
-            node.parentNode.replaceChild(span, node);
-            node = span;
-          } else if (binding.kind === "text" && node.nodeType === 3) {
-            textBindingState(node, binding);
-          } else if (binding.kind === "attr" && node.nodeType === 1) {
-            attrBindingState(node, binding);
-          }
-
-          this.bindingTargets[binding.id] = node;
-          this.bindingData[binding.id] = binding;
+          installBindingTarget(this, root, bindings[i], tag);
         }
       }
 

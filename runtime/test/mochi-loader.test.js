@@ -524,6 +524,379 @@ test("conditional patches mount and unmount content while preserving the anchor"
   assert.equal(element.shadowRoot.textContent.includes("hot"), false);
 });
 
+test("conditional branches replay cached child values and keep live targets on inner updates", async () => {
+  const toastComponent = {
+    tag_name: "toast-check",
+    class_name: "ToastCheck",
+    chi_file: "toast-check.chi",
+    html_template: "<!--if-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "cond",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_bind_0",
+        branches: [
+          {
+            html_template:
+              '<div class="toast"><span class="toast-message">{@toast_message}</span>' +
+              '<button data-mochi-click="dismiss">Dismiss</button></div>',
+            bindings: [
+              {
+                id: 1,
+                path: [0, 0, 0],
+                kind: "text",
+                attr_name: null,
+                template_text: "{@toast_message}",
+                getter_sym: "__mochi_bind_1",
+              },
+            ],
+            events: [{ path: [0, 1], event: "click", method_sym: "dismiss", args: [] }],
+          },
+        ],
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module, log } = await setup([toastComponent]);
+  log.methods.add("dismiss");
+  module.patchQueue.push({
+    patches: [
+      { id: 1, value: "Hello" },
+      { id: 0, value: "0" },
+    ],
+  });
+
+  const element = document.createElement("toast-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.deepEqual(log.bindings.map((entry) => entry.bindingId).sort((a, b) => a - b), [0, 1]);
+  assert.equal(element.shadowRoot.querySelector(".toast-message").textContent, "Hello");
+  assert.equal(element.shadowRoot.textContent.includes("{@toast_message}"), false);
+
+  const messageNode = element.bindingTargets[1];
+  module.patchQueue.push({ patches: [{ id: 1, value: "Updated" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.bindingTargets[1], messageNode);
+  assert.equal(element.shadowRoot.querySelector(".toast-message").textContent, "Updated");
+
+  element.shadowRoot.querySelector('button[data-mochi-click="dismiss"]').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(log.dispatched.at(-1), { instance: "1", methodSymbol: log.symbols.get("dismiss") });
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "-1" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".toast"), null);
+  assert.equal(element.bindingTargets[1], undefined);
+  assert.equal(element.bindingTargets[0].nodeType, 8);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "0" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".toast-message").textContent, "Updated");
+});
+
+test("if/elsif/else branches mount only the active branch and update inner text in place", async () => {
+  const chainComponent = {
+    tag_name: "chain-check",
+    class_name: "ChainCheck",
+    chi_file: "chain-check.chi",
+    html_template: "<!--if-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "cond",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_bind_0",
+        branches: [
+          {
+            html_template: '<p class="a">{@a}</p>',
+            bindings: [
+              { id: 1, path: [0, 0], kind: "text", attr_name: null, template_text: "{@a}", getter_sym: "__mochi_bind_1" },
+            ],
+            events: [],
+          },
+          {
+            html_template: '<p class="b">{@b}</p>',
+            bindings: [
+              { id: 2, path: [0, 0], kind: "text", attr_name: null, template_text: "{@b}", getter_sym: "__mochi_bind_2" },
+            ],
+            events: [],
+          },
+          {
+            html_template: '<p class="c">{@c}</p>',
+            bindings: [
+              { id: 3, path: [0, 0], kind: "text", attr_name: null, template_text: "{@c}", getter_sym: "__mochi_bind_3" },
+            ],
+            events: [],
+          },
+        ],
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([chainComponent]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "0" },
+      { id: 1, value: "A" },
+      { id: 2, value: "B" },
+      { id: 3, value: "C" },
+    ],
+  });
+
+  const element = document.createElement("chain-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element.shadowRoot.querySelector(".a").textContent, "A");
+  assert.equal(element.shadowRoot.querySelector(".b"), null);
+  assert.equal(element.shadowRoot.querySelector(".c"), null);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "1" }] });
+  loader.applyPatches(element, module);
+  const branchB = element.shadowRoot.querySelector(".b");
+  const branchBText = branchB.firstChild;
+  assert.equal(branchB.textContent, "B");
+  assert.equal(element.shadowRoot.querySelector(".a"), null);
+  assert.equal(element.shadowRoot.querySelector(".c"), null);
+
+  module.patchQueue.push({ patches: [{ id: 2, value: "B2" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".b"), branchB);
+  assert.equal(element.shadowRoot.querySelector(".b").firstChild, branchBText);
+  assert.equal(branchB.textContent, "B2");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "2" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".c").textContent, "C");
+  assert.equal(element.shadowRoot.querySelector(".a"), null);
+  assert.equal(element.shadowRoot.querySelector(".b"), null);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "-1" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".a"), null);
+  assert.equal(element.shadowRoot.querySelector(".b"), null);
+  assert.equal(element.shadowRoot.querySelector(".c"), null);
+  assert.equal(element.bindingTargets[0].nodeType, 8);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "true" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".a").textContent, "A");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "false" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".a"), null);
+});
+
+test("nested conditional branches render and update two levels deep", async () => {
+  const nestedComponent = {
+    tag_name: "nested-two-check",
+    class_name: "NestedTwoCheck",
+    chi_file: "nested-two-check.chi",
+    html_template: "<!--if-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "cond",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_bind_0",
+        branches: [
+          {
+            html_template: "<!--if-anchor-1-->",
+            bindings: [
+              {
+                id: 1,
+                path: [0],
+                kind: "cond",
+                attr_name: null,
+                template_text: "",
+                getter_sym: "__mochi_bind_1",
+                branches: [
+                  {
+                    html_template: '<span class="two">{@value}</span>',
+                    bindings: [
+                      { id: 2, path: [0, 0], kind: "text", attr_name: null, template_text: "{@value}", getter_sym: "__mochi_bind_2" },
+                    ],
+                    events: [],
+                  },
+                ],
+              },
+            ],
+            events: [],
+          },
+        ],
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([nestedComponent]);
+  module.patchQueue.push({
+    patches: [
+      { id: 2, value: "two" },
+      { id: 1, value: "0" },
+      { id: 0, value: "0" },
+    ],
+  });
+
+  const element = document.createElement("nested-two-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element.shadowRoot.querySelector(".two").textContent, "two");
+
+  module.patchQueue.push({ patches: [{ id: 2, value: "two2" }] });
+  loader.applyPatches(element, module);
+  const two = element.shadowRoot.querySelector(".two");
+  const twoText = two.firstChild;
+  assert.equal(two.textContent, "two2");
+  assert.equal(element.shadowRoot.querySelector(".two"), two);
+  assert.equal(two.firstChild, twoText);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "-1" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".two"), null);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "0" }] });
+  loader.applyPatches(element, module);
+  assert.notEqual(element.shadowRoot.querySelector(".two"), two);
+  assert.equal(element.shadowRoot.querySelector(".two").textContent, "two2");
+});
+
+test("nested conditional branches render and update three levels deep", async () => {
+  const nestedComponent = {
+    tag_name: "nested-check",
+    class_name: "NestedCheck",
+    chi_file: "nested-check.chi",
+    html_template: "<!--if-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "cond",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_bind_0",
+        branches: [
+          {
+            html_template: '<span class="level2">{@outer}</span><!--if-anchor-1-->',
+            bindings: [
+              { id: 1, path: [0, 0], kind: "text", attr_name: null, template_text: "{@outer}", getter_sym: "__mochi_bind_1" },
+              {
+                id: 2,
+                path: [1],
+                kind: "cond",
+                attr_name: null,
+                template_text: "",
+                getter_sym: "__mochi_bind_2",
+                branches: [
+                  {
+                    html_template: '<div class="level3"><!--if-anchor-2--></div>',
+                    bindings: [
+                      {
+                        id: 3,
+                        path: [0, 0],
+                        kind: "cond",
+                        attr_name: null,
+                        template_text: "",
+                        getter_sym: "__mochi_bind_3",
+                        branches: [
+                          {
+                            html_template: '<b class="level4" title="{@tip}">{@deep}</b>',
+                            bindings: [
+                              { id: 4, path: [0], kind: "attr", attr_name: "title", template_text: "{@tip}", getter_sym: "__mochi_bind_4" },
+                              { id: 5, path: [0, 0], kind: "text", attr_name: null, template_text: "{@deep}", getter_sym: "__mochi_bind_5" },
+                            ],
+                            events: [],
+                          },
+                          { html_template: '<i class="other">other</i>', bindings: [], events: [] },
+                        ],
+                      },
+                    ],
+                    events: [],
+                  },
+                ],
+              },
+            ],
+            events: [],
+          },
+        ],
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module, log } = await setup([nestedComponent]);
+  module.patchQueue.push({
+    patches: [
+      { id: 1, value: "outer" },
+      { id: 2, value: "0" },
+      { id: 3, value: "0" },
+      { id: 4, value: "tip" },
+      { id: 5, value: "deep" },
+      { id: 0, value: "0" },
+    ],
+  });
+
+  const element = document.createElement("nested-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.deepEqual(log.bindings.map((entry) => entry.bindingId).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5]);
+  assert.equal(element.shadowRoot.querySelector(".level2").textContent, "outer");
+  const levelFour = element.shadowRoot.querySelector(".level4");
+  assert.equal(levelFour.textContent, "deep");
+  assert.equal(levelFour.getAttribute("title"), "tip");
+
+  module.patchQueue.push({ patches: [{ id: 5, value: "deep2" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level4"), levelFour);
+  assert.equal(levelFour.textContent, "deep2");
+
+  module.patchQueue.push({ patches: [{ id: 4, value: "tip2" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level4"), levelFour);
+  assert.equal(levelFour.getAttribute("title"), "tip2");
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "outer2" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level2").textContent, "outer2");
+
+  module.patchQueue.push({ patches: [{ id: 3, value: "1" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level4"), null);
+  assert.equal(element.shadowRoot.querySelector(".other").textContent, "other");
+
+  module.patchQueue.push({ patches: [{ id: 3, value: "0" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level4").textContent, "deep2");
+  assert.equal(element.shadowRoot.querySelector(".level4").getAttribute("title"), "tip2");
+  assert.equal(element.shadowRoot.querySelector(".level2").textContent, "outer2");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "-1" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level2"), null);
+  assert.equal(element.shadowRoot.querySelector(".level4"), null);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "0" }] });
+  loader.applyPatches(element, module);
+  assert.equal(element.shadowRoot.querySelector(".level2").textContent, "outer2");
+  assert.equal(element.shadowRoot.querySelector(".level4").textContent, "deep2");
+});
+
 test("strict @ivar, method, and attribute conditional placeholders patch in place", async () => {
   const strictComponent = {
     tag_name: "strict-check",
