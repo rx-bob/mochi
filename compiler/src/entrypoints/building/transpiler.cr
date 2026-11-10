@@ -1,5 +1,3 @@
-require "./../../quickjs"
-require "./../../caching/cache"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
 require "./trace_helper"
 require "../../webcomponents/component_generator"
@@ -22,7 +20,6 @@ class Compiler
 
     components = [] of MochiComponent
     i = 1
-    rb_rewriter = RubyRewriter.new
 
     nr_files = 0
     done_channel = Channel(Nil).new
@@ -43,12 +40,6 @@ class Compiler
               i += 1
               if component
                 components << component
-
-                src_dir = builder_man.ruby_src_dir
-                lib_path = rb_rewriter.extract_lib_path(absolute_path)
-                file_path = "#{src_dir}/#{lib_path}"
-                puts "lib_path:#{lib_path}, src_dir:#{src_dir}, file_path:#{file_path}"
-                File.write(file_path, component.ruby_code)
               end
               done_channel.send(nil)
             end
@@ -63,100 +54,7 @@ class Compiler
       end
     end
 
-    trace_slice(trace, "SorbetSignatures", sequence_id) do
-      rb_rewriter.comment_out_all_sorbet_signatures_in_dir("#{builder_man.ruby_src_dir}/lib")
-    end
-
-    trace_slice(trace, "GenerateRoot", sequence_id) do
-      mochi_root = rb_rewriter.gen_mochi_ruby_root(components)
-      File.write("#{builder_man.ruby_src_dir}/lib/Root.rb", mochi_root)
-    end
-
-
     puts "Done with preparing components for transpilation"
-    puts "Transpiling..."
-    transpiled_ruby_code_path = "#{build_dir}/ruby.js"
-    # `cd #{builder_man.ruby_src_dir} && bundler install`
-    puts "gems installed (skipped)"
-
-    use_quickjs = true
-
-    cache = Cache.new
-
-    transpiled_ruby_code = trace_slice(trace, "QuickJSCompilation", sequence_id) do
-      if use_quickjs
-        builder = trace_slice(trace, "BuilderSetup", sequence_id) do
-          b = trace_slice(trace, "BuilderInit", sequence_id) do
-            QuickJS::Opal::Builder.new(include_runtime: false)
-          end
-
-          trace_slice(trace, "AddStdlibAwait", sequence_id) { b.add_stdlib("await") }
-          trace_slice(trace, "AddStdlibJson", sequence_id) { b.add_stdlib("json") }
-
-          b.add_raw_js("Opal.modules['sorbet-runtime'] = function(Opal) { return Opal.nil; };")
-          b.add_raw_js("Opal.modules['sorbet'] = function(Opal) { return Opal.nil; };")
-
-          trace_slice(trace, "CompileLibSetup", sequence_id) do
-            b.compile("$LOAD_PATH.unshift('/lib'); $LOAD_PATH.unshift('lib'); $LOAD_PATH.unshift('./lib')", "lib_setup")
-          end
-
-          b.add_raw_js("Opal.load('lib_setup');")
-          b
-        end
-
-        lib_dir = "#{builder_man.ruby_src_dir}/lib"
-        src_dir = builder_man.ruby_src_dir
-        puts "Scanning #{lib_dir} for source files..."
-
-        trace_slice(trace, "CompileSourceFiles", sequence_id) do
-          if Dir.exists?(lib_dir)
-            Dir.glob("#{lib_dir}/**/*.rb") do |full_path|
-              next if full_path.ends_with?("/Root.rb")
-
-              code = File.read(full_path)
-              rel_path_src = Path[full_path].relative_to(src_dir).to_s
-              rel_path_lib = Path[full_path].relative_to(lib_dir).to_s
-
-              if rel_path_lib == "mochi.rb"
-                builder.compile_with_cache(code, rel_path_src, cache)
-                builder.compile_with_cache(code, rel_path_lib, cache)
-              elsif rel_path_lib.starts_with?("sorbet-types/")
-                builder.compile_with_cache(code, rel_path_src, cache)
-              else
-                builder.compile_with_cache(code, rel_path_lib, cache)
-              end
-            end
-          else
-            puts "ERROR: lib_dir does not exist: #{lib_dir}"
-          end
-        end
-
-        puts "Compiling Entry Point: lib/Root.rb (as main)"
-
-        trace_slice(trace, "CompileEntryPoint", sequence_id) do
-          root_path = "#{lib_dir}/Root.rb"
-          if File.exists?(root_path)
-            builder.compile_with_cache(File.read(root_path), "lib/Root.rb", cache, requirable: false)
-          else
-            puts "ERROR: Root.rb not found at #{root_path}"
-          end
-        end
-
-        result = trace_slice(trace, "BuildOutput", sequence_id) do
-          builder.build(nil)
-        end
-
-        File.write(transpiled_ruby_code_path, result)
-        builder.finalize
-        result
-      else
-        puts "Using Opal CLI (Old Logic)..."
-        `cd #{builder_man.ruby_src_dir} && opal -I ./lib -cO -s opal -s native -s promise -s browser/setup/full -s sorbet-runtime ./lib/Root.rb -o #{transpiled_ruby_code_path} --no-source-map --no-method-missing`
-        File.read(transpiled_ruby_code_path)
-      end
-    end
-
-    cache.close
 
     trace_slice(trace, "AssembleJS", sequence_id) do
       components_js_code = ""
@@ -165,9 +63,8 @@ class Compiler
       end
       components_js_code = components_js_code + "\n" + "console.log('Mochi booted.');" + "\n"
 
-      output = transpiled_ruby_code + "\n" + components_js_code
       puts "Writing #{build_dir}/bundle.js"
-      File.write("#{build_dir}/bundle.js", output)
+      File.write("#{build_dir}/bundle.js", components_js_code)
     end
 
     puts "Transpilation finished"
@@ -270,76 +167,6 @@ class Compiler
 
 
       if tag_name
-        # Build all methods to inject (getters, setters, and internal mounted bridge)
-        injected_methods = [] of String
-        injected_methods << "def __mochi_mounted(el); @element = el; end"
-        injected_methods << "def query(selector); `\#{@element}.shadowRoot.querySelector(\#{selector})`; end"
-        injected_methods << "def query_all(selector); `\#{@element}.shadowRoot.querySelectorAll(\#{selector})`; end"
-
-        reactables_arr.each do |var_name|
-          if var_name.starts_with?("__mochi_attr_cond_") || var_name.starts_with?("__mochi_attr_hash_")
-            injected_methods << "def get_#{var_name}; #{var_name}(); end"
-            injected_methods << "def set_#{var_name}(value); end"
-          else
-            injected_methods << "def get_#{var_name}; @#{var_name}; end"
-            injected_methods << "def set_#{var_name}(value); @#{var_name} = value; `\#{@element}.update_#{var_name}(\#{value})` if @element; end"
-          end
-        end
-
-        # TODO remove - hacky injection of cross-component Event Bus APIs
-        injected_methods << <<-RUBY
-        def emit(event_name, payload = nil)
-          `window.Mochi.emit(\#{event_name.to_s}, \#{payload.to_n})`
-        end
-
-        def on(event_name, &block)
-          @_mochi_subscriptions ||= []
-          @_mochi_subscriptions << { event: event_name.to_s, block: block }
-          `window.Mochi.on(\#{event_name.to_s}, \#{block})`
-        end
-
-        def _cleanup_mochi_subscriptions
-          return unless @_mochi_subscriptions
-          @_mochi_subscriptions.each do |sub|
-            `window.Mochi.off(\#{sub[:event]}, \#{sub[:block]})`
-          end
-          @_mochi_subscriptions = nil
-        end
-
-        def on_window(event, &block)
-          handler = `function(e) { \#{block}.$call(e) }`
-          `window.addEventListener(\#{event}, \#{handler})`
-          @__dom_listeners ||= []
-          @__dom_listeners << [`window`, event, handler]
-        end
-
-        def on_document(event, &block)
-          handler = `function(e) { \#{block}.$call(e) }`
-          `document.addEventListener(\#{event}, \#{handler})`
-          @__dom_listeners ||= []
-          @__dom_listeners << [`document`, event, handler]
-        end
-
-        def _cleanup_dom_listeners
-          return unless @__dom_listeners
-          @__dom_listeners.each do |target, event, handler|
-            `\#{target}.removeEventListener(\#{event}, \#{handler})`
-          end
-          @__dom_listeners = nil
-        end
-        RUBY
-
-        # Find insertion point once and insert all methods together
-        insertion_point = find_second_last_index(amped_ruby_code, "end")
-        if insertion_point && insertion_point > 0
-          insertion_point += 3
-          methods_code = "\n\n  #{injected_methods.join("\n\n  ")}\n"
-          amped_ruby_code = amped_ruby_code[0...insertion_point] + methods_code + amped_ruby_code[insertion_point..-1]
-        else
-          # Fallback if class structure is simple
-          amped_ruby_code += "\n\n#{injected_methods.join("\n\n")}\n"
-        end
-
         web_component = ComponentGenerator.new.generate(
             mochi_cmp_name = cls_name,
             tag_name = tag_name.not_nil!,

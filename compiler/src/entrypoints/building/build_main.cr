@@ -33,7 +33,6 @@ class BuildMain
     print_separator
     puts "4. Packing in Batteries"
     batt_time = Time.measure do
-      SorbetTypesBat.generate(builder_man.ruby_src_dir)
       CoreBattery.generate(builder_man.ruby_src_dir)
     end
     puts "> Batteries took #{batt_time.total_milliseconds.to_i}ms"
@@ -45,7 +44,6 @@ class BuildMain
     output_dir : String,
     parser : OptionParser,
     with_tc : Bool,
-    with_mini : Bool,
     keep_granular_build_artifacts : Bool
   )
     trace = Pftrace::Trace.new("mochi_build.pftrace")
@@ -86,26 +84,10 @@ class BuildMain
     puts "> Compilation took #{mochi_comp_time.total_milliseconds.to_i}ms"
 
     print_separator
-    puts "6. Generating Opal Runtime"
-
-    opal_rt_time = Time.measure do
-      trace_slice(trace, "OpalRuntimeGen", sequence_id, "build") do
-        opal_rt_gen = OpalRuntimeGenerator.new()
-        opal_rt_gen.generate(builder_man.build_dir)
-      end
-    end
-    puts "> Opal RT gen took #{opal_rt_time.total_milliseconds.to_i}ms"
-
-    step_nr = 7
-
-    print_separator
-    puts "#{step_nr}. Bundling"
-    step_nr += 1
-    bundle_file_path = ""
+    puts "6. Bundling"
 
     bundling_time_taken = Time.measure do
       trace_slice(trace, "Bundling", sequence_id, "build") do
-        `cp "#{builder_man.build_dir}/runtime.js" "#{output_dir}/runtime.js"`
         `cp "#{builder_man.build_dir}/bundle.js" "#{output_dir}/bundle.js"`
 
         bundle_js = File.read("#{output_dir}/bundle.js")
@@ -114,27 +96,9 @@ class BuildMain
     end
     puts "> Bundling took #{bundling_time_taken.total_milliseconds.to_i}ms"
 
-    print_separator
-    puts "#{step_nr}. Minify the output: #{with_mini}"
-    step_nr += 1
-
-    mini_time_taken = Time.measure do
-      trace_slice(trace, "Minification", sequence_id, "build") do
-        if with_mini
-          unless Process.find_executable("swc")
-            STDERR.puts "Error: swc is not installed. Please run 'npm install -g @swc/cli @swc/core'."
-            exit 1
-          end
-          `npx swc "#{output_dir}/runtime.js" -o "#{output_dir}/runtime.js"`
-        end
-      end
-    end
-    puts "> Minification took #{mini_time_taken.total_milliseconds.to_i}ms"
-
     if !keep_granular_build_artifacts
       puts "removing granular build artifacts"
 
-      remove_file("#{builder_man.build_dir}/ruby.js")
       remove_directory("#{builder_man.build_dir}/pre_tp")
       remove_directory("#{builder_man.build_dir}/src")
     end
@@ -144,14 +108,6 @@ class BuildMain
 
     print_separator
     puts "Done."
-  end
-
-  def remove_file(file_path : String)
-    begin
-      File.delete(file_path)
-    rescue Exception
-      puts "Unable to remove file, as I couldnt find it: #{file_path}"
-    end
   end
 
   def remove_directory(dir_path : String)
