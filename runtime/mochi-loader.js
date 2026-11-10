@@ -13,7 +13,9 @@
     irepPromises: new Map(),
     internCache: new Map(),
     tags: new Set(),
-    elements: new Map()
+    elements: new Map(),
+    actionRouterInstalled: false,
+    actionSupportCache: new Map()
   };
 
   function absoluteUrl(path, base) {
@@ -50,6 +52,38 @@
     var length = module._mochi_last_error_len();
     if (!offset || length <= 0) return "";
     return decode(module.HEAPU8.subarray(offset, offset + length));
+  }
+
+  function hasMethod(module, instance, methodName) {
+    if (!module || typeof module._mochi_has_method !== "function") return true;
+    return withUtf8(module, methodName, function (pointer, length) {
+      return module._mochi_has_method(instance, pointer, length) === 1;
+    });
+  }
+
+  function actionSupported(module, element, action) {
+    var component = element._mochiComponent || {};
+    var className = component.class_name || component.tag_name || "";
+    var key = className + "\u0000" + action;
+    if (state.actionSupportCache.has(key)) return state.actionSupportCache.get(key);
+
+    var supported = hasMethod(module, element._mochiInstance, action);
+    state.actionSupportCache.set(key, supported);
+    return supported;
+  }
+
+  function ensureActionRouter() {
+    if (state.actionRouterInstalled || !global.document) return;
+    state.actionRouterInstalled = true;
+
+    global.document.addEventListener("mochi:action", function (event) {
+      var action = event && event.detail && event.detail.action;
+      if (!action) return;
+
+      state.elements.forEach(function (element) {
+        element._dispatchAction(action);
+      });
+    });
   }
 
   // Drains Ruby `Mochi.emit("action")` calls. Actions are published on the
@@ -210,14 +244,9 @@
       }
     });
 
-    var mounted = intern(module, "mounted");
-    if (mounted) {
-      var hasMounted = module._mochi_has_method
-        ? withUtf8(module, "mounted", function (pointer, length) {
-            return module._mochi_has_method(instance, pointer, length);
-          })
-        : 1;
-      if (hasMounted === 1) module._mochi_dispatch_event(instance, mounted);
+    if (hasMethod(module, instance, "mounted")) {
+      var mounted = intern(module, "mounted");
+      module._mochi_dispatch_event(instance, mounted);
     }
 
     return { module: module, instance: instance };
@@ -535,9 +564,12 @@
         this._mochiReady = null;
         this._mochiModule = null;
         this._mochiInstance = null;
+        this._mochiDisconnected = false;
+        this._mochiUnmounted = false;
       }
 
       connectedCallback() {
+        ensureActionRouter();
         if (this.shadowRoot) return;
 
         var root = this.attachShadow({ mode: "open" });
@@ -554,6 +586,12 @@
         this._mochiReady = mountInstance(component, state.manifest, manifestUrl).then(function (mounted) {
           element._mochiModule = mounted.module;
           element._mochiInstance = mounted.instance;
+
+          if (element._mochiDisconnected) {
+            element._unmount(mounted.module, mounted.instance);
+            return mounted;
+          }
+
           state.elements.set(String(mounted.instance), element);
           applyPatches(element, mounted.module);
           drainEmits(mounted.module);
@@ -563,19 +601,42 @@
           console.error("[mochi] " + tag + " mount failed", error);
           throw error;
         });
-
-        if (!this._mochiActionListener) {
-          this._mochiActionListener = function (event) {
-            element._dispatchAction(event);
-          };
-          global.document.addEventListener("mochi:action", this._mochiActionListener);
-        }
       }
 
       disconnectedCallback() {
-        if (this._mochiActionListener) {
-          global.document.removeEventListener("mochi:action", this._mochiActionListener);
-          this._mochiActionListener = null;
+        this._mochiDisconnected = true;
+
+        if (this._mochiModule && this._mochiInstance !== null && this._mochiInstance !== undefined) {
+          this._unmount(this._mochiModule, this._mochiInstance);
+          return;
+        }
+
+        var element = this;
+        if (this._mochiReady) {
+          this._mochiReady.then(function (mounted) {
+            element._unmount(mounted.module, mounted.instance);
+          }).catch(function () {});
+        }
+      }
+
+      _unmount(module, instance) {
+        if (this._mochiUnmounted) return;
+        this._mochiUnmounted = true;
+
+        var key = String(instance);
+        if (state.elements.get(key) === this) state.elements.delete(key);
+
+        try {
+          if (hasMethod(module, instance, "unmounted")) {
+            var symbol = intern(module, "unmounted");
+            if (module._mochi_dispatch_event(instance, symbol) !== 1) {
+              throw new Error("mochi-loader: unmounted dispatch failed for " + tag + ": " + lastError(module));
+            }
+          }
+          drainEmits(module);
+        } catch (error) {
+          this.mochiError = error;
+          console.error("[mochi] " + tag + " unmount failed", error);
         }
       }
 
@@ -631,28 +692,29 @@
         });
       }
 
-      _dispatchAction(event) {
-        var element = this;
-        var action = event && event.detail && event.detail.action;
-        if (!action || !this._mochiReady) return;
+      _dispatchAction(action) {
+        if (!action || this._mochiDisconnected) return;
 
-        this._mochiReady.then(function (mounted) {
-          if (mounted.module._mochi_has_method) {
-            var supported = withUtf8(mounted.module, action, function (pointer, length) {
-              return mounted.module._mochi_has_method(mounted.instance, pointer, length);
-            });
-            if (supported !== 1) return;
+        var module = this._mochiModule;
+        var instance = this._mochiInstance;
+        if (!module || instance === null || instance === undefined) return;
+        if (state.elements.get(String(instance)) !== this) return;
+
+        try {
+          if (!actionSupported(module, this, action)) return;
+
+          var symbol = intern(module, action);
+          if (module._mochi_dispatch_event(instance, symbol) !== 1) {
+            throw new Error("mochi-loader: action dispatch failed for " + action + ": " + lastError(module));
           }
-          var symbol = intern(mounted.module, action);
-          if (mounted.module._mochi_dispatch_event(mounted.instance, symbol) !== 1) {
-            throw new Error("mochi-loader: action dispatch failed for " + action + ": " + lastError(mounted.module));
+          if (!this._mochiDisconnected) {
+            applyPatches(this, module);
+            drainEmits(module);
           }
-          applyPatches(element, mounted.module);
-          drainEmits(mounted.module);
-        }).catch(function (error) {
-          element.mochiError = error;
+        } catch (error) {
+          this.mochiError = error;
           console.error("[mochi] " + tag + " action failed", error);
-        });
+        }
       }
     };
 
@@ -674,6 +736,7 @@
     if (Array.isArray(manifest)) manifest = { components: manifest };
     if (!manifest.components) manifest.components = [];
 
+    state.actionSupportCache.clear();
     state.manifest = manifest;
     state.manifestUrl = manifestUrl;
 

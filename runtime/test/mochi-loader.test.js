@@ -62,11 +62,15 @@ function fakeModule(log) {
   const decoder = new TextDecoder();
   const symbols = new Map();
   const patchOffset = 4096;
+  const emitOffset = 8192;
   log.symbols = symbols;
+  log.hasMethodCalls = [];
+  log.methods = new Set(["mounted", "increment", "reset"]);
   let nextSymbol = 100;
   let nextPointer = 1024;
   let nextInstance = 1;
   let patchLength = 0;
+  let emitText = "";
 
   const module = {
     HEAPU8: new Uint8Array(65536),
@@ -90,6 +94,11 @@ function fakeModule(log) {
       if (!symbols.has(name)) symbols.set(name, nextSymbol++);
       log.interned.push(name);
       return symbols.get(name);
+    },
+    _mochi_has_method(instance, pointer, length) {
+      const name = decoder.decode(module.HEAPU8.slice(pointer, pointer + length));
+      log.hasMethodCalls.push(name);
+      return log.methods.has(name) ? 1 : 0;
     },
     _mochi_mount_component() {
       return String(nextInstance++);
@@ -122,6 +131,19 @@ function fakeModule(log) {
     _mochi_last_error_len() {
       return 0;
     },
+    _mochi_emit_outbox_offset() {
+      return emitOffset;
+    },
+    _mochi_emit_outbox_len() {
+      return emitText.length;
+    },
+    _mochi_emit_outbox_clear() {
+      emitText = "";
+    },
+    queueEmit(text) {
+      emitText = text;
+      module.HEAPU8.set(new TextEncoder().encode(text), emitOffset);
+    },
     symbols,
   };
   return module;
@@ -138,6 +160,7 @@ async function setup(components) {
   global.customElements = dom.window.customElements;
   global.Event = dom.window.Event;
   global.MouseEvent = dom.window.MouseEvent;
+  global.CustomEvent = dom.window.CustomEvent;
 
   const log = { calls: [], fetches: [], loads: [], interned: [], bindings: [], dispatched: [], flushes: [] };
   const body = manifest(components);
@@ -208,6 +231,106 @@ test("delegated click and change events dispatch the interned Ruby method", asyn
   const resetSymbol = log.symbols.get("reset");
   assert.ok(resetSymbol);
   assert.deepEqual(log.dispatched.at(-1), { instance: "1", methodSymbol: resetSymbol });
+});
+
+test("disconnect dispatches unmounted and stops routing actions", async () => {
+  const { log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  element.remove();
+
+  const unmountedSymbol = log.symbols.get("unmounted");
+  assert.ok(unmountedSymbol);
+  assert.deepEqual(log.dispatched.at(-1), { instance: "1", methodSymbol: unmountedSymbol });
+  assert.equal(element._mochiDisconnected, true);
+
+  const dispatchedBefore = log.dispatched.length;
+  document.dispatchEvent(new global.CustomEvent("mochi:action", { detail: { action: "increment" } }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(log.dispatched.length, dispatchedBefore);
+});
+
+test("unmounted drains emitted actions after unregistering the removed component", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+
+  const first = document.createElement("my-counter");
+  const second = document.createElement("my-counter");
+  document.body.appendChild(first);
+  document.body.appendChild(second);
+  await Promise.all([first._mochiReady, second._mochiReady]);
+
+  module.queueEmit("increment");
+  first.remove();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const incrementSymbol = log.symbols.get("increment");
+  assert.ok(incrementSymbol);
+  const incrementDispatches = log.dispatched.filter((entry) => entry.methodSymbol === incrementSymbol);
+  assert.deepEqual(incrementDispatches, [{ instance: "2", methodSymbol: incrementSymbol }]);
+});
+
+test("disconnect without an unmounted method does not dispatch or error", async () => {
+  const { log } = await setup([COMPONENT]);
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const dispatchedBefore = log.dispatched.length;
+  element.remove();
+
+  assert.equal(log.dispatched.length, dispatchedBefore);
+  assert.equal(element.mochiError, undefined);
+  assert.equal(log.symbols.get("unmounted"), undefined);
+});
+
+test("one document action listener serves every mounted component and caches method support", async () => {
+  const { dom, log } = await setup([COMPONENT]);
+  let actionListeners = 0;
+  const document = dom.window.document;
+  const addEventListener = document.addEventListener.bind(document);
+  document.addEventListener = function (type, listener, options) {
+    if (type === "mochi:action") actionListeners += 1;
+    return addEventListener(type, listener, options);
+  };
+
+  const elements = [];
+  for (let index = 0; index < 17; index += 1) {
+    const element = document.createElement("my-counter");
+    document.body.appendChild(element);
+    elements.push(element);
+  }
+  await Promise.all(elements.map((element) => element._mochiReady));
+
+  assert.equal(actionListeners, 1);
+
+  const dispatchedBefore = log.dispatched.length;
+  document.dispatchEvent(new global.CustomEvent("mochi:action", { detail: { action: "increment" } }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const incrementSymbol = log.symbols.get("increment");
+  assert.ok(incrementSymbol);
+  assert.equal(
+    log.dispatched.slice(dispatchedBefore).filter((entry) => entry.methodSymbol === incrementSymbol).length,
+    17
+  );
+  assert.equal(log.hasMethodCalls.filter((name) => name === "increment").length, 1);
+
+  document.dispatchEvent(new global.CustomEvent("mochi:action", { detail: { action: "increment" } }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    log.dispatched.slice(dispatchedBefore).filter((entry) => entry.methodSymbol === incrementSymbol).length,
+    34
+  );
+  assert.equal(log.hasMethodCalls.filter((name) => name === "increment").length, 1);
+  assert.equal(actionListeners, 1);
 });
 
 test("multiple instances share one class and irep but keep independent targets and state", async () => {
