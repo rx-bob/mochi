@@ -1,5 +1,0 @@
----
-mruby:
-  version: 4.0.0
-  release_no: 40000
-  git_commit: '087da64f991d0ff82c2bbb6376532cbfa55056de'

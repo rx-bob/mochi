@@ -281,6 +281,18 @@ test("initial flush applies text and conditional patches", async () => {
   assert.equal(element.shadowRoot.querySelectorAll("template").length, 0);
 });
 
+test("applyPatches accepts a mounted instance id", async () => {
+  const { loader, module } = await setup([COMPONENT]);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "3" }] });
+  loader.applyPatches(element._mochiInstance);
+
+  assert.equal(element.shadowRoot.querySelector(".count").textContent, "Count: 3");
+});
+
 test("100 text updates keep sibling DOM nodes identical", async () => {
   const { module } = await setup([COMPONENT]);
   module.patchQueue.push({
@@ -451,6 +463,13 @@ test("each patches reconcile keyed fragments and preserve unchanged nodes", asyn
   assert.equal(firstA.textContent, "A");
   assert.equal(firstB.textContent, "B");
 
+  const removed = [];
+  const removeChild = element.shadowRoot.removeChild.bind(element.shadowRoot);
+  element.shadowRoot.removeChild = (node) => {
+    removed.push(node);
+    return removeChild(node);
+  };
+
   module.patchQueue.push({
     patches: [{ id: 0, value: JSON.stringify([{ id: "a", name: "A" }, { id: "c", name: "C" }]) }],
   });
@@ -460,6 +479,8 @@ test("each patches reconcile keyed fragments and preserve unchanged nodes", asyn
   assert.deepEqual(items.map((item) => item.textContent), ["A", "C"]);
   assert.equal(items[0], firstA);
   assert.equal(items[1] === firstB, false);
+  assert.equal(removed.includes(firstA), false);
+  assert.equal(removed.includes(firstB), true);
   assert.equal(element.bindingTargets[0], anchor);
   assert.equal(anchor.nodeType, 8);
 });

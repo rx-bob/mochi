@@ -3,158 +3,137 @@ version: '3'
 vars:
   FRAG_CONFIG:
     sh: |
-      if [[ "$OSTYPE" == "darwin"* ]]; then
+      if [ "$(uname -s)" = "Darwin" ]; then
         echo 'export LIBRARY_PATH="" && export DYLD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs" && export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)'
       else
         echo 'export LIBRARY_PATH="" && export LD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs"'
       fi
-  LINK_FLAGS: '--link-flags="-L{{.ROOT_DIR}}/fragments/libs"'
-  DEFAULT_RUN_PARAMS: '-i "../devground/components" -o "../devground/public"'
-
-  RUBY_RUN_CONFIG:
+  SPEC_LINK_FLAGS: '--link-flags="-L{{.ROOT_DIR}}/fragments/libs"'
+  BUILD_LINK_FLAGS:
     sh: |
-      if [[ "$OSTYPE" == "darwin"* ]]; then
-        echo 'export DYLD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs:$DYLD_LIBRARY_PATH" && export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)'
+      if [ "$(uname -s)" = "Darwin" ]; then
+        echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a -Wl,-ld_classic"'
       else
-        echo 'export LD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs:$LD_LIBRARY_PATH"'
+        echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a"'
       fi
-  RUBY_DEFAULT_PARAMS: '-i "../devground/components" -o "../devground/public"'
+  COMPILER: '{{.ROOT_DIR}}/compiler/mochi'
+  MOTESTPROJ: '{{.ROOT_DIR}}/compiler/motestproj'
+  BUNDLE_DIR: '{{.ROOT_DIR}}/build_gvm'
+  GVM_DIR: '{{.ROOT_DIR}}/../mochi-gvm'
 
 tasks:
-  specs:
+  default:
+    desc: List available tasks
     cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && crystal spec {{.LINK_FLAGS}}'
-
-  specs-ruby:
-    cmds:
-      - |
-        {{.RUBY_RUN_CONFIG}} && cd compiler_rb && bundle exec ruby -Isrc -Ispec -e 'Dir["spec/**/*_spec.rb"].each { |f| require File.expand_path(f) }'
-
-  init-test:
-    cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && rm -rf ./motestproj &&  time crystal run src/mochi.cr {{.LINK_FLAGS}} -- --initialize="motestproj"'
-
-  wipe-build-dir:
-    cmds:
-      - 'rm -r ./compiler/build || true'
-
-  run:
-    deps:
-      - wipe-build-dir
-    cmds:
-      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}}'
-
-  run-crystal:
-    deps:
-      - wipe-build-dir
-    cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}}'
-
-  run-ruby:
-    deps:
-      - wipe-build-dir
-    cmds:
-      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}}'
-
-  run-new-engine:
-    deps:
-      - wipe-build-dir
-    cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}} --experimental-new-engine'
-
-  run-no-internal-logs:
-    deps:
-      - wipe-build-dir
-    cmds:
-      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}}'
-
-  typecheck:
-    cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- typecheck ../devground/components'
-
-  e2e-ruby:
-    deps:
-      - run-ruby
-    cmds:
-      - echo "-----------------------------------------------------------------------------------------------------"
-      - 'cd e2e && npx playwright test'
-
-  regression:
-    cmds:
-      - echo "building with crystal..."
-      - |
-        {{.FRAG_CONFIG}} && cd compiler && time crystal run src/mochi.cr {{.LINK_FLAGS}} -- {{.DEFAULT_RUN_PARAMS}} >/dev/null 2>&1 && cp ../devground/public/bundle.js /tmp/crystal_bundle.js && cp ../devground/public/runtime.js /tmp/crystal_runtime.js
-      - echo "building with ruby..."
-      - |
-        {{.RUBY_RUN_CONFIG}} && cd compiler_rb && time bundle exec ruby -Isrc src/mochi.rb {{.RUBY_DEFAULT_PARAMS}} >/dev/null 2>&1 && cp ../devground/public/bundle.js /tmp/ruby_bundle.js && cp ../devground/public/runtime.js /tmp/ruby_runtime.js
-      - echo "comparing runtime.js..."
-      - |
-        diff -q /tmp/crystal_runtime.js /tmp/ruby_runtime.js && echo "runtime.js is IDENTICAL" || echo "runtime.js DIFFERS"
-      - echo "comparing bundle.js..."
-      - |
-        diff -q /tmp/crystal_bundle.js /tmp/ruby_bundle.js && echo "bundle.js is IDENTICAL" || echo "bundle.js DIFFERS (may be ordering -- see notes/RUBY_CRYSTAL_COMPARISON.md)"
+      - task --list
 
   build:
+    desc: Build the Crystal compiler binary
+    sources:
+      - compiler/src/**/*.cr
+      - compiler/shard.yml
+      - compiler/shard.lock
+      - fragments/**/*
+    generates:
+      - compiler/mochi
     cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && time crystal build src/mochi.cr -Dstatic_sorbet --link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a -Wl,-ld_classic"'
+      - |
+        set -e
+        {{.FRAG_CONFIG}}
+        cd compiler
+        time crystal build src/mochi.cr -Dstatic_sorbet -o mochi {{.BUILD_LINK_FLAGS}}
+        if [ "$(uname -s)" = "Darwin" ]; then
+          if otool -L mochi | grep -q '/usr/local/lib/libtree-sitter.0.27.dylib'; then
+            install_name_tool -change /usr/local/lib/libtree-sitter.0.27.dylib "{{.ROOT_DIR}}/fragments/libs/libtree-sitter.dylib" mochi
+          fi
+        fi
 
-  build-and-execute:
+  specs:
+    desc: Run Crystal compiler specs
+    cmds:
+      - |
+        created=0
+        if [ "$(uname -s)" = "Darwin" ] && [ ! -e "fragments/libs/libtree-sitter.0.27.dylib" ]; then
+          ln -s libtree-sitter.dylib fragments/libs/libtree-sitter.0.27.dylib
+          created=1
+        fi
+        {{.FRAG_CONFIG}}
+        cd compiler
+        crystal spec {{.SPEC_LINK_FLAGS}}
+        status=$?
+        if [ "$created" -eq 1 ]; then rm -f ../fragments/libs/libtree-sitter.0.27.dylib; fi
+        exit $status
+
+  run:
+    desc: Build the compiler and compile motestproj into build_gvm
     deps:
       - build
     cmds:
-      - 'cd compiler && ./mochi {{.DEFAULT_RUN_PARAMS}}'
+      - '{{.FRAG_CONFIG}} && {{.COMPILER}} -i {{.MOTESTPROJ}} -o {{.BUNDLE_DIR}}'
+
+  typecheck:
+    desc: Typecheck the motestproj components with Sorbet
+    deps:
+      - build
+    cmds:
+      - '{{.FRAG_CONFIG}} && {{.COMPILER}} --typecheck -i {{.MOTESTPROJ}} -o {{.BUNDLE_DIR}}'
 
   dev:
-    cmds:
-      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && bundle exec ruby -Isrc src/mochi.rb --dev --config=../config/dev_server_config.json --root="../devground/public"'
-
-  dev-crystal:
-    cmds:
-      - '{{.FRAG_CONFIG}} && cd compiler && crystal run src/mochi.cr {{.LINK_FLAGS}} -- --dev --config=../config/dev_server_config.json --root="../devground/public"'
-
-  dev-ruby:
-    cmds:
-      - '{{.RUBY_RUN_CONFIG}} && cd compiler_rb && bundle exec ruby -Isrc src/mochi.rb --dev --config=../config/dev_server_config.json --root="../devground/public"'
-
-  e2e:
+    desc: Build motestproj and serve build_gvm on port 27490
     deps:
       - run
     cmds:
-      - echo "-----------------------------------------------------------------------------------------------------"
-      - 'cd e2e && npx playwright test'
+      - '{{.FRAG_CONFIG}} && {{.COMPILER}} dev --config={{.ROOT_DIR}}/config/dev_server_config.json --root={{.BUNDLE_DIR}}'
 
-  e2e-crystal:
+  e2e:
+    desc: Run the GVM Playwright end-to-end test
     deps:
-      - run-crystal
+      - build
     cmds:
-      - echo "-----------------------------------------------------------------------------------------------------"
-      - 'cd e2e && npx playwright test'
+      - 'cd e2e && npx playwright test tests/gvm_counter.spec.ts --reporter=line'
 
-  sorbet:
+  check:
+    desc: Run compiler specs, GVM tests, and GVM E2E
     cmds:
-      - cd compiler_rb && bundle exec srb tc
+      - task: specs
+      - task: gvm:test
+      - task: e2e
+
+  gvm:test:
+    desc: Run the mochi-gvm Goose test suite
+    dir: '{{.GVM_DIR}}'
+    cmds:
+      - goosetest test
+
+  gvm:fmt:
+    desc: Check mochi-gvm Goose formatting
+    dir: '{{.GVM_DIR}}'
+    cmds:
+      - 'find . -name "*.goose" -not -path "./goosetest_generated/*" -not -path "./references/*" -print0 | xargs -0 goosefmt --check'
+
+  gvm:wasm:
+    desc: Rebuild the mochi-gvm WASM and JS artifacts
+    dir: '{{.GVM_DIR}}'
+    cmds:
+      - |
+        set -e
+        if [ -z "${EMSDK_PYTHON:-}" ]; then
+          if [ -x /opt/homebrew/bin/python3 ]; then
+            EMSDK_PYTHON=/opt/homebrew/bin/python3
+          else
+            EMSDK_PYTHON=$(command -v python3)
+          fi
+        fi
+        export EMSDK_PYTHON
+        emscripten_prefix="${EMSCRIPTEN_PREFIX:-$(brew --prefix emscripten 2>/dev/null || true)}"
+        llvm_bin="${EMSDK_LLVM_BIN:-${emscripten_prefix}/libexec/llvm/bin}"
+        if [ -d "$llvm_bin" ]; then
+          export PATH="$llvm_bin:$PATH"
+        fi
+        goose run scripts/build_wasm.goose
 
   generate-batteries:
+    desc: Regenerate the built-in battery sources
     cmds:
       - ruby scripts/fragments_generator.rb
       - crystal tool format ./compiler/src/generated
-
-  download_libs:auto:
-    desc: 'Download platform-specific libraries (auto-detect)'
-    cmds:
-      - ruby scripts/download_libs.rb
-
-  download_libs:macos:
-    desc: 'Download macOS ARM64 libraries'
-    cmds:
-      - ruby scripts/download_libs.rb darwin aarch64
-
-  download_libs:linux:
-    desc: 'Download Linux x86_64 libraries'
-    cmds:
-      - ruby scripts/download_libs.rb linux x86_64
-
-  download_libs:windows:
-    desc: 'Download Windows x86_64 libraries'
-    cmds:
-      - ruby scripts/download_libs.rb windows x86_64

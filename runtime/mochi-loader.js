@@ -381,6 +381,15 @@
     return renderEachTemplate(binding.template_text, item, index);
   }
 
+  function entryFollows(entry, cursor) {
+    if (entry.nodes.length === 0) return true;
+    if (entry.nodes[0].previousSibling !== cursor) return false;
+    for (var i = 1; i < entry.nodes.length; i++) {
+      if (entry.nodes[i].previousSibling !== entry.nodes[i - 1]) return false;
+    }
+    return true;
+  }
+
   function applyEachPatch(target, binding, value) {
     var items;
     if (!value) {
@@ -400,12 +409,9 @@
     if (!state) state = target.__mochiEach = { items: new Map() };
     var previous = state.items;
     var next = new Map();
+    var ordered = [];
     var parent = target.parentNode;
     if (!parent) return;
-
-    previous.forEach(function (entry) { removeNodes(entry.nodes); });
-
-    var cursor = target;
 
     items.forEach(function (item, index) {
       var key = itemKey(item, index);
@@ -415,10 +421,25 @@
         entry = { html: html, nodes: Array.from(fragmentFor(html).childNodes) };
       }
       next.set(key, entry);
-      entry.nodes.forEach(function (node) {
-        parent.insertBefore(node, cursor.nextSibling);
-        cursor = node;
-      });
+      ordered.push(entry);
+    });
+
+    var live = new Set(ordered);
+    previous.forEach(function (entry) {
+      if (!live.has(entry)) removeNodes(entry.nodes);
+    });
+
+    var cursor = target;
+    ordered.forEach(function (entry) {
+      if (entry.nodes.length === 0) return;
+      if (!entryFollows(entry, cursor)) {
+        entry.nodes.forEach(function (node) {
+          parent.insertBefore(node, cursor.nextSibling);
+          cursor = node;
+        });
+      } else {
+        cursor = entry.nodes[entry.nodes.length - 1];
+      }
     });
 
     state.items = next;

@@ -76,33 +76,34 @@ end
 
 ### Compiling
 Prerequisites:
-* <img alt="Ruby Icon" style="height: 16px;" src="https://www.ruby-lang.org/favicon.ico"/> [Ruby](https://www.ruby-lang.org/) (3.1+)
-* <img alt="Opal Ruby Icon" style="height: 16px;" src="https://github.com/yampug/mochi/blob/main/github/assets/opal_icon.ico?raw=true"> [Opal](https://opalrb.com)
+* <img alt="Crystal Icon" style="height: 16px;" src="https://crystal-lang.org/favicon.ico"/> [Crystal](https://crystal-lang.org/)
 * <img alt="Task Go Icon" style="height: 16px;" src="https://github.com/yampug/mochi/blob/main/github/assets/task_icon.ico?raw=true"> [Task](https://taskfile.dev)
-* <img alt="Sorbet Icon" style="height: 16px;" src="https://sorbet.org/img/favicon.ico"/> [Sorbet](https://sorbet.org/)
+* Node.js for the Playwright end-to-end test
+* Emscripten only when rebuilding the `mochi-gvm` WASM artifact
 
 ```
 git clone http://github.com/yampug/mochi
 cd mochi
-task run-ruby
+task run
 ```
 
-Mochi ships with a **Ruby compiler** (`compiler_rb/`) that is now the default. The legacy Crystal compiler is still available as `task run-crystal` for fallback. Both produce identical output and pass all E2E tests.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, and one `.chi` file per component. It does not generate component-specific JavaScript.
 
 ### Compiler Tasks
 
 | Task | Description |
 |---|---|
-| `task run` | Build with the Ruby compiler (**default**) |
-| `task run-crystal` | Build with the legacy Crystal compiler |
-| `task run-ruby` | Alias for `task run` |
-| `task e2e` | Build with Ruby + run Playwright E2E tests |
-| `task e2e-crystal` | Build with Crystal + run Playwright E2E tests |
-| `task specs-ruby` | Run the Ruby compiler's Minitest suite |
-| `task regression` | Compare Crystal vs Ruby compiler output |
-| `task dev` | Start dev server using Ruby compiler |
-| `task dev-crystal` | Start dev server using Crystal compiler |
-| `task sorbet` | Run Sorbet typechecker on compiler_rb/ |
+| `task run` | Build the compiler and compile `compiler/motestproj` into `build_gvm` |
+| `task build` | Build the `compiler/mochi` binary |
+| `task specs` | Run the Crystal compiler specs |
+| `task typecheck` | Typecheck the motestproj components with Sorbet |
+| `task e2e` | Run the GVM Playwright end-to-end test |
+| `task dev` | Build motestproj and serve `build_gvm` on port 27490 |
+| `task gvm:test` | Run the `mochi-gvm` Goose test suite |
+| `task gvm:fmt` | Check `mochi-gvm` Goose formatting |
+| `task gvm:wasm` | Rebuild the `mochi-gvm` WASM and JS artifacts |
+| `task generate-batteries` | Regenerate the built-in battery sources |
+| `task check` | Run specs, GVM tests, and the GVM end-to-end test |
 
 ### Usage
 
@@ -113,14 +114,15 @@ mochi --initialize="my_fancy_project"
 
 #### Compiling your code
 ```
-mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --minimize --typecheck
+mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --typecheck
 ```
 
 * -i: input directory
 * -o: output directory
-* --minimize: Minimise the generated js code (Optional)
-* --typecheck: Run Sorbet Typechecks (Optional)
+* --typecheck: Run Sorbet typechecks (optional)
 * --initialize: Creates a new preconfigured project directory
+
+The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader fetches the manifest, WASM, and component `.chi` files.
 
 
 
