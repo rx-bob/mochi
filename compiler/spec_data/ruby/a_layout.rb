@@ -25,12 +25,12 @@ class ALayout
           </div>
           <nav class="menu">
             <div class="menu-group">
-              <div class="menu-item {wsb_active_class}" onclick={toggle_wsb}>
+              <div class="menu-item {@wsb_active_class}" onclick={toggle_wsb}>
                 <span class="menu-icon">📊</span>
                 <span class="menu-text">WSB</span>
-                <span class="menu-arrow">{wsb_arrow}</span>
+                <span class="menu-arrow">{@wsb_arrow}</span>
               </div>
-              <div class="submenu {submenu_class}">
+              <div class="submenu {@submenu_class}">
                 <div class="submenu-item {get_active_class('wsb-overview')}" onclick={navigate_to_wsb_overview}>
                   <span class="submenu-text">Overview</span>
                 </div>
@@ -47,10 +47,10 @@ class ALayout
         </aside>
         <main class="content">
           <div class="content-header">
-            <h1>{page_title}</h1>
+            <h1>{@page_title}</h1>
           </div>
           <div class="content-body">
-            {page_content}
+            {@page_content}
           </div>
         </main>
       </div>

@@ -15,7 +15,7 @@ class FeatherIcon
   def html
     %Q{
       <div class="feather-icon">
-        {rendered_svg}
+        {@rendered_svg}
       </div>
     }
   end

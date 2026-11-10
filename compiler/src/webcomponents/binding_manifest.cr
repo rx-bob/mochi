@@ -86,8 +86,10 @@ class RubyBindingRewriter
     expression = template[/\{([^}]+)\}/, 1]? || template
     expression = expression.strip
     expression = expression[1..-2] if expression.starts_with?("{") && expression.ends_with?("}")
-    return expression if expression.starts_with?("@") || expression.starts_with?("__mochi_")
-    "@#{expression}"
+
+    # Strict binding syntax leaves `@foo` as an ivar read and `foo` as a
+    # method call. Prefixing `@` here would silently change method bindings.
+    expression
   end
 
   def self.remove_methods(ruby_code : String, class_name : String, method_names : Array(String)) : String

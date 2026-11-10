@@ -18,6 +18,7 @@ class Compiler
   include TraceHelper
 
   MAX_TRACKED_IVARS = 256
+  BINDING_LITERALS  = ["true", "false", "nil", "self"]
 
   def initialize
   end
@@ -202,6 +203,8 @@ class Compiler
       methods.keys
     )
 
+    validate_binding_methods(cls_name, manifest.bindings, methods.keys, rb_file)
+
     rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
       amped_ruby_code,
       cls_name,
@@ -219,6 +222,30 @@ class Compiler
       manifest.html_template,
       css
     )
+  end
+
+  private def validate_binding_methods(
+    cls_name : String,
+    bindings : Array(BindingDescriptor),
+    method_names : Array(String),
+    rb_file : String,
+  ) : Nil
+    readable = Set(String).new
+    method_names.each { |name| readable << name }
+    RubyUnderstander.attribute_readers(rb_file, cls_name).each { |name| readable << name }
+
+    bindings.each do |binding|
+      expression = binding.getter_expr
+      next unless expression
+
+      name = expression.strip
+      next if name.starts_with?("__mochi_")
+      next unless name =~ /\A[a-z_][a-zA-Z0-9_]*[?!]?\z/
+      next if BINDING_LITERALS.includes?(name)
+      next if readable.includes?(name)
+
+      raise "Component '#{cls_name}' binds undefined method '#{name}' in #{binding.template_text.inspect}; use '@#{name}' for an instance variable"
+    end
   end
 
   private def validate_ivar_capacity(cls_name : String, vars : Array(TreeSitter::InstanceVarAnalyzer::VariableInfo)) : Nil

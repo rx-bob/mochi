@@ -18,6 +18,47 @@ module TreeSitter
       return methods
     end
 
+    # Collects the reader names declared with attr_reader / attr_accessor in
+    # the component class. Strict bindings treat a bare `{name}` as a method
+    # call, and these generated readers count as defined methods.
+    def self.extract_attribute_readers(source : String, class_name : String) : Set(String)
+      readers = Set(String).new
+      parser = RubyParser.new
+      tree = parser.parse(source)
+      class_node = find_class_by_name(tree.root_node, class_name)
+      return readers unless class_node
+
+      body = class_node.child_by_field_name("body")
+      return readers unless body
+
+      body.each_named_child do |child|
+        method_name = nil
+        args_node = nil
+
+        if child.type == "call"
+          method_node = child.child_by_field_name("method")
+          method_name = method_node.text if method_node
+          args_node = child.child_by_field_name("arguments")
+        elsif child.type == "command"
+          name_node = child.child_by_field_name("name")
+          method_name = name_node.text if name_node
+          args_node = child.child_by_field_name("arguments")
+        end
+
+        next unless method_name
+        next unless method_name.in?("attr_reader", "attr_accessor")
+        next unless args_node
+
+        args_node.each_named_child do |arg|
+          next unless arg.type == "simple_symbol"
+
+          readers << arg.text.lchop(":")
+        end
+      end
+
+      readers
+    end
+
     # Removes the named instance methods from `class_name` using the exact
     # Tree-sitter byte range of each method node. Line-oriented removal and
     # searching for the literal `end` keyword both fail when an HTML string

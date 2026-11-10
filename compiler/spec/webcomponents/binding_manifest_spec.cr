@@ -15,7 +15,7 @@ class MyCounter
   end
 
   def html
-    %Q{<h1>Count: {count}</h1><button onclick="{increment}">Increment</button>}
+    %Q{<h1>Count: {@count}</h1><button onclick="{increment}">Increment</button>}
   end
 
   def css
@@ -59,6 +59,39 @@ RUBY
     rewritten.should contain("def increment")
   end
 
+  it "generates method-call getters for bare bindings and ivar getters for @ bindings" do
+    source = <<-RUBY
+class MochiBox
+  @tag_name = "mochi-box"
+  @label = "box"
+  @flag = false
+
+  def html
+    %Q{<div class="{box_class}">{@label}</div>}
+  end
+
+  def box_class
+    @flag ? "on" : "off"
+  end
+end
+RUBY
+
+    methods = RubyUnderstander.extract_method_bodies(source, "MochiBox")
+    html = RubyUnderstander.extract_raw_string_from_def_body(methods["html"].body, "html")
+    manifest = ComponentGenerator.new.generate("MochiBox", "mochi-box", "", html)
+
+    class_binding = manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == "class" }
+    class_binding.getter_expr.should eq("box_class")
+
+    text_binding = manifest.bindings.find! { |binding| binding.kind == "html" }
+    text_binding.getter_expr.should eq("@label")
+
+    rewritten = ComponentGenerator.new.rewrite_ruby(source, "MochiBox", manifest, methods)
+    rewritten.should contain("def __mochi_bind_0; box_class; end")
+    rewritten.should contain("def __mochi_bind_1; @label; end")
+    rewritten.should contain("def box_class")
+  end
+
   it "keeps template text for conditionals and lists" do
     descriptor = BindingDescriptor.new(
       4,
@@ -80,7 +113,7 @@ class BareCounter
   @tag_name = "bare-counter"
 
   def html
-    %Q{<p>{count}</p>}
+    %Q{<p>{@count}</p>}
   end
 
   def css
@@ -94,7 +127,7 @@ RUBY
       "BareCounter",
       "bare-counter",
       "",
-      %Q{<p>{count}</p>}
+      %Q{<p>{@count}</p>}
     )
 
     rewritten = ComponentGenerator.new.rewrite_ruby(source, "BareCounter", manifest, methods)

@@ -6,7 +6,7 @@ require "../code_test_utils"
 
 describe ComponentGenerator do
   it "builds a static manifest with child-node paths and event attributes" do
-    html = %(<h1>Count: {count}</h1><button onclick="{increment}">Increment</button>)
+    html = %(<h1>Count: {@count}</h1><button onclick="{increment}">Increment</button>)
     gen = ComponentGenerator.new
 
     manifest = gen.generate("TestCmp", "test-cmp", "h1 { color: red; }", html)
@@ -14,7 +14,7 @@ describe ComponentGenerator do
     manifest.tag_name.should eq("test-cmp")
     manifest.class_name.should eq("TestCmp")
     manifest.chi_file.should eq("test-cmp.chi")
-    manifest.html_template.should contain("<h1>Count: {count}</h1>")
+    manifest.html_template.should contain("<h1>Count: {@count}</h1>")
     manifest.html_template.should contain(%(data-mochi-click="increment"))
     manifest.html_template.should_not contain("onclick=")
     manifest.css.should eq("h1 { color: red; }")
@@ -24,7 +24,8 @@ describe ComponentGenerator do
     binding.id.should eq(0)
     binding.path.should eq([0, 0])
     binding.kind.should eq("text")
-    binding.template_text.should eq("Count: {count}")
+    binding.template_text.should eq("Count: {@count}")
+    binding.getter_expr.should eq("@count")
     binding.getter_sym.should eq("__mochi_bind_0")
 
     manifest.events.size.should eq(1)
@@ -34,7 +35,7 @@ describe ComponentGenerator do
     event.method_sym.should eq("increment")
   end
 
-  it "uses html bindings for pure-variable text nodes" do
+  it "uses method calls for bare text bindings" do
     manifest = ComponentGenerator.new.generate(
       "TestCmp",
       "test-cmp",
@@ -45,7 +46,34 @@ describe ComponentGenerator do
     binding = manifest.bindings.first
     binding.kind.should eq("html")
     binding.path.should eq([0, 0])
+    binding.getter_expr.should eq("rendered_svg")
+  end
+
+  it "uses direct ivar reads for explicit text bindings" do
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      "<div>{@rendered_svg}</div>"
+    )
+
+    binding = manifest.bindings.first
+    binding.kind.should eq("html")
     binding.getter_expr.should eq("@rendered_svg")
+  end
+
+  it "uses method calls for bare attribute bindings" do
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      %(<div class="{box_class}">Box</div>)
+    )
+
+    binding = manifest.bindings.first
+    binding.kind.should eq("attr")
+    binding.attr_name.should eq("class")
+    binding.getter_expr.should eq("box_class")
   end
 
   it "records attribute bindings without leaving bind prefixes in the template" do
@@ -53,14 +81,14 @@ describe ComponentGenerator do
       "TestCmp",
       "test-cmp",
       "",
-      %(<a bind:href="{url}">Link</a>)
+      %(<a bind:href="{@url}">Link</a>)
     )
 
     binding = manifest.bindings.first
     binding.kind.should eq("attr")
     binding.attr_name.should eq("href")
     binding.path.should eq([0])
-    manifest.html_template.should contain(%(href="{url}"))
+    manifest.html_template.should contain(%(href="{@url}"))
     manifest.html_template.should_not contain("bind:")
   end
 

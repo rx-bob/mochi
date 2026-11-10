@@ -213,14 +213,12 @@ class ComponentGenerator
     )
   end
 
+  # Strict binding syntax: `{@foo}` reads the instance variable `@foo`,
+  # while `{foo}` calls the component method `foo`. Never rewrite one into
+  # the other here; validation in Compiler#transpile_component catches
+  # method bindings that do not resolve to a component method.
   private def normalize_expression(expression : String) : String
-    stripped = expression.strip
-    return stripped if stripped.starts_with?("@") || stripped.starts_with?("__mochi_")
-    return stripped if stripped.starts_with?("!") || stripped.starts_with?("(")
-    return stripped if stripped.starts_with?("\"") || stripped.starts_with?("'")
-    return stripped if stripped.in?("true", "false", "nil")
-
-    "@#{stripped}"
+    expression.strip
   end
 
   private def validate_event_handlers(

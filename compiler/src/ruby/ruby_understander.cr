@@ -29,6 +29,10 @@ class RubyUnderstander
     return TreeSitter::MethodBodyExtractor.remove_methods(rb_file, cls_name, method_names)
   end
 
+  def self.attribute_readers(rb_file : String, cls_name : String) : Set(String)
+    return TreeSitter::MethodBodyExtractor.extract_attribute_readers(rb_file, cls_name)
+  end
+
   def self.get_cmp_name(rb_file : String, cls_name : String) : String?
     TreeSitter::PropertyExtractor.extract_property(rb_file, "@tag_name")
   end

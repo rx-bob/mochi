@@ -3,8 +3,8 @@ require "./inject_utils"
 require "../html/attribute_conditional_extractor"
 
 class AttributeMethodGenerator
-  METHOD_PREFIX = "__mochi_attr_cond_"
-  END_KEYWORD = "end"
+  METHOD_PREFIX   = "__mochi_attr_cond_"
+  END_KEYWORD     = "end"
   FALLBACK_OFFSET = 3
 
   def self.inject_methods_into_class(ruby_code : String, class_name : String, conditionals : Array(ExtractedAttributeConditional)) : String
@@ -26,32 +26,36 @@ class AttributeMethodGenerator
   def self.generate_method(cond : ExtractedAttributeConditional) : String
     method_name = "#{METHOD_PREFIX}#{cond.id}"
     attr_string = cond.original_string
-    
+
     blocks = ConditionalProcessor.extract_conditionals(attr_string)
     blocks.sort_by! { |b| b.start_pos }
-    
-    body = "    _res = \"\"\n"
-    
+
+    # Build the attribute from string parts and join once. `_res += "text"`
+    # compiles to OP_ADD, which the GVM only implements for integers; pushing
+    # onto an array and joining keeps attribute conditionals executable while
+    # preserving strict `{@ivar}` / `{method}` interpolation inside each part.
+    body = "    _parts = []\n"
+
     last_pos = 0
     blocks.each do |block|
       if block.start_pos > last_pos
         text = attr_string[last_pos...block.start_pos]
-        body += "    _res += \"#{escape_and_interpolate(text)}\"\n"
+        body += "    _parts << \"#{escape_and_interpolate(text)}\"\n"
       end
-      
+
       body += "    if #{block.condition}\n"
-      body += "      _res += \"#{escape_and_interpolate(block.content)}\"\n"
+      body += "      _parts << \"#{escape_and_interpolate(block.content)}\"\n"
       body += "    end\n"
-      
+
       last_pos = block.end_pos
     end
-    
+
     if last_pos < attr_string.size
       text = attr_string[last_pos..-1]
-      body += "    _res += \"#{escape_and_interpolate(text)}\"\n"
+      body += "    _parts << \"#{escape_and_interpolate(text)}\"\n"
     end
-    
-    body += "    _res\n"
+
+    body += "    _parts.join\n"
 
     <<-RUBY
 
@@ -66,7 +70,7 @@ RUBY
   private def self.escape_and_interpolate(text : String) : String
     # First, escape double quotes so we don't break the generated ruby string literal
     escaped = text.gsub("\"", "\\\"")
-    
+
     # Then replace {var} with \#{var}
     # Note: we need to handle {@var} and {var}
     # If it's already {@var}, it becomes \#{@var}

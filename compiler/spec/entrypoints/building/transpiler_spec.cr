@@ -63,6 +63,94 @@ RUBY
       ruby.index("def __mochi_attr_cond_0").not_nil!.should be > increment_at
     end
 
+    it "compiles method-call bindings and direct ivar bindings" do
+      source = <<-RUBY
+class MethodBindings
+  @tag_name = "x-method-bindings"
+  @flag = false
+  @label = "box"
+  @box_class = "direct"
+
+  def html
+    %Q{<div class="box {box_class}" data-label="{@label}" data-direct="{@box_class}">{@label}</div>}
+  end
+
+  def box_class
+    @flag ? "on" : "off"
+  end
+
+  def toggle
+    @flag = !@flag
+  end
+end
+RUBY
+
+      component = transpile_source(source, "MethodBindings")
+      manifest = component.manifest
+
+      class_binding = manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == "class" }
+      class_binding.getter_expr.should eq("box_class")
+
+      label_attr = manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == "data-label" }
+      label_attr.getter_expr.should eq("@label")
+
+      direct_class = manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == "data-direct" }
+      direct_class.getter_expr.should eq("@box_class")
+
+      label_text = manifest.bindings.find! { |binding| binding.kind == "html" }
+      label_text.getter_expr.should eq("@label")
+
+      component.ruby_code.should contain("def #{class_binding.getter_sym}; box_class; end")
+      component.ruby_code.should contain("def #{label_attr.getter_sym}; @label; end")
+      component.ruby_code.should contain("def #{direct_class.getter_sym}; @box_class; end")
+      component.ruby_code.should contain("def box_class")
+    end
+
+    it "treats attr_reader and attr_accessor names as bindable methods" do
+      source = <<-RUBY
+class ReaderComponent
+  @tag_name = "x-reader"
+  @count = 0
+  @label = "reader"
+
+  attr_reader :count
+  attr_accessor :label
+
+  def html
+    %Q{<p>{count} {@label}</p>}
+  end
+
+  def increment
+    @count += 1
+  end
+end
+RUBY
+
+      component = transpile_source(source, "ReaderComponent")
+      manifest = component.manifest
+      reader = manifest.bindings.find! { |binding| binding.getter_expr == "count" }
+      direct = manifest.bindings.find! { |binding| binding.getter_expr == "@label" }
+
+      component.ruby_code.should contain("def #{reader.getter_sym}; count; end")
+      component.ruby_code.should contain("def #{direct.getter_sym}; @label; end")
+    end
+
+    it "raises when a bare binding references an undefined method" do
+      source = <<-RUBY
+class UndefinedBinding
+  @tag_name = "x-undefined-binding"
+
+  def html
+    %Q{<p>{missing_value}</p>}
+  end
+end
+RUBY
+
+      expect_raises(Exception, /UndefinedBinding.*missing_value/) do
+        transpile_source(source, "UndefinedBinding")
+      end
+    end
+
     if real_mrbc = MrbcCompiler.find_mrbc
       it "writes a valid .chi and an empty css manifest entry for a css-less component" do
         source = <<-RUBY

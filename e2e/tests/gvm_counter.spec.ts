@@ -150,10 +150,14 @@ test("mounts my-counter, clicks increment/decrement, and preserves button nodes"
 
   const counter = page.locator("my-counter");
   const heading = counter.locator("h1");
+  const state = counter.locator("p.state");
+  const mode = counter.locator("p.mode");
   const increment = counter.locator("button").nth(0);
   const decrement = counter.locator("button").nth(1);
 
   await expect(heading).toHaveText("Count: 0");
+  await expect(state).toHaveClass(/\bneutral\b/);
+  await expect(mode).not.toHaveClass(/\bactive\b/);
   await expect(increment).toHaveText("Increment");
   await expect(decrement).toHaveText("Decrement");
   await expect(increment).toHaveCSS("background-color", "rgb(165, 50, 105)");
@@ -170,6 +174,8 @@ test("mounts my-counter, clicks increment/decrement, and preserves button nodes"
   await decrement.click();
 
   await expect(heading).toHaveText("Count: 2");
+  await expect(state).toHaveClass(/\bpositive\b/);
+  await expect(mode).toHaveClass(/\bactive\b/);
 
   const identity = await page.evaluate(() => {
     const element = document.querySelector("my-counter") as HTMLElement & { shadowRoot: ShadowRoot };

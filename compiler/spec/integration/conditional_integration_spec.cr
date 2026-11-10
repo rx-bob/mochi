@@ -149,7 +149,7 @@ class TestComponent
   def html
     %Q{
       <div>
-        <h1>Count: {count}</h1>
+        <h1>Count: {@count}</h1>
         {if @count > 5}
           <p>High count!</p>
         {end}
@@ -222,7 +222,7 @@ class SimpleComponent
   def html
     %Q{
       <div>
-        <p>Value: {value}</p>
+        <p>Value: {@value}</p>
       </div>
     }
   end
@@ -395,9 +395,10 @@ RUBY
 
         # Should have the computed attribute method
         ruby_code.should contain("def __mochi_attr_cond_0")
-        ruby_code.should contain(%Q{_res += "nav-item "})
+        ruby_code.should contain(%Q{_parts << "nav-item "})
         ruby_code.should contain(%Q{if @active})
-        ruby_code.should contain(%Q{_res += "active-\#{@id}"})
+        ruby_code.should contain(%Q{_parts << "active-\#{@id}"})
+        ruby_code.should contain(%Q{_parts.join})
 
         # The manifest carries the computed attribute as a normal attribute binding
         attr_binding = component.manifest.bindings.find! { |binding| binding.kind == "attr" }

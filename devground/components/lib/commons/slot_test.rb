@@ -11,7 +11,7 @@ class SlotTest
   def html
     %Q{
       <div class="slot-container">
-        <h2>{title}</h2>
+        <h2>{@title}</h2>
         <div class="slot-wrapper">
           <slot></slot>
         </div>

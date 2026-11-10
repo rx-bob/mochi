@@ -6,7 +6,7 @@ const { JSDOM } = require("jsdom");
 const LOADER_PATH = path.join(__dirname, "..", "mochi-loader.js");
 
 const HTML_TEMPLATE = [
-  '<span class="count">Count: {count}</span>',
+  '<span class="count">Count: {@count}</span>',
   "<!--if-anchor-0-->",
   '<button data-mochi-click="increment">Increment</button>',
   '<button data-mochi-change="reset">Reset</button>',
@@ -20,7 +20,7 @@ const COMPONENT = {
   html_template: HTML_TEMPLATE,
   css: ":host { display: block; } .count { color: red; }",
   bindings: [
-    { id: 0, path: [0, 0], kind: "text", attr_name: null, template_text: "Count: {count}", getter_sym: "__mochi_bind_0" },
+    { id: 0, path: [0, 0], kind: "text", attr_name: null, template_text: "Count: {@count}", getter_sym: "__mochi_bind_0" },
     { id: 1, path: [2], kind: "cond", attr_name: null, template_text: "hot", getter_sym: "__mochi_bind_1" },
   ],
   events: [
@@ -194,12 +194,12 @@ test("boot defines a custom element with a static shadow template and scoped sty
   assert.ok(root);
   assert.equal(root.firstChild.tagName, "STYLE");
   assert.equal(root.firstChild.textContent, COMPONENT.css);
-  assert.equal(root.querySelector(".count").textContent, "Count: {count}");
+  assert.equal(root.querySelector(".count").textContent, "Count: {@count}");
   assert.ok(root.querySelector("button"));
 
   assert.deepEqual(Object.keys(element.bindingTargets).sort(), ["0", "1"]);
   assert.equal(element.bindingTargets[0].nodeType, 3);
-  assert.equal(element.bindingTargets[0].textContent, "Count: {count}");
+  assert.equal(element.bindingTargets[0].textContent, "Count: {@count}");
   assert.equal(element.bindingTargets[1].nodeType, 8);
   assert.equal(element.refs, element.bindingTargets);
 
@@ -345,8 +345,8 @@ test("multiple instances share one class and irep but keep independent targets a
   assert.equal(first._mochiInstance, "1");
   assert.equal(second._mochiInstance, "2");
   assert.notEqual(first.bindingTargets[0], second.bindingTargets[0]);
-  assert.equal(first.bindingTargets[0].textContent, "Count: {count}");
-  assert.equal(second.bindingTargets[0].textContent, "Count: {count}");
+  assert.equal(first.bindingTargets[0].textContent, "Count: {@count}");
+  assert.equal(second.bindingTargets[0].textContent, "Count: {@count}");
   assert.notEqual(first.shadowRoot, second.shadowRoot);
 
   const chiFetches = log.fetches.filter((url) => url.endsWith("my-counter.chi"));
@@ -510,6 +510,47 @@ test("conditional patches mount and unmount content while preserving the anchor"
 
   assert.equal(element.shadowRoot.textContent.includes("hot"), false);
   assert.equal(element.bindingTargets[1], anchor);
+});
+
+test("strict @ivar, method, and attribute conditional placeholders patch in place", async () => {
+  const strictComponent = {
+    tag_name: "strict-check",
+    class_name: "StrictCheck",
+    chi_file: "strict-check.chi",
+    html_template:
+      '<span class="count">{@count}</span>' +
+      '<span class="state">{box_class}</span>' +
+      '<div class="box {__mochi_attr_cond_0}">Box</div>',
+    css: "",
+    bindings: [
+      { id: 0, path: [0, 0], kind: "text", attr_name: null, template_text: "{@count}", getter_sym: "__mochi_bind_0" },
+      { id: 1, path: [1, 0], kind: "text", attr_name: null, template_text: "{box_class}", getter_sym: "__mochi_bind_1" },
+      { id: 2, path: [2], kind: "attr", attr_name: "class", template_text: "box {__mochi_attr_cond_0}", getter_sym: "__mochi_bind_2" },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([strictComponent]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "3" },
+      { id: 1, value: "on" },
+      { id: 2, value: "active" },
+    ],
+  });
+
+  const element = document.createElement("strict-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const box = element.shadowRoot.querySelector(".box");
+  assert.equal(element.shadowRoot.querySelector(".count").textContent, "3");
+  assert.equal(element.shadowRoot.querySelector(".state").textContent, "on");
+  assert.equal(box.getAttribute("class"), "box active");
+
+  module.patchQueue.push({ patches: [{ id: 2, value: "" }] });
+  loader.applyPatches(element, module);
+  assert.equal(box.hasAttribute("class"), false);
 });
 
 test("html and attribute patches update their cached targets", async () => {
