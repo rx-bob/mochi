@@ -1,3 +1,4 @@
+require "../html/event_argument"
 require "../ruby/inject_utils"
 require "../ruby/ruby_def"
 require "../tree-sitter/method_body_extractor"
@@ -11,6 +12,7 @@ struct BindingDescriptor
   property getter_sym : String
   property getter_expr : String?
   property branches : Array(ConditionalBranchDescriptor)
+  property setter_sym : String?
 
   def initialize(
     @id : Int32,
@@ -21,6 +23,7 @@ struct BindingDescriptor
     @template_text : String? = nil,
     @getter_expr : String? = nil,
     @branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
+    @setter_sym : String? = nil,
   )
   end
 end
@@ -42,9 +45,14 @@ struct EventDescriptor
   property path : Array(Int32)
   property event : String
   property method_sym : String
-  property args : Array(String)
+  property args : Array(EventArgumentDescriptor)
 
-  def initialize(@path : Array(Int32), @event : String, @method_sym : String, @args : Array(String) = [] of String)
+  def initialize(
+    @path : Array(Int32),
+    @event : String,
+    @method_sym : String,
+    @args : Array(EventArgumentDescriptor) = [] of EventArgumentDescriptor,
+  )
   end
 
   def method_name : String
@@ -118,10 +126,22 @@ class RubyBindingRewriter
     insertion_point = InjectUtils.find_insertion_point(ruby_code, class_name, "end", 1)
     return ruby_code unless insertion_point
 
-    methods_code = all_bindings.map { |binding|
-      expression = expression_for(binding)
-      "\n  def #{binding.getter_sym}; #{expression}; end\n"
-    }.join
+    methods_code = String.build do |io|
+      setters = [] of String
+
+      all_bindings.each do |binding|
+        expression = expression_for(binding)
+        io << "\n  def " << binding.getter_sym << "; " << expression << "; end\n"
+
+        setter_sym = binding.setter_sym
+        next unless setter_sym
+        next if setters.includes?(setter_sym)
+
+        setters << setter_sym
+        event_key = binding.attr_name == "checked" ? "checked" : "value"
+        io << "\n  def " << setter_sym << "(event); " << expression << " = event[:" << event_key << "]; end\n"
+      end
+    end
 
     InjectUtils.insert_code(ruby_code, insertion_point, methods_code)
   end

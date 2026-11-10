@@ -137,4 +137,39 @@ RUBY
     rewritten.should_not contain("def css")
     rewritten.lines.last.strip.should eq("end")
   end
+
+  it "injects two-way setters that write normalized event fields" do
+    source = <<-RUBY
+class BindBox
+  @tag_name = "bind-box"
+  @query
+  @enabled
+
+  def initialize
+    @query = ""
+    @enabled = false
+  end
+
+  def html
+    %Q{<input bind:value="{@query}"><input type="checkbox" bind:checked="{@enabled}">}
+  end
+
+  def css
+    %Q{}
+  end
+end
+RUBY
+
+    methods = RubyUnderstander.extract_method_bodies(source, "BindBox")
+    html = RubyUnderstander.extract_raw_string_from_def_body(methods["html"].body, "html")
+    manifest = ComponentGenerator.new.generate("BindBox", "bind-box", "", html)
+    rewritten = ComponentGenerator.new.rewrite_ruby(source, "BindBox", manifest, methods)
+
+    rewritten.should contain("def __mochi_bind_0; @query; end")
+    rewritten.should contain("def __mochi_set_query(event); @query = event[:value]; end")
+    rewritten.should contain("def __mochi_bind_1; @enabled; end")
+    rewritten.should contain("def __mochi_set_enabled(event); @enabled = event[:checked]; end")
+    rewritten.should_not contain("def html")
+    rewritten.should_not contain("def css")
+  end
 end

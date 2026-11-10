@@ -1,3 +1,4 @@
+require "json"
 require "lexbor"
 require "./binding_manifest"
 require "../html/conditional_processor"
@@ -12,6 +13,7 @@ class ComponentGenerator
   @next_binding_id : Int32 = 0
   @next_each_id : Int32 = 0
   @mochi_cmp_name : String = ""
+  @event_expressions : Array(String) = [] of String
 
   # Includes top-level and branch-discovered each blocks so callers can inject
   # every generated each helper method after generation.
@@ -33,6 +35,7 @@ class ComponentGenerator
     @each_blocks = each_blocks
     @next_binding_id = 0
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
+    @event_expressions.clear
 
     bindings = [] of BindingDescriptor
     events = [] of EventDescriptor
@@ -166,7 +169,11 @@ class ComponentGenerator
         attr_name = name[5..]
         additions << {attr_name, value}
         removals << name
-        add_attribute_binding(path, attr_name, value, bindings)
+        if attr_name == "value" || attr_name == "checked"
+          add_two_way_binding(path, attr_name, value, bindings, events, additions)
+        else
+          add_attribute_binding(path, attr_name, value, bindings)
+        end
       elsif name.starts_with?("data-mochi-")
         next
       elsif name.starts_with?("on")
@@ -177,7 +184,9 @@ class ComponentGenerator
           method_name = match[1].split("(").first.strip
           additions << {"data-mochi-#{event_name}", method_name}
           removals << name
-          events << EventDescriptor.new(path, event_name, method_name, event_args(attrs))
+          args = event_args(attrs, event_name)
+          events << EventDescriptor.new(path, event_name, method_name, args)
+          args.each { |arg| add_event_expression_binding(path, arg, bindings) }
         end
       elsif value.includes?("{")
         add_attribute_binding(path, name, value, bindings)
@@ -198,6 +207,52 @@ class ComponentGenerator
       expression = match[1].strip
       bindings << new_binding(path, "attr", attr_name, value, expression)
     end
+  end
+
+  # `bind:value` and `bind:checked` are two-way: the getter feeds the DOM
+  # property, while a generated setter receives the normalized event payload
+  # and writes the incoming value back into the instance variable.
+  private def add_two_way_binding(
+    path : Array(Int32),
+    attr_name : String,
+    value : String,
+    bindings : Array(BindingDescriptor),
+    events : Array(EventDescriptor),
+    additions : Array(Tuple(String, String)),
+  )
+    matches = value.scan(/\{([^}]+)\}/).to_a
+    if matches.size != 1
+      raise "bind:#{attr_name} requires exactly one @ivar placeholder"
+    end
+
+    expression = matches.first[1].strip
+    unless expression.matches?(/\A@[a-zA-Z_][a-zA-Z0-9_]*\z/)
+      raise "bind:#{attr_name} requires an instance variable, got #{expression}"
+    end
+
+    setter_sym = "__mochi_set_#{expression[1..].gsub(/[^a-zA-Z0-9_]/, "_")}"
+    event_name = attr_name == "checked" ? "change" : "input"
+    bindings << new_binding(path, "prop", attr_name, value, expression, setter_sym: setter_sym)
+    events << EventDescriptor.new(path, event_name, setter_sym)
+    additions << {"data-mochi-#{event_name}", setter_sym}
+  end
+
+  # Event expressions such as `@query` need their value available to the
+  # loader. Registering a hidden binding makes the VM evaluate the expression
+  # and cache the result alongside the element's other binding values.
+  private def add_event_expression_binding(
+    path : Array(Int32),
+    argument : EventArgumentDescriptor,
+    bindings : Array(BindingDescriptor),
+  )
+    return unless argument.kind == "expr"
+    expression = argument.value.try(&.strip)
+    return if expression.nil? || expression.empty?
+    return if @event_expressions.includes?(expression)
+    return if bindings.any? { |binding| binding.getter_expr == expression && binding.kind != "prop" }
+
+    @event_expressions << expression
+    bindings << new_binding(path, "expr", nil, expression, expression)
   end
 
   # Build one conditional branch fragment and recursively compile any nested
@@ -239,8 +294,17 @@ class ComponentGenerator
     id
   end
 
-  private def event_args(attrs : Hash(String, String)) : Array(String)
-    args = [] of String
+  private def event_args(attrs : Hash(String, String), event_name : String) : Array(EventArgumentDescriptor)
+    if raw = attrs["data-mochi-args-#{event_name}"]?
+      begin
+        parsed = JSON.parse(raw)
+        return parsed.as_a.map { |item| EventArgumentDescriptor.from_json_object(item) }
+      rescue ex
+        raise "invalid event arguments for on#{event_name}: #{ex.message}"
+      end
+    end
+
+    args = [] of EventArgumentDescriptor
     index = 0
 
     while attrs.has_key?("data-mochi-arg-#{index}")
@@ -248,7 +312,7 @@ class ComponentGenerator
       if raw.starts_with?("{") && raw.ends_with?("}")
         raw = raw[1...-1]
       end
-      args << raw
+      args << EventArgumentDescriptor.parse(raw)
       index += 1
     end
 
@@ -262,6 +326,7 @@ class ComponentGenerator
     template_text : String,
     expression : String,
     branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
+    setter_sym : String? = nil,
   ) : BindingDescriptor
     id = allocate_binding_id
     BindingDescriptor.new(
@@ -272,7 +337,8 @@ class ComponentGenerator
       attr_name,
       template_text,
       normalize_expression(expression),
-      branches
+      branches,
+      setter_sym
     )
   end
 
@@ -292,6 +358,7 @@ class ComponentGenerator
     return if method_names.empty?
 
     events.each do |event|
+      next if event.method_sym.starts_with?("__mochi_")
       next if method_names.includes?(event.method_sym)
 
       raise "Component '#{class_name}' has an undefined event handler: on#{event.event}=\"{#{event.method_sym}}\""

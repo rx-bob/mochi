@@ -294,6 +294,8 @@
       textBindingState(node, binding);
     } else if (binding.kind === "attr" && node.nodeType === 1) {
       attrBindingState(node, binding);
+    } else if (binding.kind === "prop" && node.nodeType !== 1) {
+      throw new Error("mochi-loader: property binding target is not an element for " + context);
     }
 
     element.bindingTargets[binding.id] = node;
@@ -309,6 +311,109 @@
       node = node.parentNode;
     }
     return null;
+  }
+
+  function eventPayload(target, event) {
+    var source = event && event.target && event.target.nodeType === 1 ? event.target : target;
+    var dataset = {};
+    if (source && source.dataset) {
+      Object.keys(source.dataset).forEach(function (key) {
+        if (key.indexOf("mochi") === 0) return;
+        dataset[key] = source.dataset[key];
+      });
+    }
+
+    function axis(name) {
+      return event && typeof event[name] === "number" ? event[name] : 0;
+    }
+
+    return {
+      type: event ? event.type : "",
+      value: source && "value" in source ? source.value : null,
+      checked: !!(source && typeof source.checked === "boolean" && source.checked),
+      key: event && event.key ? event.key : "",
+      code: event && event.code ? event.code : "",
+      shift_key: !!(event && event.shiftKey),
+      ctrl_key: !!(event && event.ctrlKey),
+      meta_key: !!(event && event.metaKey),
+      alt_key: !!(event && event.altKey),
+      client_x: axis("clientX"),
+      client_y: axis("clientY"),
+      offset_x: axis("offsetX"),
+      offset_y: axis("offsetY"),
+      button: event && typeof event.button === "number" ? event.button : 0,
+      target_id: source && source.id ? source.id : "",
+      dataset: dataset
+    };
+  }
+
+  function eventArguments(target, eventName) {
+    var raw = target.getAttribute("data-mochi-args-" + eventName);
+    if (!raw) return [];
+
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error("mochi-loader: invalid event arguments for " + eventName);
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error("mochi-loader: event arguments for " + eventName + " must be an array");
+    }
+    return parsed;
+  }
+
+  function literalEventArgument(descriptor) {
+    var value = descriptor.value;
+    if (descriptor.literal_type === "string") return value === undefined ? "" : value;
+    if (descriptor.literal_type === "number") return Number(value);
+    if (descriptor.literal_type === "boolean") return value === "true";
+    if (descriptor.literal_type === "null") return null;
+    return value === undefined ? null : value;
+  }
+
+  // Ruby expressions used as event arguments are resolved from cached binding
+  // values. The compiler registers a hidden binding for each expression, so the
+  // VM evaluates it once and the loader can pass the resulting value.
+  function resolveEventExpression(element, expression) {
+    var bindingData = element.bindingData || {};
+    var bindingValues = element.bindingValues || {};
+    var ids = Object.keys(bindingData);
+    for (var i = 0; i < ids.length; i++) {
+      var binding = bindingData[ids[i]];
+      if (binding && binding.getter_expr === expression &&
+          Object.prototype.hasOwnProperty.call(bindingValues, binding.id)) {
+        return bindingValues[binding.id];
+      }
+    }
+    throw new Error("mochi-loader: unresolved event argument expression " + expression);
+  }
+
+  function eventArgumentValue(element, descriptor, target, payload) {
+    if (descriptor.kind === "event") return payload;
+    if (descriptor.kind === "element") {
+      throw new Error("mochi-loader: DOM elements cannot be passed to Ruby event handlers; use $event");
+    }
+    if (descriptor.kind === "literal") return literalEventArgument(descriptor);
+    if (descriptor.kind === "expr") {
+      return resolveEventExpression(element, String(descriptor.value || "").trim());
+    }
+    throw new Error("mochi-loader: unknown event argument kind " + descriptor.kind);
+  }
+
+  function dispatchEventArgs(module, instance, methodSymbol, args) {
+    if (typeof module._mochi_dispatch_event_args !== "function") {
+      throw new Error("mochi-loader: runtime does not support event arguments");
+    }
+    return withUtf8(module, JSON.stringify(args), function (pointer, length) {
+      return module._mochi_dispatch_event_args(instance, methodSymbol, pointer, length) === 1;
+    });
+  }
+
+  function requiredArgumentCount(module, instance, methodSymbol) {
+    if (typeof module._goose_vm_method_req_argc !== "function") return -1;
+    var required = module._goose_vm_method_req_argc(instance, methodSymbol);
+    return typeof required === "bigint" ? Number(required) : required;
   }
 
   function readU16LE(bytes, offset) {
@@ -415,6 +520,21 @@
     }
   }
 
+  function applyPropPatch(target, binding, value) {
+    var property = binding.attr_name;
+    if (!property) return;
+
+    var next;
+    if (property === "checked") {
+      next = value === "true" || value === "checked" || value === "1";
+    } else {
+      next = value === null || value === undefined ? "" : String(value);
+    }
+
+    if (target[property] === next) return;
+    target[property] = next;
+  }
+
   function removeNodes(nodes) {
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].parentNode) nodes[i].parentNode.removeChild(nodes[i]);
@@ -508,6 +628,8 @@
       applyHtmlPatch(target, binding, value);
     } else if (binding.kind === "attr") {
       applyAttrPatch(target, binding, value);
+    } else if (binding.kind === "prop") {
+      applyPropPatch(target, binding, value);
     } else if (binding.kind === "cond") {
       applyCondPatch(element, target, binding, value);
     } else if (binding.kind === "each") {
@@ -780,9 +902,33 @@
         var method = target.getAttribute("data-mochi-" + event.type);
         if (!method || !this._mochiReady) return;
 
+        var payload = eventPayload(target, event);
+        var descriptors;
+
+        try {
+          descriptors = eventArguments(target, event.type);
+        } catch (error) {
+          element.mochiError = error;
+          console.error("[mochi] " + tag + " event failed", error);
+          return;
+        }
+
         this._mochiReady.then(function (mounted) {
           var symbol = intern(mounted.module, method);
-          if (mounted.module._mochi_dispatch_event(mounted.instance, symbol) !== 1) {
+          var dispatched;
+
+          if (descriptors.length > 0) {
+            var args = descriptors.map(function (descriptor) {
+              return eventArgumentValue(element, descriptor, target, payload);
+            });
+            dispatched = dispatchEventArgs(mounted.module, mounted.instance, symbol, args);
+          } else if (requiredArgumentCount(mounted.module, mounted.instance, symbol) === 1) {
+            dispatched = dispatchEventArgs(mounted.module, mounted.instance, symbol, [payload]);
+          } else {
+            dispatched = mounted.module._mochi_dispatch_event(mounted.instance, symbol) === 1;
+          }
+
+          if (!dispatched) {
             throw new Error("mochi-loader: event dispatch failed for " + method + ": " + lastError(mounted.module));
           }
           applyPatches(element, mounted.module);

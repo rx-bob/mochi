@@ -1,5 +1,6 @@
 require "spec"
 require "lexbor"
+require "../../src/html/event_argument_extractor"
 require "../../src/webcomponents/component_generator"
 require "../../src/ruby/ruby_understander"
 require "../code_test_utils"
@@ -33,6 +34,81 @@ describe ComponentGenerator do
     event.path.should eq([1])
     event.event.should eq("click")
     event.method_sym.should eq("increment")
+  end
+
+  it "records structured event arguments from the template" do
+    html = EventArgumentExtractor.process(
+      %Q(<button onclick="{select_row('tr_9f2a', 1, $event)}">Pick</button>)
+    )
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      html,
+      method_names: ["select_row"]
+    )
+
+    event = manifest.events.first
+    event.method_sym.should eq("select_row")
+    event.args.size.should eq(3)
+    event.args[0].kind.should eq("literal")
+    event.args[0].literal_type.should eq("string")
+    event.args[0].value.should eq("tr_9f2a")
+    event.args[1].literal_type.should eq("number")
+    event.args[1].value.should eq("1")
+    event.args[2].kind.should eq("event")
+  end
+
+  it "registers hidden bindings for event expressions" do
+    html = EventArgumentExtractor.process(
+      %Q(<button onclick="{select_row(@query)}">Pick</button>)
+    )
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      html,
+      method_names: ["select_row"]
+    )
+
+    expression = manifest.bindings.find! { |binding| binding.kind == "expr" }
+    expression.getter_expr.should eq("@query")
+    expression.path.should eq([0])
+  end
+
+  it "generates two-way property bindings and setters for bind:value and bind:checked" do
+    html = %Q(<input bind:value="{@query}"><input type="checkbox" bind:checked="{@enabled}">)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    manifest.html_template.should contain(%Q(value="{@query}"))
+    manifest.html_template.should contain(%Q(data-mochi-input="__mochi_set_query"))
+    manifest.html_template.should contain(%Q(checked="{@enabled}"))
+    manifest.html_template.should contain(%Q(data-mochi-change="__mochi_set_enabled"))
+    manifest.html_template.should_not contain("bind:")
+
+    value_binding = manifest.bindings.find! { |binding| binding.attr_name == "value" }
+    value_binding.kind.should eq("prop")
+    value_binding.getter_expr.should eq("@query")
+    value_binding.setter_sym.should eq("__mochi_set_query")
+
+    checked_binding = manifest.bindings.find! { |binding| binding.attr_name == "checked" }
+    checked_binding.kind.should eq("prop")
+    checked_binding.getter_expr.should eq("@enabled")
+    checked_binding.setter_sym.should eq("__mochi_set_enabled")
+
+    manifest.events.map(&.event).should eq(["input", "change"])
+    manifest.events.map(&.method_sym).should eq(["__mochi_set_query", "__mochi_set_enabled"])
+  end
+
+  it "rejects bind:value without an ivar placeholder" do
+    expect_raises(Exception, "bind:value requires an instance variable") do
+      ComponentGenerator.new.generate(
+        "TestCmp",
+        "test-cmp",
+        "",
+        %Q(<input bind:value="{query}">)
+      )
+    end
   end
 
   it "uses method calls for bare text bindings" do

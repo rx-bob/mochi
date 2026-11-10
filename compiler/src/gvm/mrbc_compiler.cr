@@ -269,6 +269,7 @@ class MrbcCompiler
       json.field "attr_name", binding.attr_name
       json.field "template_text", binding.template_text
       json.field "getter_sym", binding.getter_sym
+      json.field "setter_sym", binding.setter_sym
 
       unless binding.branches.empty?
         json.field "branches" do
@@ -300,7 +301,9 @@ class MrbcCompiler
             json.field "method_sym", event.method_sym
             json.field "args" do
               json.array do
-                event.args.each { |arg| json.string(arg) }
+                event.args.each do |arg|
+                  json.object { arg.write_fields(json) }
+                end
               end
             end
           end

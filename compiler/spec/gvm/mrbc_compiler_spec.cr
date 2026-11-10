@@ -40,7 +40,11 @@ RUBY
     ),
   ]
   events = [
-    EventDescriptor.new([1], "click", "increment"),
+    EventDescriptor.new([1], "click", "increment", [
+      EventArgumentDescriptor.literal_string("tr_9f2a"),
+      EventArgumentDescriptor.literal_number("1"),
+      EventArgumentDescriptor.event,
+    ]),
   ]
   manifest = ComponentManifest.new(
     "my-counter",
@@ -148,6 +152,14 @@ describe MrbcCompiler do
       events = component_json["events"].as_a
       events.first.as_h["event"].as_s.should eq("click")
       events.first.as_h["method_sym"].as_s.should eq("increment")
+      args = events.first.as_h["args"].as_a
+      args.size.should eq(3)
+      args[0].as_h["kind"].as_s.should eq("literal")
+      args[0].as_h["literal_type"].as_s.should eq("string")
+      args[0].as_h["value"].as_s.should eq("tr_9f2a")
+      args[1].as_h["literal_type"].as_s.should eq("number")
+      args[1].as_h["value"].as_s.should eq("1")
+      args[2].as_h["kind"].as_s.should eq("event")
     ensure
       FileUtils.rm_rf(dir)
     end

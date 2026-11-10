@@ -64,7 +64,10 @@ function fakeModule(log) {
   const patchOffset = 4096;
   const emitOffset = 8192;
   log.symbols = symbols;
+  log.symbolNames = new Map();
   log.hasMethodCalls = [];
+  log.dispatchedArgs = [];
+  log.requiredArgs = new Map();
   log.methods = new Set(["mounted", "increment", "reset"]);
   let nextSymbol = 100;
   let nextPointer = 1024;
@@ -92,8 +95,10 @@ function fakeModule(log) {
     _mochi_intern(pointer, length) {
       const name = decoder.decode(module.HEAPU8.slice(pointer, pointer + length));
       if (!symbols.has(name)) symbols.set(name, nextSymbol++);
+      const symbol = symbols.get(name);
+      log.symbolNames.set(symbol, name);
       log.interned.push(name);
-      return symbols.get(name);
+      return symbol;
     },
     _mochi_has_method(instance, pointer, length) {
       const name = decoder.decode(module.HEAPU8.slice(pointer, pointer + length));
@@ -110,6 +115,16 @@ function fakeModule(log) {
     _mochi_dispatch_event(instance, methodSymbol) {
       log.dispatched.push({ instance, methodSymbol });
       return 1;
+    },
+    _mochi_dispatch_event_args(instance, methodSymbol, pointer, length) {
+      const json = decoder.decode(module.HEAPU8.slice(pointer, pointer + length));
+      log.dispatchedArgs.push({ instance, methodSymbol, args: JSON.parse(json) });
+      return 1;
+    },
+    _goose_vm_method_req_argc(instance, methodSymbol) {
+      const name = log.symbolNames.get(methodSymbol);
+      const required = log.requiredArgs.has(name) ? log.requiredArgs.get(name) : 0;
+      return BigInt(required);
     },
     _mochi_flush_patches(instance) {
       log.flushes.push(instance);
@@ -1032,4 +1047,266 @@ test("each patches reconcile keyed fragments and preserve unchanged nodes", asyn
   assert.equal(removed.includes(firstB), true);
   assert.equal(element.bindingTargets[0], anchor);
   assert.equal(anchor.nodeType, 8);
+});
+
+test("template event arguments pass typed literals to the VM", async () => {
+  const literalArguments = JSON.stringify([
+    { kind: "literal", literal_type: "string", value: "tr_9f2a" },
+    { kind: "literal", literal_type: "number", value: "1" },
+  ]).replace(/"/g, "&quot;");
+  const eventComponent = {
+    tag_name: "event-args-check",
+    class_name: "EventArgsCheck",
+    chi_file: "event-args-check.chi",
+    html_template:
+      '<button class="pick" data-mochi-click="select_row" ' +
+      'data-mochi-args-click="' + literalArguments + '">Pick</button>',
+    css: "",
+    bindings: [],
+    events: [{ path: [0], event: "click", method_sym: "select_row", args: [] }],
+  };
+
+  const { log } = await setup([eventComponent]);
+  log.methods.add("select_row");
+  const element = document.createElement("event-args-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  element.shadowRoot.querySelector(".pick").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const selectSymbol = log.symbols.get("select_row");
+  assert.ok(selectSymbol);
+  assert.deepEqual(log.dispatchedArgs.at(-1), {
+    instance: "1",
+    methodSymbol: selectSymbol,
+    args: ["tr_9f2a", 1],
+  });
+  assert.equal(log.dispatched.filter((entry) => entry.methodSymbol === selectSymbol).length, 0);
+});
+
+test("zero-argument handlers receive the normalized event when Ruby requires one argument", async () => {
+  const searchComponent = {
+    tag_name: "event-auto-check",
+    class_name: "EventAutoCheck",
+    chi_file: "event-auto-check.chi",
+    html_template: '<input class="search" data-mochi-input="on_search">',
+    css: "",
+    bindings: [],
+    events: [{ path: [0], event: "input", method_sym: "on_search", args: [] }],
+  };
+
+  const { log } = await setup([searchComponent]);
+  log.methods.add("on_search");
+  log.requiredArgs.set("on_search", 1);
+  const element = document.createElement("event-auto-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const input = element.shadowRoot.querySelector(".search");
+  input.value = "mochi";
+  input.dispatchEvent(new global.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const searchSymbol = log.symbols.get("on_search");
+  assert.ok(searchSymbol);
+  assert.deepEqual(log.dispatchedArgs.at(-1), {
+    instance: "1",
+    methodSymbol: searchSymbol,
+    args: [{
+      type: "input",
+      value: "mochi",
+      checked: false,
+      key: "",
+      code: "",
+      shift_key: false,
+      ctrl_key: false,
+      meta_key: false,
+      alt_key: false,
+      client_x: 0,
+      client_y: 0,
+      offset_x: 0,
+      offset_y: 0,
+      button: 0,
+      target_id: "",
+      dataset: {},
+    }],
+  });
+});
+
+test("pointer and keyboard handlers receive coordinates, modifiers, and dataset", async () => {
+  const pointerComponent = {
+    tag_name: "event-payload-check",
+    class_name: "EventPayloadCheck",
+    chi_file: "event-payload-check.chi",
+    html_template:
+      '<button id="pointer-target" class="pointer" data-row-id="row-7" data-mochi-click="on_pointer" ' +
+      'data-mochi-args-click=\'[{"kind":"event"}]\'>Pointer</button>' +
+      '<input class="keys" data-mochi-keydown="on_key">',
+    css: "",
+    bindings: [],
+    events: [
+      { path: [0], event: "click", method_sym: "on_pointer", args: [] },
+      { path: [1], event: "keydown", method_sym: "on_key", args: [] },
+    ],
+  };
+
+  const { dom, log } = await setup([pointerComponent]);
+  log.methods.add("on_pointer");
+  log.methods.add("on_key");
+  log.requiredArgs.set("on_key", 1);
+  const element = document.createElement("event-payload-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  element.shadowRoot.querySelector(".pointer").dispatchEvent(new global.MouseEvent("click", {
+    bubbles: true,
+    clientX: 12,
+    clientY: 34,
+    button: 2,
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const pointer = log.dispatchedArgs.at(-1).args[0];
+  assert.equal(pointer.type, "click");
+  assert.equal(pointer.client_x, 12);
+  assert.equal(pointer.client_y, 34);
+  assert.equal(pointer.button, 2);
+  assert.equal(pointer.target_id, "pointer-target");
+  assert.equal(pointer.dataset.rowId, "row-7");
+
+  element.shadowRoot.querySelector(".keys").dispatchEvent(new dom.window.KeyboardEvent("keydown", {
+    bubbles: true,
+    key: "Enter",
+    code: "Enter",
+    shiftKey: true,
+    ctrlKey: true,
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const keyboard = log.dispatchedArgs.at(-1).args[0];
+  assert.equal(keyboard.type, "keydown");
+  assert.equal(keyboard.key, "Enter");
+  assert.equal(keyboard.code, "Enter");
+  assert.equal(keyboard.shift_key, true);
+  assert.equal(keyboard.ctrl_key, true);
+  assert.equal(keyboard.meta_key, false);
+  assert.equal(keyboard.alt_key, false);
+});
+
+test("bind:value dispatches the event payload and reflects programmatic updates", async () => {
+  const bindComponent = {
+    tag_name: "bind-value-check",
+    class_name: "BindValueCheck",
+    chi_file: "bind-value-check.chi",
+    html_template: '<input class="query" data-mochi-input="__mochi_set_query" value="{@query}">',
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "prop",
+        attr_name: "value",
+        template_text: "{@query}",
+        getter_sym: "__mochi_bind_0",
+        getter_expr: "@query",
+        setter_sym: "__mochi_set_query",
+      },
+    ],
+    events: [{ path: [0], event: "input", method_sym: "__mochi_set_query", args: [] }],
+  };
+
+  const { loader, module, log } = await setup([bindComponent]);
+  log.methods.add("__mochi_set_query");
+  log.requiredArgs.set("__mochi_set_query", 1);
+  module.patchQueue.push({ patches: [{ id: 0, value: "start" }] });
+
+  const element = document.createElement("bind-value-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const input = element.shadowRoot.querySelector(".query");
+  assert.equal(input.value, "start");
+
+  input.value = "typed";
+  input.dispatchEvent(new global.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const setterSymbol = log.symbols.get("__mochi_set_query");
+  assert.ok(setterSymbol);
+  assert.deepEqual(log.dispatchedArgs.at(-1), {
+    instance: "1",
+    methodSymbol: setterSymbol,
+    args: [{
+      type: "input",
+      value: "typed",
+      checked: false,
+      key: "",
+      code: "",
+      shift_key: false,
+      ctrl_key: false,
+      meta_key: false,
+      alt_key: false,
+      client_x: 0,
+      client_y: 0,
+      offset_x: 0,
+      offset_y: 0,
+      button: 0,
+      target_id: "",
+      dataset: {},
+    }],
+  });
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "remote" }] });
+  loader.applyPatches(element);
+  assert.equal(input.value, "remote");
+  assert.equal(element.bindingTargets[0], input);
+});
+
+test("bind:checked updates the checkbox property from Ruby and sends checked state", async () => {
+  const checkedComponent = {
+    tag_name: "bind-checked-check",
+    class_name: "BindCheckedCheck",
+    chi_file: "bind-checked-check.chi",
+    html_template: '<input type="checkbox" class="enabled" data-mochi-change="__mochi_set_enabled">',
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "prop",
+        attr_name: "checked",
+        template_text: "{@enabled}",
+        getter_sym: "__mochi_bind_0",
+        getter_expr: "@enabled",
+        setter_sym: "__mochi_set_enabled",
+      },
+    ],
+    events: [{ path: [0], event: "change", method_sym: "__mochi_set_enabled", args: [] }],
+  };
+
+  const { loader, module, log } = await setup([checkedComponent]);
+  log.methods.add("__mochi_set_enabled");
+  log.requiredArgs.set("__mochi_set_enabled", 1);
+  module.patchQueue.push({ patches: [{ id: 0, value: "false" }] });
+
+  const element = document.createElement("bind-checked-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const input = element.shadowRoot.querySelector(".enabled");
+  assert.equal(input.checked, false);
+
+  input.checked = true;
+  input.dispatchEvent(new global.Event("change", { bubbles: true }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(log.dispatchedArgs.at(-1).args[0].checked, true);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "true" }] });
+  loader.applyPatches(element);
+  assert.equal(input.checked, true);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "false" }] });
+  loader.applyPatches(element);
+  assert.equal(input.checked, false);
 });
