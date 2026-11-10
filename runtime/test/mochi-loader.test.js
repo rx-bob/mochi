@@ -70,10 +70,14 @@ function fakeModule(log) {
   const symbols = new Map();
   const patchOffset = 4096;
   const emitOffset = 8192;
+  const fetchOutboxOffset = 16384;
+  const fetchInboxOffset = 32768;
+  const fetchInboxCapacity = 16384;
   log.symbols = symbols;
   log.symbolNames = new Map();
   log.hasMethodCalls = [];
   log.dispatchedArgs = [];
+  log.deliveredFetches = [];
   log.requiredArgs = new Map();
   log.methods = new Set(["mounted", "increment", "reset"]);
   let nextSymbol = 100;
@@ -81,6 +85,7 @@ function fakeModule(log) {
   let nextInstance = 1;
   let patchLength = 0;
   let emitText = "";
+  let fetchText = "";
 
   const module = {
     HEAPU8: new Uint8Array(65536),
@@ -166,12 +171,41 @@ function fakeModule(log) {
       emitText = text;
       module.HEAPU8.set(new TextEncoder().encode(text), emitOffset);
     },
+    _mochi_fetch_outbox_offset() {
+      return fetchOutboxOffset;
+    },
+    _mochi_fetch_outbox_len() {
+      return fetchText.length;
+    },
+    _mochi_fetch_outbox_clear() {
+      fetchText = "";
+    },
+    _mochi_fetch_inbox_offset() {
+      return fetchInboxOffset;
+    },
+    _mochi_fetch_inbox_capacity() {
+      return fetchInboxCapacity;
+    },
+    _mochi_deliver_fetch(instance, callbackPointer, callbackLength, responseLength) {
+      const callback = decoder.decode(
+        module.HEAPU8.slice(callbackPointer, callbackPointer + callbackLength));
+      const envelope = JSON.parse(decoder.decode(
+        module.HEAPU8.slice(fetchInboxOffset, fetchInboxOffset + responseLength)));
+      log.deliveredFetches.push({ instance, callback, envelope });
+      if (log.onFetchDelivery) log.onFetchDelivery();
+      return 0;
+    },
+    queueFetch(text) {
+      fetchText = text;
+      module.HEAPU8.set(new TextEncoder().encode(text), fetchOutboxOffset);
+    },
     symbols,
   };
   return module;
 }
 
-async function setup(components) {
+async function setup(components, options) {
+  options = options || {};
   const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
     url: "http://localhost/",
   });
@@ -186,10 +220,14 @@ async function setup(components) {
 
   const log = { calls: [], fetches: [], loads: [], interned: [], bindings: [], dispatched: [], flushes: [] };
   const body = manifest(components);
-  global.fetch = async (url) => {
-    log.fetches.push(String(url));
-    if (String(url).endsWith("mochi-manifest.json")) {
+  global.fetch = async (url, init) => {
+    const target = String(url);
+    log.fetches.push(target);
+    if (target.endsWith("mochi-manifest.json")) {
       return { ok: true, json: async () => body };
+    }
+    if (options.fetch && !target.endsWith(".chi")) {
+      return options.fetch(target, init);
     }
     return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
   };
@@ -450,6 +488,221 @@ test("plain action lines and null payloads remain backwards compatible", async (
     log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
     [{ instance: "1", methodSymbol: selectSymbol, args: [null] }]
   );
+});
+
+test("drains JSON fetch requests after mount and delivers parsed responses", async () => {
+  const calls = [];
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: () => "application/json" },
+        text: async () => '{"rows":[1,2]}'
+      };
+    }
+  });
+
+  module.queueFetch(JSON.stringify({
+    id: 1,
+    instance: "1",
+    url: "/api/logs",
+    callback: "on_logs",
+    options: { method: "GET" }
+  }) + "\n");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls, [{ url: "/api/logs", init: { method: "GET" } }]);
+  assert.deepEqual(log.deliveredFetches, [{
+    instance: "1",
+    callback: "on_logs",
+    envelope: {
+      status: 200,
+      ok: true,
+      body: '{"rows":[1,2]}',
+      data: { rows: [1, 2] },
+      error: null
+    }
+  }]);
+});
+
+test("defers fetch requests until their target instance mounts", async () => {
+  const calls = [];
+  const { module, log } = await setup([COMPONENT, LOGS_COMPONENT], {
+    fetch: async (url) => {
+      calls.push(url);
+      return { status: 200, ok: true, text: async () => "ok" };
+    }
+  });
+
+  module.queueFetch(JSON.stringify({
+    id: 1, instance: "2", url: "/api/logs", callback: "on_logs", options: {}
+  }) + "\n");
+
+  const first = document.createElement("my-counter");
+  document.body.appendChild(first);
+  await first._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls, []);
+  assert.deepEqual(log.deliveredFetches, []);
+
+  const second = document.createElement("my-logs");
+  document.body.appendChild(second);
+  await second._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls, ["/api/logs"]);
+  assert.equal(log.deliveredFetches.length, 1);
+  assert.equal(log.deliveredFetches[0].instance, "2");
+});
+
+test("fetch delivery preserves HTTP and network error envelopes", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async (url) => {
+      if (url === "/api/offline") throw new Error("offline");
+      return {
+        status: 500,
+        ok: false,
+        statusText: "Server Error",
+        text: async () => "boom"
+      };
+    }
+  });
+
+  module.queueFetch([
+    JSON.stringify({ id: 1, instance: "1", url: "/api/fail", callback: "on_logs", options: {} }),
+    JSON.stringify({ id: 2, instance: "1", url: "/api/offline", callback: "on_logs", options: {} })
+  ].join("\n") + "\n");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(
+    log.deliveredFetches.map((entry) => entry.envelope).sort((left, right) => left.status - right.status),
+    [
+      { status: 0, ok: false, body: "", data: null, error: "offline" },
+      {
+        status: 500,
+        ok: false,
+        body: "boom",
+        data: null,
+        error: "HTTP 500 Server Error"
+      }
+    ]
+  );
+});
+
+test("drains fetch requests after DOM events and action dispatches", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async () => ({
+      status: 200,
+      ok: true,
+      text: async () => "ok"
+    })
+  });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueFetch(JSON.stringify({
+    id: 1, instance: "1", url: "/api/event", callback: "on_logs", options: {}
+  }) + "\n");
+  element.shadowRoot.querySelector("button").click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  module.queueFetch(JSON.stringify({
+    id: 2, instance: "1", url: "/api/action", callback: "on_logs", options: {}
+  }) + "\n");
+  element._dispatchAction("increment");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(
+    log.deliveredFetches.map((entry) => entry.envelope.body),
+    ["ok", "ok"]
+  );
+});
+
+test("skips fetch delivery when the component unmounts before the response", async () => {
+  let resolveFetch;
+  const pending = new Promise((resolve) => { resolveFetch = resolve; });
+  const { module, log } = await setup([COMPONENT], {
+    fetch: () => pending
+  });
+
+  module.queueFetch(JSON.stringify({
+    id: 1, instance: "1", url: "/api/slow", callback: "on_logs", options: {}
+  }) + "\n");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  element.remove();
+  resolveFetch({
+    status: 200,
+    ok: true,
+    text: async () => '{"late":true}'
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(log.deliveredFetches, []);
+});
+
+test("drains follow-up fetch requests after a callback completes", async () => {
+  const calls = [];
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async (url) => {
+      calls.push(url);
+      return { status: 200, ok: true, text: async () => "ok" };
+    }
+  });
+
+  let queued = false;
+  log.onFetchDelivery = function () {
+    if (queued) return;
+    queued = true;
+    module.queueFetch(JSON.stringify({
+      id: 2, instance: "1", url: "/api/follow-up", callback: "on_logs", options: {}
+    }) + "\n");
+  };
+  module.queueFetch(JSON.stringify({
+    id: 1, instance: "1", url: "/api/first", callback: "on_logs", options: {}
+  }) + "\n");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls, ["/api/first", "/api/follow-up"]);
+  assert.equal(log.deliveredFetches.length, 2);
+});
+
+test("accepts legacy pipe-delimited fetch requests", async () => {
+  const calls = [];
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async (url) => {
+      calls.push(url);
+      return { status: 200, ok: true, text: async () => "legacy" };
+    }
+  });
+
+  module.queueFetch("1|1|/api/legacy|on_logs\n");
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls, ["/api/legacy"]);
+  assert.equal(log.deliveredFetches[0].callback, "on_logs");
 });
 
 test("multiple instances share one class and irep but keep independent targets and state", async () => {

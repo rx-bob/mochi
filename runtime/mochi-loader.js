@@ -5,6 +5,7 @@
   var RITE_HEADER = new Uint8Array([0x52, 0x49, 0x54, 0x45, 0x30, 0x34, 0x30, 0x30, 0x00, 0x00]);
   var COMPONENT_DIR = "components/";
   var DEFAULT_MANIFEST = "mochi-manifest.json";
+  var MAX_PENDING_FETCHES = 256;
 
   var state = {
     manifest: null,
@@ -14,6 +15,8 @@
     internCache: new Map(),
     tags: new Set(),
     elements: new Map(),
+    pendingFetches: [],
+    unmountedInstances: new Set(),
     actionRouterInstalled: false,
     actionSupportCache: new Map()
   };
@@ -115,6 +118,204 @@
     if (typeof parsed.action !== "string") return null;
     return parsed;
   }
+
+  function parseFetchLine(line) {
+    if (!line) return null;
+    if (line.charAt(0) === "{") {
+      var parsed;
+      try {
+        parsed = JSON.parse(line);
+      } catch (error) {
+        return null;
+      }
+      if (!parsed || typeof parsed !== "object" ||
+          typeof parsed.instance !== "string" ||
+          typeof parsed.url !== "string" ||
+          typeof parsed.callback !== "string") {
+        return null;
+      }
+      return {
+        id: parsed.id,
+        instance: parsed.instance,
+        url: parsed.url,
+        callback: parsed.callback,
+        options: parsed.options && typeof parsed.options === "object" ? parsed.options : {}
+      };
+    }
+
+    // Legacy request lines were "id|component|url|callback".
+    var first = line.indexOf("|");
+    var second = first >= 0 ? line.indexOf("|", first + 1) : -1;
+    var third = second >= 0 ? line.indexOf("|", second + 1) : -1;
+    if (first < 0 || second < 0 || third < 0) return null;
+    var id = Number(line.slice(0, first));
+    if (!Number.isFinite(id)) return null;
+    return {
+      id: id,
+      instance: line.slice(first + 1, second),
+      url: line.slice(second + 1, third),
+      callback: line.slice(third + 1),
+      options: {}
+    };
+  }
+
+  function fetchElement(request) {
+    var element = state.elements.get(String(request.instance));
+    if (!element || element._mochiDisconnected || element._mochiUnmounted) return null;
+    return element;
+  }
+
+  function fetchResponseData(body, contentType) {
+    if (!body) return null;
+    if (contentType && contentType.indexOf("json") === -1) return null;
+    try {
+      return JSON.parse(body);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function fetchResponseEnvelope(response, body) {
+    var status = response && typeof response.status === "number" ? response.status : 0;
+    var ok = response && typeof response.ok === "boolean"
+      ? response.ok
+      : status >= 200 && status < 300;
+    var contentType = "";
+    try {
+      if (response && response.headers && typeof response.headers.get === "function") {
+        contentType = response.headers.get("content-type") || "";
+      }
+    } catch (error) {
+      contentType = "";
+    }
+    var error = null;
+    if (!ok) {
+      var statusText = response && response.statusText ? " " + response.statusText : "";
+      error = "HTTP " + status + statusText;
+    }
+    return {
+      status: status,
+      ok: ok,
+      body: typeof body === "string" ? body : "",
+      data: fetchResponseData(body, contentType),
+      error: error
+    };
+  }
+
+  function fetchNetworkEnvelope(error) {
+    var message = error && error.message ? error.message : String(error || "fetch failed");
+    return { status: 0, ok: false, body: "", data: null, error: message };
+  }
+
+  function writeFetchEnvelope(module, element, request, envelope) {
+    var offset = module._mochi_fetch_inbox_offset ? module._mochi_fetch_inbox_offset() : 0;
+    var capacity = module._mochi_fetch_inbox_capacity ? module._mochi_fetch_inbox_capacity() : 0;
+    var text = JSON.stringify(envelope);
+    var bytes = encode(text);
+    if (!offset || capacity <= 0 || bytes.length + 1 > capacity) {
+      text = JSON.stringify({
+        status: 0,
+        ok: false,
+        body: "",
+        data: null,
+        error: "fetch response too large"
+      });
+      bytes = encode(text);
+      if (!offset || capacity <= 0 || bytes.length + 1 > capacity) {
+        throw new Error("mochi-loader: fetch response exceeds inbox capacity");
+      }
+    }
+    module.HEAPU8.set(bytes, offset);
+    var delivered = false;
+    withUtf8(module, request.callback, function (pointer, length) {
+      delivered = module._mochi_deliver_fetch(
+        element._mochiInstance, pointer, length, bytes.length) === 0;
+    });
+    if (!delivered) {
+      throw new Error("mochi-loader: fetch callback failed for " +
+        request.callback + ": " + lastError(module));
+    }
+  }
+
+  function deliverFetch(module, element, request, envelope) {
+    if (!fetchElement(request)) return;
+    try {
+      writeFetchEnvelope(module, element, request, envelope);
+      if (!element._mochiDisconnected) {
+        applyPatches(element, module);
+        drainEmits(module);
+        drainFetches(module);
+      }
+    } catch (error) {
+      element.mochiError = error;
+      console.error("[mochi] " + (element._mochiComponent || {}).tag_name + " fetch failed", error);
+    }
+  }
+
+  function startFetch(module, request, element) {
+    if (typeof global.fetch !== "function") {
+      deliverFetch(module, element, request, fetchNetworkEnvelope("fetch unavailable"));
+      return;
+    }
+
+    var options = request.options && typeof request.options === "object" ? request.options : {};
+    var responsePromise;
+    try {
+      responsePromise = global.fetch(request.url, options);
+    } catch (error) {
+      deliverFetch(module, element, request, fetchNetworkEnvelope(error));
+      return;
+    }
+
+    Promise.resolve(responsePromise).then(function (response) {
+      if (!fetchElement(request)) return null;
+      var bodyPromise = response && typeof response.text === "function"
+        ? response.text()
+        : Promise.resolve("");
+      return Promise.resolve(bodyPromise).then(function (body) {
+        if (!fetchElement(request)) return;
+        deliverFetch(module, element, request, fetchResponseEnvelope(response, body));
+      });
+    }).catch(function (error) {
+      if (!fetchElement(request)) return;
+      deliverFetch(module, element, request, fetchNetworkEnvelope(error));
+    });
+  }
+
+  // Drains Ruby `Mochi.fetch` requests. Requests for instances that have not
+  // mounted yet stay pending so a concurrent mount cannot consume them.
+  function drainFetches(module) {
+    if (!module || !module._mochi_fetch_outbox_offset ||
+        !module._mochi_fetch_outbox_len || !module._mochi_fetch_outbox_clear) {
+      return;
+    }
+    var requests = state.pendingFetches;
+    state.pendingFetches = [];
+    var length = module._mochi_fetch_outbox_len();
+    if (length > 0) {
+      var offset = module._mochi_fetch_outbox_offset();
+      var text = offset ? decode(module.HEAPU8.subarray(offset, offset + length)) : "";
+      module._mochi_fetch_outbox_clear();
+      if (text) {
+        text.split("\n").forEach(function (line) {
+          var request = parseFetchLine(line);
+          if (request) requests.push(request);
+        });
+      }
+    }
+    requests.forEach(function (request) {
+      var element = fetchElement(request);
+      if (element) {
+        startFetch(module, request, element);
+        return;
+      }
+      if (!state.unmountedInstances.has(String(request.instance))
+          && state.pendingFetches.length < MAX_PENDING_FETCHES) {
+        state.pendingFetches.push(request);
+      }
+    });
+  }
+
 
   // Drains Ruby `Mochi.emit` calls. New entries are JSON objects carrying an
   // optional target tag and payload; plain action lines from older components
@@ -857,6 +1058,7 @@
           state.elements.set(String(mounted.instance), element);
           applyPatches(element, mounted.module);
           drainEmits(mounted.module);
+          drainFetches(mounted.module);
           return mounted;
         }).catch(function (error) {
           element.mochiError = error;
@@ -886,6 +1088,10 @@
         this._mochiUnmounted = true;
 
         var key = String(instance);
+        state.unmountedInstances.add(key);
+        state.pendingFetches = state.pendingFetches.filter(function (request) {
+          return String(request.instance) !== key;
+        });
         if (state.elements.get(key) === this) state.elements.delete(key);
 
         try {
@@ -954,6 +1160,7 @@
           }
           applyPatches(element, mounted.module);
           drainEmits(mounted.module);
+          drainFetches(mounted.module);
         }).catch(function (error) {
           element.mochiError = error;
           console.error("[mochi] " + tag + " event failed", error);
@@ -999,6 +1206,7 @@
           if (!this._mochiDisconnected) {
             applyPatches(this, module);
             drainEmits(module);
+            drainFetches(module);
           }
         } catch (error) {
           this.mochiError = error;
