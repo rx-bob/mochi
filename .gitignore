@@ -2,6 +2,12 @@
 .gradle
 .claude
 .idea
+.task/
+.ruby-lsp/
+ideas/
+notes/
+prototype_yiseq/
+runtime/spinel/
 build
 build_gvm
 
