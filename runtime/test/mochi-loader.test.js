@@ -494,7 +494,7 @@ test("conditional patches mount and unmount content while preserving the anchor"
   const anchor = element.bindingTargets[1];
   assert.equal(element.shadowRoot.textContent.includes("hot"), false);
 
-  module.patchQueue.push({ patches: [{ id: 1, value: "true" }] });
+  module.patchQueue.push({ patches: [{ id: 1, value: "0" }] });
   element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -502,7 +502,7 @@ test("conditional patches mount and unmount content while preserving the anchor"
   assert.equal(element.bindingTargets[1], anchor);
   assert.equal(anchor.nodeType, 8);
 
-  module.patchQueue.push({ patches: [{ id: 1, value: "false" }] });
+  module.patchQueue.push({ patches: [{ id: 1, value: "-1" }] });
   element.shadowRoot.querySelector('button[data-mochi-change="reset"]').dispatchEvent(
     new global.Event("change", { bubbles: true })
   );
@@ -510,6 +510,18 @@ test("conditional patches mount and unmount content while preserving the anchor"
 
   assert.equal(element.shadowRoot.textContent.includes("hot"), false);
   assert.equal(element.bindingTargets[1], anchor);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "true" }] });
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(element.shadowRoot.textContent.includes("hot"), true);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "false" }] });
+  element.shadowRoot.querySelector('button[data-mochi-change="reset"]').dispatchEvent(
+    new global.Event("change", { bubbles: true })
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(element.shadowRoot.textContent.includes("hot"), false);
 });
 
 test("strict @ivar, method, and attribute conditional placeholders patch in place", async () => {

@@ -7,6 +7,16 @@ class ComponentGenerator
   CONTROL_TEMPLATE_PREFIXES = ["if ", "unless ", "elsif ", "each "]
   CONTROL_TEMPLATE_KEYWORDS = ["else", "end"]
 
+  @each_blocks : Array(EachBlock) = [] of EachBlock
+  @conditionals : Array(ConditionalBlock) = [] of ConditionalBlock
+  @next_binding_id : Int32 = 0
+  @next_each_id : Int32 = 0
+  @mochi_cmp_name : String = ""
+
+  # Includes top-level and branch-discovered each blocks so callers can inject
+  # every generated each helper method after generation.
+  getter each_blocks
+
   def generate(
     mochi_cmp_name : String,
     tag_name : String,
@@ -18,24 +28,18 @@ class ComponentGenerator
     each_blocks : Array(EachBlock) = [] of EachBlock,
     method_names : Array(String) = [] of String,
   ) : ComponentManifest
-    doc = Lexbor.new(html)
-    body = doc.body
+    @mochi_cmp_name = mochi_cmp_name
+    @conditionals = conditionals
+    @each_blocks = each_blocks
+    @next_binding_id = 0
+    @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
 
     bindings = [] of BindingDescriptor
     events = [] of EventDescriptor
-
-    if body
-      body.children.each_with_index do |child, index|
-        walk(child, [index], bindings, events, conditionals, each_blocks)
-      end
-    end
-
-    html_template = body ? body.inner_html : ""
-    validate_template_placeholders(mochi_cmp_name, html_template)
-    validate_event_handlers(mochi_cmp_name, events, method_names)
+    html_template = walk_html(html, bindings, events)
     chi_file = "#{tag_name}.chi"
 
-    ComponentManifest.new(
+    manifest = ComponentManifest.new(
       tag_name,
       mochi_cmp_name,
       chi_file,
@@ -44,6 +48,23 @@ class ComponentGenerator
       bindings,
       events
     )
+
+    validate_template_placeholders(mochi_cmp_name, html_template)
+    validate_event_handlers(mochi_cmp_name, manifest.all_events, method_names)
+    manifest
+  end
+
+  private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor)) : String
+    doc = Lexbor.new(html)
+    body = doc.body
+
+    if body
+      body.children.each_with_index do |child, index|
+        walk(child, [index], bindings, events)
+      end
+    end
+
+    body ? body.inner_html : ""
   end
 
   def rewrite_ruby(
@@ -61,8 +82,6 @@ class ComponentGenerator
     path : Array(Int32),
     bindings : Array(BindingDescriptor),
     events : Array(EventDescriptor),
-    conditionals : Array(ConditionalBlock),
-    each_blocks : Array(EachBlock),
   )
     tag = node.tag_name
 
@@ -72,14 +91,14 @@ class ComponentGenerator
     end
 
     if tag == "_em_comment"
-      collect_anchor_binding(node.tag_text, path, bindings, conditionals, each_blocks)
+      collect_anchor_binding(node.tag_text, path, bindings)
       return
     end
 
     collect_attribute_bindings(node, path, bindings, events)
 
     node.children.each_with_index do |child, index|
-      walk(child, path + [index], bindings, events, conditionals, each_blocks)
+      walk(child, path + [index], bindings, events)
     end
   end
 
@@ -87,7 +106,7 @@ class ComponentGenerator
     text.scan(/\{([^}]+)\}/) do |match|
       expression = match[1].strip
       kind = text.strip == "{#{expression}}" ? "html" : "text"
-      bindings << new_binding(bindings.size, path, kind, nil, text, expression)
+      bindings << new_binding(path, kind, nil, text, expression)
     end
   end
 
@@ -95,29 +114,32 @@ class ComponentGenerator
     text : String,
     path : Array(Int32),
     bindings : Array(BindingDescriptor),
-    conditionals : Array(ConditionalBlock),
-    each_blocks : Array(EachBlock),
   )
     if match = text.match(/if-anchor-(\d+)/)
       id = match[1].to_i
-      block = conditionals.find { |candidate| candidate.id == id }
+      block = @conditionals.find { |candidate| candidate.id == id }
       return unless block
 
-      bindings << new_binding(
-        bindings.size,
-        path,
+      binding_id = allocate_binding_id
+      branches = block.branches.map { |branch| process_branch(branch) }
+      template_text = branches.first?.try(&.html_template) || block.content
+
+      bindings << BindingDescriptor.new(
+        binding_id,
+        path.dup,
         "cond",
+        "__mochi_bind_#{binding_id}",
         nil,
-        block.content,
-        block.condition.strip
+        template_text,
+        "__mochi_cond_#{block.id}",
+        branches
       )
     elsif match = text.match(/each-anchor-(\d+)/)
       id = match[1].to_i
-      block = each_blocks.find { |candidate| candidate.id == id }
+      block = @each_blocks.find { |candidate| candidate.id == id }
       return unless block
 
       bindings << new_binding(
-        bindings.size,
         path,
         "each",
         nil,
@@ -174,8 +196,47 @@ class ComponentGenerator
   )
     value.scan(/\{([^}]+)\}/) do |match|
       expression = match[1].strip
-      bindings << new_binding(bindings.size, path, "attr", attr_name, value, expression)
+      bindings << new_binding(path, "attr", attr_name, value, expression)
     end
+  end
+
+  # Build one conditional branch fragment and recursively compile any nested
+  # conditionals or each blocks it contains. Paths and binding IDs are relative
+  # to the branch fragment; IDs themselves are component-global.
+  private def process_branch(branch : ConditionalBranch) : ConditionalBranchDescriptor
+    html = branch_with_anchors(branch)
+    each_result = EachProcessor.process(html, @next_each_id)
+
+    unless each_result.each_blocks.empty?
+      @each_blocks.concat(each_result.each_blocks)
+      @next_each_id += each_result.each_blocks.size
+    end
+
+    branch_bindings = [] of BindingDescriptor
+    branch_events = [] of EventDescriptor
+    template = walk_html(each_result.html, branch_bindings, branch_events)
+    validate_template_placeholders(@mochi_cmp_name, template)
+    ConditionalBranchDescriptor.new(template, branch_bindings, branch_events)
+  end
+
+  private def branch_with_anchors(branch : ConditionalBranch) : String
+    html = branch.content
+
+    branch.children.sort_by { |child| -child.start_pos }.each do |child|
+      rel_start = child.start_pos - branch.start_pos
+      rel_end = child.end_pos - branch.start_pos
+      next if rel_start < 0 || rel_end > html.size || rel_start > rel_end
+
+      html = html[0...rel_start] + "<!--if-anchor-#{child.id}-->" + html[rel_end..-1]
+    end
+
+    html
+  end
+
+  private def allocate_binding_id : Int32
+    id = @next_binding_id
+    @next_binding_id += 1
+    id
   end
 
   private def event_args(attrs : Hash(String, String)) : Array(String)
@@ -195,13 +256,14 @@ class ComponentGenerator
   end
 
   private def new_binding(
-    id : Int32,
     path : Array(Int32),
     kind : String,
     attr_name : String?,
     template_text : String,
     expression : String,
+    branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
   ) : BindingDescriptor
+    id = allocate_binding_id
     BindingDescriptor.new(
       id,
       path.dup,
@@ -209,7 +271,8 @@ class ComponentGenerator
       "__mochi_bind_#{id}",
       attr_name,
       template_text,
-      normalize_expression(expression)
+      normalize_expression(expression),
+      branches
     )
   end
 

@@ -153,6 +153,56 @@ describe ConditionalProcessor do
 
       blocks.size.should eq(2)
     end
+
+    it "extracts if/elsif/else chains as one block with branches" do
+      html = "{if @a}<p>A</p>{elsif @b}<p>B</p>{else}<p>C</p>{end}"
+      blocks = ConditionalProcessor.extract_conditionals(html)
+
+      blocks.size.should eq(1)
+      block = blocks.first
+      block.branches.map(&.condition).should eq(["@a", "@b", nil])
+      block.branches.map(&.content).should eq(["<p>A</p>", "<p>B</p>", "<p>C</p>"])
+      ConditionalProcessor.process(html).html.should eq("<!--if-anchor-0-->")
+    end
+
+    it "links conditionals nested in a branch to that branch" do
+      html = "{if @outer}O{if @inner}I{elsif @alt}L{end}X{elsif @other}Y{else}Z{end}"
+      blocks = ConditionalProcessor.extract_conditionals(html)
+
+      blocks.size.should eq(2)
+      outer = blocks.find { |block| block.id == 0 }.not_nil!
+      inner = blocks.find { |block| block.id == 1 }.not_nil!
+
+      outer.branches.size.should eq(3)
+      outer.branches[0].children.should eq([inner])
+      outer.branches[0].content.should contain("{if @inner}I{elsif @alt}L{end}")
+      inner.branches.map(&.condition).should eq(["@inner", "@alt"])
+      outer.branches[1].content.should eq("Y")
+      outer.branches[2].condition.should be_nil
+    end
+
+    it "links three levels of nested conditionals" do
+      html = "{if @a}A{if @b}B{if @c}C{end}D{end}E{end}"
+      blocks = ConditionalProcessor.extract_conditionals(html)
+
+      blocks.map(&.id).sort.should eq([0, 1, 2])
+      outer = blocks.find { |block| block.id == 0 }.not_nil!
+      middle = blocks.find { |block| block.id == 1 }.not_nil!
+      inner = blocks.find { |block| block.id == 2 }.not_nil!
+
+      outer.branches.first.children.should eq([middle])
+      middle.branches.first.children.should eq([inner])
+      inner.branches.first.content.should eq("C")
+    end
+
+    it "does not treat an each block's end as the conditional end" do
+      html = "{if @a}{each @items as item}<p>{item}</p>{end}{end}"
+      blocks = ConditionalProcessor.extract_conditionals(html)
+
+      blocks.size.should eq(1)
+      blocks.first.branches.first.content.should contain("{each @items as item}")
+      blocks.first.branches.first.content.should contain("<p>{item}</p>")
+    end
   end
 
   it "try_match_if_token: one element" do

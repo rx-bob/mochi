@@ -384,7 +384,7 @@
   function applyCondPatch(target, binding, value) {
     var state = target.__mochiCond;
     if (!state) state = target.__mochiCond = { visible: false, nodes: [] };
-    var show = value === "true";
+    var show = value === "true" || value === "0";
     if (state.visible === show) return;
 
     if (show) {

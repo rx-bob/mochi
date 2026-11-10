@@ -19,8 +19,25 @@ class MyCounter
 end
 RUBY
 
+  branch = ConditionalBranchDescriptor.new(
+    "<p>High</p>",
+    [
+      BindingDescriptor.new(2, [0, 0], "text", "__mochi_bind_2", nil, "High {@count}", "@count"),
+    ],
+    [] of EventDescriptor
+  )
   bindings = [
     BindingDescriptor.new(0, [0, 0], "text", "__mochi_bind_0", nil, "Count: {count}", "@count"),
+    BindingDescriptor.new(
+      1,
+      [2],
+      "cond",
+      "__mochi_bind_1",
+      nil,
+      "<p>High</p>",
+      "__mochi_cond_0",
+      [branch]
+    ),
   ]
   events = [
     EventDescriptor.new([1], "click", "increment"),
@@ -118,6 +135,15 @@ describe MrbcCompiler do
       bindings.first.as_h["id"].as_i.should eq(0)
       bindings.first.as_h["path"].as_a.map(&.as_i).should eq([0, 0])
       bindings.first.as_h["getter_sym"].as_s.should eq("__mochi_bind_0")
+
+      cond = bindings.find { |entry| entry.as_h["kind"].as_s == "cond" }.not_nil!
+      cond.as_h["getter_sym"].as_s.should eq("__mochi_bind_1")
+      branches = cond.as_h["branches"].as_a
+      branches.size.should eq(1)
+      branches.first.as_h["html_template"].as_s.should eq("<p>High</p>")
+      branch_bindings = branches.first.as_h["bindings"].as_a
+      branch_bindings.first.as_h["id"].as_i.should eq(2)
+      branch_bindings.first.as_h["getter_sym"].as_s.should eq("__mochi_bind_2")
 
       events = component_json["events"].as_a
       events.first.as_h["event"].as_s.should eq("click")

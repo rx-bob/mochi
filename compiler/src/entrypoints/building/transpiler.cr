@@ -185,13 +185,8 @@ class Compiler
 
     each_result = EachProcessor.process(conditional_result.html)
 
-    amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
-      amped_ruby_code,
-      cls_name,
-      each_result.each_blocks
-    )
-
-    manifest = ComponentGenerator.new.generate(
+    generator = ComponentGenerator.new
+    manifest = generator.generate(
       mochi_cmp_name = cls_name,
       tag_name = tag_name.not_nil!,
       css,
@@ -203,7 +198,13 @@ class Compiler
       methods.keys
     )
 
-    validate_binding_methods(cls_name, manifest.bindings, methods.keys, rb_file)
+    amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      generator.each_blocks
+    )
+
+    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, rb_file)
 
     rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
       amped_ruby_code,

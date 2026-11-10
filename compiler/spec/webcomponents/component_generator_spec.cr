@@ -113,11 +113,140 @@ describe ComponentGenerator do
     )
 
     cond = manifest.bindings.find! { |binding| binding.kind == "cond" }
-    cond.getter_expr.should eq("@enabled")
+    cond.getter_expr.should eq("__mochi_cond_0")
     cond.template_text.not_nil!.should contain("<p>On</p>")
+    cond.branches.size.should eq(1)
+    cond.branches.first.html_template.should contain("<p>On</p>")
 
     each = manifest.bindings.find! { |binding| binding.kind == "each" }
     each.getter_expr.should eq("@items")
     each.template_text.not_nil!.should contain("<li>")
+  end
+
+  it "compiles if/elsif/else branch templates with bindings and events" do
+    html = %(<div>{if @a}<span class="{@cls}">{@label}</span><button onclick="{save}">Save</button>{elsif @b}<p>{@other}</p>{else}<em>none</em>{end}</div>)
+    conditionals = ConditionalProcessor.extract_conditionals(html)
+    template = ConditionalProcessor.process(html).html
+
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      template,
+      "[]",
+      {} of String => String,
+      conditionals,
+      [] of EachBlock,
+      ["save"]
+    )
+
+    cond = manifest.bindings.find! { |binding| binding.kind == "cond" }
+    cond.getter_expr.should eq("__mochi_cond_0")
+    cond.branches.size.should eq(3)
+
+    first = cond.branches[0]
+    first.html_template.should contain("data-mochi-click=\"save\"")
+    first.bindings.map(&.getter_expr).should contain("@cls")
+    first.bindings.map(&.getter_expr).should contain("@label")
+    first.events.size.should eq(1)
+    first.events.first.path.should eq([1])
+    first.events.first.method_sym.should eq("save")
+
+    second = cond.branches[1]
+    second.bindings.map(&.getter_expr).should contain("@other")
+    second.events.should be_empty
+
+    third = cond.branches[2]
+    third.bindings.should be_empty
+    third.html_template.should contain("<em>none</em>")
+
+    ids = manifest.all_bindings.map(&.id)
+    ids.uniq.size.should eq(ids.size)
+  end
+
+  it "discovers each blocks inside conditional branches" do
+    html = %(<div>{if @show}<ul>{each @items as item}<li>{item}</li>{end}</ul>{end}</div>)
+    conditionals = ConditionalProcessor.extract_conditionals(html)
+    template = ConditionalProcessor.process(html).html
+
+    generator = ComponentGenerator.new
+    manifest = generator.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      template,
+      "[]",
+      {} of String => String,
+      conditionals
+    )
+
+    cond = manifest.bindings.find! { |binding| binding.kind == "cond" }
+    branch = cond.branches.first
+    branch.html_template.should contain("<!--each-anchor-0-->")
+
+    each = branch.bindings.find! { |binding| binding.kind == "each" }
+    each.getter_expr.should eq("@items")
+    generator.each_blocks.size.should eq(1)
+    generator.each_blocks.first.loop_def.array_name.should eq("@items")
+  end
+
+  it "recursively compiles conditionals nested inside branches" do
+    html = %(<div>{if @outer}<p>{@label}</p>{if @inner}<span>{@nested}</span>{end}{elsif @other}<em>other</em>{end}</div>)
+    conditionals = ConditionalProcessor.extract_conditionals(html)
+    template = ConditionalProcessor.process(html).html
+
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      template,
+      "[]",
+      {} of String => String,
+      conditionals
+    )
+
+    outer = manifest.bindings.find! { |binding| binding.kind == "cond" }
+    outer.branches.size.should eq(2)
+    outer_branch = outer.branches[0]
+    outer_branch.html_template.should contain("<!--if-anchor-1-->")
+    outer_branch.bindings.map(&.getter_expr).should contain("@label")
+
+    nested = outer_branch.bindings.find! { |binding| binding.kind == "cond" }
+    nested.getter_expr.should eq("__mochi_cond_1")
+    nested.branches.size.should eq(1)
+    nested.branches.first.html_template.should contain("<span>{@nested}</span>")
+    nested.branches.first.bindings.map(&.getter_expr).should contain("@nested")
+  end
+
+  it "recursively compiles three levels of conditional branches" do
+    html = %(<div>{if @a}A{if @b}B{if @c}<span>{@value}</span>{end}{end}{end}</div>)
+    conditionals = ConditionalProcessor.extract_conditionals(html)
+    template = ConditionalProcessor.process(html).html
+
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      template,
+      "[]",
+      {} of String => String,
+      conditionals
+    )
+
+    level_one = manifest.bindings.find! { |binding| binding.kind == "cond" }
+    level_one_branch = level_one.branches.first
+    level_one_branch.html_template.should contain("<!--if-anchor-1-->")
+
+    level_two = level_one_branch.bindings.find! { |binding| binding.kind == "cond" }
+    level_two_branch = level_two.branches.first
+    level_two_branch.html_template.should contain("<!--if-anchor-2-->")
+
+    level_three = level_two_branch.bindings.find! { |binding| binding.kind == "cond" }
+    level_three_branch = level_three.branches.first
+    level_three_branch.html_template.should contain("<span>{@value}</span>")
+    level_three_branch.bindings.map(&.getter_expr).should contain("@value")
+
+    ids = manifest.all_bindings.map(&.id)
+    ids.uniq.size.should eq(ids.size)
   end
 end

@@ -43,8 +43,16 @@ class AttributeMethodGenerator
         body += "    _parts << \"#{escape_and_interpolate(text)}\"\n"
       end
 
-      body += "    if #{block.condition}\n"
-      body += "      _parts << \"#{escape_and_interpolate(block.content)}\"\n"
+      block.branches.each_with_index do |branch, index|
+        if index == 0
+          body += "    if #{branch.condition}\n"
+        elsif branch.condition
+          body += "    elsif #{branch.condition}\n"
+        else
+          body += "    else\n"
+        end
+        body += "      _parts << \"#{escape_and_interpolate(branch.content)}\"\n"
+      end
       body += "    end\n"
 
       last_pos = block.end_pos

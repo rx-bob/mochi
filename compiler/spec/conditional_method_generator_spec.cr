@@ -3,7 +3,6 @@ require "../src/ruby/conditional_method_generator"
 require "../src/html/conditional_processor"
 
 describe ConditionalMethodGenerator do
-
   describe ".generate_method" do
     it "generates a Ruby method for a conditional" do
       block = ConditionalBlock.new(
@@ -53,6 +52,46 @@ describe ConditionalMethodGenerator do
       method_code.should contain("def __mochi_cond_1")
       method_code.should contain("@items.empty?")
     end
+
+    it "returns the first truthy branch index for if/elsif/else" do
+      block = ConditionalBlock.new(
+        [
+          ConditionalBranch.new("@a", "A", 0, 1),
+          ConditionalBranch.new("@b", "B", 2, 3),
+          ConditionalBranch.new(nil, "C", 4, 5),
+        ],
+        0,
+        10,
+        0,
+        7
+      )
+
+      method_code = ConditionalMethodGenerator.generate_method(block, "Chain")
+
+      method_code.should contain("if @a")
+      method_code.should contain("elsif @b")
+      method_code.should contain("else")
+      method_code.should contain("      0\n")
+      method_code.should contain("      1\n")
+      method_code.should contain("      2\n")
+    end
+
+    it "returns -1 when an if/elsif chain has no matching branch" do
+      block = ConditionalBlock.new(
+        [
+          ConditionalBranch.new("@a", "A", 0, 1),
+          ConditionalBranch.new("@b", "B", 2, 3),
+        ],
+        0,
+        10,
+        0,
+        8
+      )
+
+      method_code = ConditionalMethodGenerator.generate_method(block, "Chain")
+
+      method_code.should contain("else\n      -1")
+    end
   end
 
   describe ".generate_all_methods" do
@@ -60,7 +99,7 @@ describe ConditionalMethodGenerator do
       blocks = [
         ConditionalBlock.new("@a", "", 0, 10, 0, 0),
         ConditionalBlock.new("@b", "", 11, 20, 11, 1),
-        ConditionalBlock.new("@c", "", 21, 30, 21, 2)
+        ConditionalBlock.new("@c", "", 21, 30, 21, 2),
       ]
 
       code = ConditionalMethodGenerator.generate_all_methods(blocks, "Test")
@@ -94,7 +133,7 @@ end
 RUBY
 
       blocks = [
-        ConditionalBlock.new("@count > 5", "", 0, 10, 0, 0)
+        ConditionalBlock.new("@count > 5", "", 0, 10, 0, 0),
       ]
 
       modified = ConditionalMethodGenerator.inject_methods_into_class(ruby_code, "Counter", blocks)
@@ -126,7 +165,7 @@ RUBY
       blocks = [
         ConditionalBlock.new("@a", "", 0, 5, 0, 0),
         ConditionalBlock.new("@b", "", 6, 10, 6, 1),
-        ConditionalBlock.new("@c", "", 11, 15, 11, 2)
+        ConditionalBlock.new("@c", "", 11, 15, 11, 2),
       ]
 
       modified = ConditionalMethodGenerator.inject_methods_into_class(ruby_code, "Test", blocks)
@@ -167,7 +206,7 @@ end
 RUBY
 
       blocks = [
-        ConditionalBlock.new("@value > 10", "", 0, 10, 0, 0)
+        ConditionalBlock.new("@value > 10", "", 0, 10, 0, 0),
       ]
 
       modified = ConditionalMethodGenerator.inject_methods_into_class(ruby_code, "Component", blocks)

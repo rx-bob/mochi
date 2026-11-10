@@ -244,40 +244,63 @@ class MrbcCompiler
       json.field "html_template", manifest.html_template
       json.field "css", manifest.css
 
-      json.field "bindings" do
+      write_bindings(json, manifest.bindings)
+      write_events(json, manifest.events)
+    end
+  end
+
+  private def write_bindings(json : JSON::Builder, bindings : Array(BindingDescriptor)) : Nil
+    json.field "bindings" do
+      json.array do
+        bindings.each { |binding| write_binding(json, binding) }
+      end
+    end
+  end
+
+  private def write_binding(json : JSON::Builder, binding : BindingDescriptor) : Nil
+    json.object do
+      json.field "id", binding.id
+      json.field "path" do
         json.array do
-          manifest.bindings.each do |binding|
-            json.object do
-              json.field "id", binding.id
-              json.field "path" do
-                json.array do
-                  binding.path.each { |index| json.number(index) }
-                end
+          binding.path.each { |index| json.number(index) }
+        end
+      end
+      json.field "kind", binding.kind
+      json.field "attr_name", binding.attr_name
+      json.field "template_text", binding.template_text
+      json.field "getter_sym", binding.getter_sym
+
+      unless binding.branches.empty?
+        json.field "branches" do
+          json.array do
+            binding.branches.each do |branch|
+              json.object do
+                json.field "html_template", branch.html_template
+                write_bindings(json, branch.bindings)
+                write_events(json, branch.events)
               end
-              json.field "kind", binding.kind
-              json.field "attr_name", binding.attr_name
-              json.field "template_text", binding.template_text
-              json.field "getter_sym", binding.getter_sym
             end
           end
         end
       end
+    end
+  end
 
-      json.field "events" do
-        json.array do
-          manifest.events.each do |event|
-            json.object do
-              json.field "path" do
-                json.array do
-                  event.path.each { |index| json.number(index) }
-                end
+  private def write_events(json : JSON::Builder, events : Array(EventDescriptor)) : Nil
+    json.field "events" do
+      json.array do
+        events.each do |event|
+          json.object do
+            json.field "path" do
+              json.array do
+                event.path.each { |index| json.number(index) }
               end
-              json.field "event", event.event
-              json.field "method_sym", event.method_sym
-              json.field "args" do
-                json.array do
-                  event.args.each { |arg| json.string(arg) }
-                end
+            end
+            json.field "event", event.event
+            json.field "method_sym", event.method_sym
+            json.field "args" do
+              json.array do
+                event.args.each { |arg| json.string(arg) }
               end
             end
           end

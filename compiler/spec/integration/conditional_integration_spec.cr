@@ -11,6 +11,7 @@ require "../../src/mochi_cmp"
 require "../../src/tree-sitter/instance_var_analyzer"
 require "../../src/html/attribute_conditional_extractor"
 require "../../src/ruby/attribute_method_generator"
+require "../../src/ruby/each_method_generator"
 require "../../src/webcomponents/component_generator"
 
 def find_second_last_index(text : String, substring_to_find : String) : Int32?
@@ -110,6 +111,12 @@ def transpile_test_component(rb_file : String)
         conditional_result.conditionals
       )
 
+      amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
+        amped_ruby_code,
+        cls_name,
+        web_comp_generator.each_blocks
+      )
+
       rewritten_ruby_code = web_comp_generator.rewrite_ruby(
         amped_ruby_code,
         cls_name,
@@ -195,9 +202,8 @@ RUBY
         # Verify the manifest carries conditional bindings instead of JavaScript
         cond_bindings = manifest.bindings.select { |binding| binding.kind == "cond" }
         cond_bindings.size.should eq(3)
-        cond_bindings.map(&.getter_expr).should contain("@count > 5")
-        cond_bindings.map(&.getter_expr).should contain("@enabled")
-        cond_bindings.map(&.getter_expr).should contain("@count < 0")
+        cond_bindings.map(&.getter_expr).should eq(["__mochi_cond_0", "__mochi_cond_1", "__mochi_cond_2"])
+        cond_bindings.each { |binding| binding.branches.size.should eq(1) }
         manifest.html_template.should_not contain("{if ")
 
         # Verify original methods still present
@@ -206,6 +212,87 @@ RUBY
         ruby_code.should contain("def set_count")
         ruby_code.should_not contain("def html")
         ruby_code.should_not contain("def css")
+      end
+    end
+
+    it "compiles if/elsif/else branch templates with nested bindings and events" do
+      component_code = <<-RUBY
+class ChainComponent
+  @tag_name = "chain-comp"
+  @a
+  @b
+  @label
+  @cls
+  @items
+
+  def initialize
+    @a = false
+    @b = true
+    @label = "label"
+    @cls = "active"
+    @items = ["one"]
+  end
+
+  def html
+    %Q{
+      <div>
+        {if @a}
+          <p class="{@cls}" data-label="{@label}">{@label}</p>
+          <span class="{if @a}hidden{else}shown{end}">state</span>
+          <button onclick="{save}">Save</button>
+          <ul>{each @items as item}<li>{item}</li>{end}</ul>
+        {elsif @b}
+          <p>B</p>
+        {else}
+          <p>C</p>
+        {end}
+      </div>
+    }
+  end
+
+  def css
+    %Q{}
+  end
+
+  def save
+  end
+end
+RUBY
+
+      component = transpile_test_component(component_code)
+      component.should_not be_nil
+
+      if component
+        ruby_code = component.ruby_code
+        ruby_code.should contain("def __mochi_cond_0")
+        ruby_code.should contain("if @a")
+        ruby_code.should contain("elsif @b")
+        ruby_code.should contain("else")
+        ruby_code.should contain("      0\n")
+        ruby_code.should contain("      1\n")
+        ruby_code.should contain("      2\n")
+
+        cond = component.manifest.bindings.find! { |binding| binding.kind == "cond" }
+        cond.getter_expr.should eq("__mochi_cond_0")
+        cond.branches.size.should eq(3)
+
+        first = cond.branches[0]
+        first.html_template.should contain("<p class=\"{@cls}\" data-label=\"{@label}\">{@label}</p>")
+        first.html_template.should contain("data-mochi-click=\"save\"")
+        first.html_template.should_not contain("{if ")
+        first.html_template.should_not contain("{end}")
+        first.bindings.map(&.getter_expr).should contain("@cls")
+        first.bindings.map(&.getter_expr).should contain("@label")
+        first.bindings.map(&.getter_expr).should contain("__mochi_attr_cond_0")
+        first.events.first.method_sym.should eq("save")
+        each = first.bindings.find! { |binding| binding.kind == "each" }
+        each.getter_expr.should eq("@items")
+        ruby_code.should contain("def __mochi_attr_cond_0")
+        ruby_code.should contain("def __mochi_each_0_items")
+        first.bindings.each { |binding| ruby_code.should contain("def #{binding.getter_sym};") }
+
+        ids = component.manifest.all_bindings.map(&.id)
+        ids.uniq.size.should eq(ids.size)
       end
     end
 
@@ -270,7 +357,7 @@ class NestedComponent
           <div>
             <p>Outer</p>
             {if @inner}
-              <p>Inner</p>
+              <p>Inner {@inner}</p>
             {end}
           </div>
         {end}
@@ -300,10 +387,18 @@ RUBY
         ruby_code.should contain("@outer")
         ruby_code.should contain("@inner")
 
-        # The manifest binds the top-level conditional to the DOM anchor
+        # The manifest binds the top-level conditional to the DOM anchor and
+        # carries the nested conditional inside the outer branch.
         cond_bindings = component.manifest.bindings.select { |binding| binding.kind == "cond" }
         cond_bindings.size.should eq(1)
-        cond_bindings.first.getter_expr.should eq("@outer")
+        cond_bindings.first.getter_expr.should eq("__mochi_cond_0")
+        cond_bindings.first.branches.size.should eq(1)
+
+        outer_branch = cond_bindings.first.branches.first
+        outer_branch.html_template.should contain("<!--if-anchor-1-->")
+        nested = outer_branch.bindings.find! { |binding| binding.kind == "cond" }
+        nested.getter_expr.should eq("__mochi_cond_1")
+        nested.branches.first.bindings.map(&.getter_expr).should contain("@inner")
       end
     end
 

@@ -10,8 +10,31 @@ struct BindingDescriptor
   property template_text : String?
   property getter_sym : String
   property getter_expr : String?
+  property branches : Array(ConditionalBranchDescriptor)
 
-  def initialize(@id : Int32, @path : Array(Int32), @kind : String, @getter_sym : String, @attr_name : String? = nil, @template_text : String? = nil, @getter_expr : String? = nil)
+  def initialize(
+    @id : Int32,
+    @path : Array(Int32),
+    @kind : String,
+    @getter_sym : String,
+    @attr_name : String? = nil,
+    @template_text : String? = nil,
+    @getter_expr : String? = nil,
+    @branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
+  )
+  end
+end
+
+struct ConditionalBranchDescriptor
+  property html_template : String
+  property bindings : Array(BindingDescriptor)
+  property events : Array(EventDescriptor)
+
+  def initialize(
+    @html_template : String,
+    @bindings : Array(BindingDescriptor) = [] of BindingDescriptor,
+    @events : Array(EventDescriptor) = [] of EventDescriptor,
+  )
   end
 end
 
@@ -56,6 +79,29 @@ class ComponentManifest
   def event_names : Array(String)
     events.map(&.event).uniq
   end
+
+  # Every binding in the component, including bindings nested inside
+  # conditional branch templates. Getter methods are generated for all of them.
+  def all_bindings : Array(BindingDescriptor)
+    result = [] of BindingDescriptor
+    bindings.each { |binding| collect_bindings(binding, result) }
+    result
+  end
+
+  def all_events : Array(EventDescriptor)
+    result = events.dup
+    all_bindings.each do |binding|
+      binding.branches.each { |branch| result.concat(branch.events) }
+    end
+    result
+  end
+
+  private def collect_bindings(binding : BindingDescriptor, result : Array(BindingDescriptor))
+    result << binding
+    binding.branches.each do |branch|
+      branch.bindings.each { |child| collect_bindings(child, result) }
+    end
+  end
 end
 
 class RubyBindingRewriter
@@ -66,17 +112,29 @@ class RubyBindingRewriter
   end
 
   def self.inject_getters(ruby_code : String, class_name : String, bindings : Array(BindingDescriptor)) : String
-    return ruby_code if bindings.empty?
+    all_bindings = flatten_bindings(bindings)
+    return ruby_code if all_bindings.empty?
 
     insertion_point = InjectUtils.find_insertion_point(ruby_code, class_name, "end", 1)
     return ruby_code unless insertion_point
 
-    methods_code = bindings.map { |binding|
+    methods_code = all_bindings.map { |binding|
       expression = expression_for(binding)
       "\n  def #{binding.getter_sym}; #{expression}; end\n"
     }.join
 
     InjectUtils.insert_code(ruby_code, insertion_point, methods_code)
+  end
+
+  private def self.flatten_bindings(bindings : Array(BindingDescriptor)) : Array(BindingDescriptor)
+    result = [] of BindingDescriptor
+    bindings.each do |binding|
+      result << binding
+      binding.branches.each do |branch|
+        result.concat(flatten_bindings(branch.bindings))
+      end
+    end
+    result
   end
 
   def self.expression_for(binding : BindingDescriptor) : String
