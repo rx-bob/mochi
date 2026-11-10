@@ -3,14 +3,21 @@ require "./trace_helper"
 require "../../webcomponents/component_generator"
 require "../../gvm/mrbc_compiler"
 require "../../tree-sitter/instance_var_analyzer"
+require "../../ruby/ruby_understander"
 require "../../html/attribute_conditional_extractor"
 require "../../html/attribute_hash_extractor"
 require "../../html/event_argument_extractor"
+require "../../html/conditional_processor"
+require "../../html/each_processor"
 require "../../ruby/attribute_method_generator"
 require "../../ruby/attribute_hash_generator"
+require "../../ruby/conditional_method_generator"
+require "../../ruby/each_method_generator"
 
 class Compiler
   include TraceHelper
+
+  MAX_TRACKED_IVARS = 256
 
   def initialize
   end
@@ -23,6 +30,7 @@ class Compiler
 
     nr_files = 0
     done_channel = Channel(Nil).new
+    errors = [] of String
 
     trace_slice(trace, "ProcessComponents", sequence_id) do
       Dir.glob(Path[input_dir, "**", "*.rb"].to_s) do |path|
@@ -31,7 +39,6 @@ class Compiler
           spawn do
             begin
               puts "Processing #{path}"
-              content = File.read(path)
               absolute_path = Path[path].expand.to_s
 
               rb_file = File.read(absolute_path)
@@ -41,17 +48,22 @@ class Compiler
               if component
                 components << component
               end
+            rescue ex
+              errors << "Error processing file #{path}: #{ex.message}"
+            ensure
               done_channel.send(nil)
             end
-          rescue ex
-            puts "Error processing file #{path}: #{ex.message}\n#{ex.inspect_with_backtrace}"
           end
         end
       end
 
-      nr_files.times do |i|
+      nr_files.times do
         done_channel.receive
       end
+    end
+
+    unless errors.empty?
+      raise "Component transpilation failed:\n#{errors.join("\n")}"
     end
 
     puts "Done with preparing components for transpilation"
@@ -66,7 +78,7 @@ class Compiler
     puts "Transpilation finished"
   end
 
-  private def transpile_component(rb_file : String, i : Int32, absolute_path : String)
+  def transpile_component(rb_file : String, i : Int32, absolute_path : String)
     cls_name = RubyUnderstander.class_name(rb_file)
 
     print_cmp_start_separator(cls_name, i)
@@ -77,120 +89,142 @@ class Compiler
     end
 
     methods : Hash(String, RubyDef) = RubyUnderstander.extract_method_bodies(rb_file, cls_name)
-    # puts methods
+    tag_name = RubyUnderstander.get_cmp_name(rb_file, cls_name)
+    html_method = methods["html"]?
 
-    amped_ruby_code = rb_file
-    if methods.has_key?("css")
-      # css = methods["css"]
-      # puts "css:#{css.body[1...css.body.size - 1]}"
-      imports = RubyUnderstander.get_imports(rb_file)
-      css = RubyUnderstander.extract_raw_string_from_def_body(methods["css"].body, "css")
-      html = RubyUnderstander.extract_raw_string_from_def_body(methods["html"].body, "html")
-
-      # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
-      attr_hash_result = AttributeHashExtractor.process(html)
-      html = attr_hash_result.html
-
-      amped_ruby_code = AttributeHashGenerator.inject_methods_into_class(
-        amped_ruby_code,
-        cls_name,
-        attr_hash_result.hashes
-      )
-
-      # 2. Extract attribute conditionals
-      attr_cond_result = AttributeConditionalExtractor.process(html)
-      html = attr_cond_result.html
-
-      amped_ruby_code = AttributeMethodGenerator.inject_methods_into_class(
-        amped_ruby_code,
-        cls_name,
-        attr_cond_result.conditionals
-      )
-
-      # 3. Extract event handler arguments into data- attributes
-      html = EventArgumentExtractor.process(html)
-
-      # Analyze instance variables to determine reactables automatically
-      vars = TreeSitter::InstanceVarAnalyzer.analyze(rb_file)
-
-      # Filter for variables that are either:
-      # - Bound in the HTML (used in {}) AND are actual state (written/mutated)
-      # - Mutated via attr_accessor/attr_writer
-      # - Written to outside of the constructor (state)
-      reactive_vars = vars.select do |v|
-        (v.is_bound && (v.writes > 0 || v.attr_mutated)) || v.attr_mutated || v.written_outside_constructor
-      end
-
-      reactables_arr = reactive_vars.map { |v| v.name.sub(/^@/, "") }
-
-      # Add the new attribute conditionals and hashes to reactables so they are tracked
-      attr_cond_result.conditionals.each do |cond|
-        reactables_arr << "__mochi_attr_cond_#{cond.id}"
-      end
-      attr_hash_result.hashes.each do |hash_cond|
-        reactables_arr << "__mochi_attr_hash_#{hash_cond.id}"
-      end
-
-      # puts "Computed reactables for #{cls_name}: #{reactables_arr}"
-      reactables = if reactables_arr.empty?
-                     "[]"
-                   else
-                     "['#{reactables_arr.join("', '")}']"
-                   end
-
-      # puts "reactables: #{reactables}"
-
-      conditional_result = ConditionalProcessor.process(html)
-
-      amped_ruby_code = ConditionalMethodGenerator.inject_methods_into_class(
-        amped_ruby_code,
-        cls_name,
-        conditional_result.conditionals
-      )
-
-      each_result = EachProcessor.process(conditional_result.html)
-
-      amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
-        amped_ruby_code,
-        cls_name,
-        each_result.each_blocks
-      )
-
-      tag_name = RubyUnderstander.get_cmp_name(rb_file, cls_name)
-
-      if tag_name
-        manifest = ComponentGenerator.new.generate(
-          mochi_cmp_name = cls_name,
-          tag_name = tag_name.not_nil!,
-          css,
-          html = each_result.html,
-          reactables,
-          {} of String => String,
-          conditional_result.conditionals,
-          each_result.each_blocks
-        )
-
-        rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
-          amped_ruby_code,
-          cls_name,
-          manifest,
-          methods
-        )
-
-        print_cmp_end_seperator(cls_name, i)
-        return MochiComponent.new(
-          absolute_path,
-          cls_name,
-          imports,
-          ruby_code = rewritten_ruby_code,
-          manifest,
-          manifest.html_template,
-          css
-        )
-      end
-    else
-      puts "Skipping '#{cls_name}', no css method"
+    # A component is identified by its tag name or its html method. Classes
+    # with neither marker are ordinary Ruby classes and stay out of the bundle.
+    if tag_name.nil? && html_method.nil?
+      puts "Skipping '#{cls_name}', no @tag_name or html method"
+      print_cmp_end_seperator(cls_name, i)
+      return
     end
+
+    if tag_name.nil?
+      raise "Component '#{cls_name}' defines an html method but no @tag_name"
+    end
+
+    if html_method.nil?
+      raise "Component '#{cls_name}' defines @tag_name but no html method"
+    end
+
+    imports = RubyUnderstander.get_imports(rb_file)
+    css = if css_method = methods["css"]?
+            RubyUnderstander.extract_raw_string_from_def_body(css_method.body, "css")
+          else
+            ""
+          end
+    html = RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
+
+    # Remove html and css before injecting helpers. Their string bodies may
+    # contain `{end}`, which must never be mistaken for the class terminator.
+    amped_ruby_code = RubyUnderstander.remove_methods(rb_file, cls_name, ["html", "css"])
+
+    # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
+    attr_hash_result = AttributeHashExtractor.process(html)
+    html = attr_hash_result.html
+
+    amped_ruby_code = AttributeHashGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      attr_hash_result.hashes
+    )
+
+    # 2. Extract attribute conditionals
+    attr_cond_result = AttributeConditionalExtractor.process(html)
+    html = attr_cond_result.html
+
+    amped_ruby_code = AttributeMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      attr_cond_result.conditionals
+    )
+
+    # 3. Extract event handler arguments into data- attributes
+    html = EventArgumentExtractor.process(html)
+
+    # Analyze instance variables to determine reactables automatically
+    vars = TreeSitter::InstanceVarAnalyzer.analyze(rb_file)
+    validate_ivar_capacity(cls_name, vars)
+
+    # Filter for variables that are either:
+    # - Bound in the HTML (used in {}) AND are actual state (written/mutated)
+    # - Mutated via attr_accessor/attr_writer
+    # - Written to outside of the constructor (state)
+    reactive_vars = vars.select do |v|
+      (v.is_bound && (v.writes > 0 || v.attr_mutated)) || v.attr_mutated || v.written_outside_constructor
+    end
+
+    reactables_arr = reactive_vars.map { |v| v.name.sub(/^@/, "") }
+
+    # Add the new attribute conditionals and hashes to reactables so they are tracked
+    attr_cond_result.conditionals.each do |cond|
+      reactables_arr << "__mochi_attr_cond_#{cond.id}"
+    end
+    attr_hash_result.hashes.each do |hash_cond|
+      reactables_arr << "__mochi_attr_hash_#{hash_cond.id}"
+    end
+
+    # puts "Computed reactables for #{cls_name}: #{reactables_arr}"
+    reactables = if reactables_arr.empty?
+                   "[]"
+                 else
+                   "['#{reactables_arr.join("', '")}']"
+                 end
+
+    # puts "reactables: #{reactables}"
+
+    conditional_result = ConditionalProcessor.process(html)
+
+    amped_ruby_code = ConditionalMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      conditional_result.conditionals
+    )
+
+    each_result = EachProcessor.process(conditional_result.html)
+
+    amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      each_result.each_blocks
+    )
+
+    manifest = ComponentGenerator.new.generate(
+      mochi_cmp_name = cls_name,
+      tag_name = tag_name.not_nil!,
+      css,
+      html = each_result.html,
+      reactables,
+      {} of String => String,
+      conditional_result.conditionals,
+      each_result.each_blocks,
+      methods.keys
+    )
+
+    rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
+      amped_ruby_code,
+      cls_name,
+      manifest,
+      methods
+    )
+
     print_cmp_end_seperator(cls_name, i)
+    return MochiComponent.new(
+      absolute_path,
+      cls_name,
+      imports,
+      ruby_code = rewritten_ruby_code,
+      manifest,
+      manifest.html_template,
+      css
+    )
+  end
+
+  private def validate_ivar_capacity(cls_name : String, vars : Array(TreeSitter::InstanceVarAnalyzer::VariableInfo)) : Nil
+    ivars = vars.map(&.name).reject { |name| name == "@tag_name" }.uniq
+    return if ivars.size <= MAX_TRACKED_IVARS
+
+    raise "Component '#{cls_name}' declares #{ivars.size} instance variables, exceeding the GVM limit of #{MAX_TRACKED_IVARS}"
   end
 end

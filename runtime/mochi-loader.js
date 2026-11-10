@@ -52,6 +52,27 @@
     return decode(module.HEAPU8.subarray(offset, offset + length));
   }
 
+  // Drains Ruby `Mochi.emit("action")` calls. Actions are published on the
+  // document so every mounted component can handle the ones it implements.
+  function drainEmits(module) {
+    if (!module || !module._mochi_emit_outbox_offset ||
+        !module._mochi_emit_outbox_len || !module._mochi_emit_outbox_clear) {
+      return;
+    }
+    var length = module._mochi_emit_outbox_len();
+    if (length <= 0) return;
+    var offset = module._mochi_emit_outbox_offset();
+    var text = offset ? decode(module.HEAPU8.subarray(offset, offset + length)) : "";
+    module._mochi_emit_outbox_clear();
+    if (!text || !global.document) return;
+    text.split("\n").forEach(function (action) {
+      if (!action) return;
+      global.document.dispatchEvent(new global.CustomEvent("mochi:action", {
+        detail: { action: action }
+      }));
+    });
+  }
+
   function withUtf8(module, text, callback) {
     var bytes = encode(text);
     var malloc = module._malloc || module._mochi_malloc;
@@ -190,7 +211,14 @@
     });
 
     var mounted = intern(module, "mounted");
-    if (mounted) module._mochi_dispatch_event(instance, mounted);
+    if (mounted) {
+      var hasMounted = module._mochi_has_method
+        ? withUtf8(module, "mounted", function (pointer, length) {
+            return module._mochi_has_method(instance, pointer, length);
+          })
+        : 1;
+      if (hasMounted === 1) module._mochi_dispatch_event(instance, mounted);
+    }
 
     return { module: module, instance: instance };
   }
@@ -528,12 +556,27 @@
           element._mochiInstance = mounted.instance;
           state.elements.set(String(mounted.instance), element);
           applyPatches(element, mounted.module);
+          drainEmits(mounted.module);
           return mounted;
         }).catch(function (error) {
           element.mochiError = error;
           console.error("[mochi] " + tag + " mount failed", error);
           throw error;
         });
+
+        if (!this._mochiActionListener) {
+          this._mochiActionListener = function (event) {
+            element._dispatchAction(event);
+          };
+          global.document.addEventListener("mochi:action", this._mochiActionListener);
+        }
+      }
+
+      disconnectedCallback() {
+        if (this._mochiActionListener) {
+          global.document.removeEventListener("mochi:action", this._mochiActionListener);
+          this._mochiActionListener = null;
+        }
       }
 
       _resolveBindings(root) {
@@ -581,9 +624,34 @@
             throw new Error("mochi-loader: event dispatch failed for " + method + ": " + lastError(mounted.module));
           }
           applyPatches(element, mounted.module);
+          drainEmits(mounted.module);
         }).catch(function (error) {
           element.mochiError = error;
           console.error("[mochi] " + tag + " event failed", error);
+        });
+      }
+
+      _dispatchAction(event) {
+        var element = this;
+        var action = event && event.detail && event.detail.action;
+        if (!action || !this._mochiReady) return;
+
+        this._mochiReady.then(function (mounted) {
+          if (mounted.module._mochi_has_method) {
+            var supported = withUtf8(mounted.module, action, function (pointer, length) {
+              return mounted.module._mochi_has_method(mounted.instance, pointer, length);
+            });
+            if (supported !== 1) return;
+          }
+          var symbol = intern(mounted.module, action);
+          if (mounted.module._mochi_dispatch_event(mounted.instance, symbol) !== 1) {
+            throw new Error("mochi-loader: action dispatch failed for " + action + ": " + lastError(mounted.module));
+          }
+          applyPatches(element, mounted.module);
+          drainEmits(mounted.module);
+        }).catch(function (error) {
+          element.mochiError = error;
+          console.error("[mochi] " + tag + " action failed", error);
         });
       }
     };

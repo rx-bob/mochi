@@ -4,7 +4,6 @@ require "../ruby/ruby_def"
 
 module TreeSitter
   class MethodBodyExtractor
-
     def self.extract_method_bodies(source : String, class_name : String) : Hash(String, RubyDef)
       parser = RubyParser.new
       tree = parser.parse(source)
@@ -17,6 +16,46 @@ module TreeSitter
 
       visit_node_for_methods(class_node, class_name, methods, source)
       return methods
+    end
+
+    # Removes the named instance methods from `class_name` using the exact
+    # Tree-sitter byte range of each method node. Line-oriented removal and
+    # searching for the literal `end` keyword both fail when an HTML string
+    # contains `{end}`, so the parser is the source of truth here.
+    def self.remove_methods(source : String, class_name : String, method_names : Array(String)) : String
+      return source if method_names.empty?
+
+      parser = RubyParser.new
+      tree = parser.parse(source)
+      class_node = find_class_by_name(tree.root_node, class_name)
+      return source unless class_node
+
+      body = class_node.child_by_field_name("body")
+      return source unless body
+
+      ranges = [] of Tuple(Int32, Int32)
+      body.each_named_child do |child|
+        next unless child.type == "method"
+
+        name_node = child.child_by_field_name("name")
+        next unless name_node
+        next unless method_names.includes?(name_node.text)
+
+        ranges << {child.start_byte, child.end_byte}
+      end
+      return source if ranges.empty?
+
+      builder = String::Builder.new
+      cursor = 0
+      ranges.sort_by! { |range| range[0] }
+      ranges.each do |(start_byte, end_byte)|
+        next if end_byte <= cursor
+
+        builder << source.byte_slice(cursor, start_byte - cursor) if start_byte > cursor
+        cursor = end_byte
+      end
+      builder << source.byte_slice(cursor, source.bytesize - cursor) if cursor < source.bytesize
+      builder.to_s
     end
 
     private def self.find_class_by_name(node : Node, class_name : String) : Node?

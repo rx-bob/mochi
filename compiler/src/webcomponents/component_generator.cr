@@ -4,6 +4,9 @@ require "../html/conditional_processor"
 require "../html/each_processor"
 
 class ComponentGenerator
+  CONTROL_TEMPLATE_PREFIXES = ["if ", "unless ", "elsif ", "each "]
+  CONTROL_TEMPLATE_KEYWORDS = ["else", "end"]
+
   def generate(
     mochi_cmp_name : String,
     tag_name : String,
@@ -13,6 +16,7 @@ class ComponentGenerator
     _bindings : Hash(String, String) = {} of String => String,
     conditionals : Array(ConditionalBlock) = [] of ConditionalBlock,
     each_blocks : Array(EachBlock) = [] of EachBlock,
+    method_names : Array(String) = [] of String,
   ) : ComponentManifest
     doc = Lexbor.new(html)
     body = doc.body
@@ -27,6 +31,8 @@ class ComponentGenerator
     end
 
     html_template = body ? body.inner_html : ""
+    validate_template_placeholders(mochi_cmp_name, html_template)
+    validate_event_handlers(mochi_cmp_name, events, method_names)
     chi_file = "#{tag_name}.chi"
 
     ComponentManifest.new(
@@ -215,5 +221,51 @@ class ComponentGenerator
     return stripped if stripped.in?("true", "false", "nil")
 
     "@#{stripped}"
+  end
+
+  private def validate_event_handlers(
+    class_name : String,
+    events : Array(EventDescriptor),
+    method_names : Array(String),
+  )
+    return if method_names.empty?
+
+    events.each do |event|
+      next if method_names.includes?(event.method_sym)
+
+      raise "Component '#{class_name}' has an undefined event handler: on#{event.event}=\"{#{event.method_sym}}\""
+    end
+  end
+
+  private def validate_template_placeholders(class_name : String, template : String)
+    index = 0
+
+    while index < template.size
+      char = template[index]
+
+      case char
+      when '{'
+        close = template.index('}', index + 1)
+        unless close
+          snippet = template[index, Math.min(40, template.size - index)]
+          raise "Component '#{class_name}' contains an unclosed template placeholder: #{snippet}"
+        end
+
+        inner = template[(index + 1)...close].strip
+        if inner.empty?
+          raise "Component '#{class_name}' contains an empty template placeholder '{}'"
+        end
+
+        if CONTROL_TEMPLATE_KEYWORDS.includes?(inner) || CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
+          raise "Component '#{class_name}' contains an uncompiled template block '{#{inner}}'"
+        end
+
+        index = close + 1
+      when '}'
+        raise "Component '#{class_name}' contains a stray '}' in its template"
+      else
+        index += 1
+      end
+    end
   end
 end

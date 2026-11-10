@@ -1,5 +1,6 @@
 require "../ruby/inject_utils"
 require "../ruby/ruby_def"
+require "../tree-sitter/method_body_extractor"
 
 struct BindingDescriptor
   property id : Int32
@@ -59,14 +60,15 @@ end
 
 class RubyBindingRewriter
   def self.rewrite(ruby_code : String, class_name : String, bindings : Array(BindingDescriptor), removed_methods : Array(RubyDef) = [] of RubyDef) : String
-    code = remove_methods(ruby_code, removed_methods)
+    method_names = removed_methods.compact_map(&.name)
+    code = remove_methods(ruby_code, class_name, method_names)
     inject_getters(code, class_name, bindings)
   end
 
   def self.inject_getters(ruby_code : String, class_name : String, bindings : Array(BindingDescriptor)) : String
     return ruby_code if bindings.empty?
 
-    insertion_point = point_before_final_end(ruby_code)
+    insertion_point = InjectUtils.find_insertion_point(ruby_code, class_name, "end", 1)
     return ruby_code unless insertion_point
 
     methods_code = bindings.map { |binding|
@@ -88,48 +90,9 @@ class RubyBindingRewriter
     "@#{expression}"
   end
 
-  def self.remove_methods(ruby_code : String, methods : Array(RubyDef)) : String
-    return ruby_code if methods.empty?
+  def self.remove_methods(ruby_code : String, class_name : String, method_names : Array(String)) : String
+    return ruby_code if method_names.empty?
 
-    lines = ruby_code.lines
-    method_lines = lines.map(&.chomp)
-
-    methods.each do |method_def|
-      body = method_def.body
-      next if body.empty?
-
-      index = find_method_start(method_lines, method_def.name || "", body)
-      next unless index
-
-      body.size.times { lines.delete_at(index) }
-      method_lines = lines.map(&.chomp)
-    end
-
-    lines.join("\n")
-  end
-
-  private def self.find_method_start(lines : Array(String), method_name : String, body : Array(String)) : Int32?
-    lines.each_with_index do |line, index|
-      next unless line.strip.starts_with?("def #{method_name}")
-
-      matches = true
-      body.each_with_index do |body_line, offset|
-        if lines[index + offset]? != body_line
-          matches = false
-          break
-        end
-      end
-      return index if matches
-    end
-
-    nil
-  end
-
-  private def self.point_before_final_end(ruby_code : String) : Int32?
-    lines = ruby_code.lines
-    index = lines.rindex { |line| line.strip == "end" }
-    return nil unless index
-
-    lines[0...index].sum { |line| line.size + 1 }
+    TreeSitter::MethodBodyExtractor.remove_methods(ruby_code, class_name, method_names)
   end
 end
