@@ -216,6 +216,38 @@ RUBY
       end
     end
 
+    it "raises when the template contains an empty placeholder" do
+      source = <<-RUBY
+class BadEmptyPlaceholder
+  @tag_name = "x-bad-empty-placeholder"
+
+  def html
+    %Q[<div>{}</div>]
+  end
+end
+RUBY
+
+      expect_raises(Exception, /BadEmptyPlaceholder.*empty template placeholder/) do
+        transpile_source(source, "BadEmptyPlaceholder")
+      end
+    end
+
+    it "raises when the template contains a stray closing brace" do
+      source = <<-RUBY
+class BadStrayBrace
+  @tag_name = "x-bad-stray-brace"
+
+  def html
+    %Q[<div>Hello }</div>]
+  end
+end
+RUBY
+
+      expect_raises(Exception, /BadStrayBrace.*stray '}'/) do
+        transpile_source(source, "BadStrayBrace")
+      end
+    end
+
     it "raises when a component exceeds the GVM instance variable limit" do
       assignments = (0...257).map { |index| "    @v#{index} = 0\n" }.join
 

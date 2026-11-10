@@ -86,11 +86,11 @@ tasks:
       - '{{.FRAG_CONFIG}} && {{.COMPILER}} dev --config={{.ROOT_DIR}}/config/dev_server_config.json --root={{.BUNDLE_DIR}}'
 
   e2e:
-    desc: Run the GVM Playwright end-to-end test
+    desc: Run the GVM Playwright end-to-end tests
     deps:
       - build
     cmds:
-      - 'cd e2e && npx playwright test tests/gvm_counter.spec.ts --reporter=line'
+      - 'cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts --reporter=line'
 
   check:
     desc: Run compiler specs, GVM tests, and GVM E2E

@@ -531,6 +531,35 @@ test("drains JSON fetch requests after mount and delivers parsed responses", asy
   }]);
 });
 
+test("fetch callback mutations flush patches into bound DOM", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async () => ({
+      status: 200,
+      ok: true,
+      headers: { get: () => "application/json" },
+      text: async () => '{"rows":[1]}'
+    })
+  });
+  log.onFetchDelivery = function () {
+    module.patchQueue.push({ patches: [{ id: 0, value: "9" }] });
+  };
+  module.queueFetch(JSON.stringify({
+    id: 1,
+    instance: "1",
+    url: "/api/logs",
+    callback: "on_logs",
+    options: {}
+  }) + "\n");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(element.shadowRoot.querySelector(".count").textContent, "Count: 9");
+  assert.equal(element.bindingTargets[0].textContent, "Count: 9");
+});
+
 test("defers fetch requests until their target instance mounts", async () => {
   const calls = [];
   const { module, log } = await setup([COMPONENT, LOGS_COMPONENT], {
