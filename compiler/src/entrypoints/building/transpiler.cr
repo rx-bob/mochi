@@ -16,8 +16,7 @@ class Compiler
   end
 
   def transpile_directory(input_dir : String, output_dir : String, builder_man : BuilderMan, trace : Pftrace::Trace? = nil, sequence_id : UInt32 = 1_u32)
-    build_dir = builder_man.build_dir
-    puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{build_dir}'"
+    puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'"
 
     components = [] of MochiComponent
     i = 1
@@ -56,11 +55,6 @@ class Compiler
     end
 
     puts "Done with preparing components for transpilation"
-
-    trace_slice(trace, "AssembleJS", sequence_id) do
-      puts "Writing #{build_dir}/bundle.js"
-      File.write("#{build_dir}/bundle.js", "console.log('Mochi booted.');\n")
-    end
 
     trace_slice(trace, "EmitBytecode", sequence_id) do
       compiler = MrbcCompiler.new

@@ -23,7 +23,6 @@ require "./entrypoints/typechecker"
 
 require "./batteries/core_battery"
 require "./sorbet/sorbet"
-require "./js/js_logger"
 require "./tooling/dev_server"
 
 def self.get_attr(component, name) : String
@@ -64,7 +63,6 @@ end
 def print_separator
   puts "------------------------------------------------------------------------------------"
 end
-
 
 project_name = ""
 input_dir = ""
@@ -173,15 +171,11 @@ else
   if !project_name.empty?
     Initializer.new(project_name)
   else
-    BuildMain.new().build(
+    BuildMain.new.build(
       input_dir,
       output_dir,
-      parser,
       with_tc,
       keep_granular_build_artifacts,
     )
   end
 end
-
-
-
