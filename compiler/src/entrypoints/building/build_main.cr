@@ -2,6 +2,7 @@ require "./builder_man"
 require "file"
 require "file_utils"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
+require "../../sorbet/project_typechecker"
 require "./trace_helper"
 
 class BuildMain
@@ -33,20 +34,16 @@ class BuildMain
     print_separator
     puts "4. Packing in Batteries"
     batt_time = Time.measure do
-      SorbetTypesBat.generate(builder_man.ruby_src_dir)
       CoreBattery.generate(builder_man.ruby_src_dir)
     end
     puts "> Batteries took #{batt_time.total_milliseconds.to_i}ms"
-
   end
 
   def build(
     input_dir : String,
     output_dir : String,
-    parser : OptionParser,
     with_tc : Bool,
-    with_mini : Bool,
-    keep_granular_build_artifacts : Bool
+    keep_granular_build_artifacts : Bool,
   )
     trace = Pftrace::Trace.new("mochi_build.pftrace")
     start_time = Time.monotonic.total_nanoseconds.to_u64
@@ -64,6 +61,7 @@ class BuildMain
 
     print_separator
     puts "1. input_dir:#{input_dir}, output_dir:#{output_dir}"
+    prepare_output_dir(output_dir)
     builder_man = BuilderMan.new(input_dir)
 
     # steps 2-4
@@ -72,6 +70,16 @@ class BuildMain
 
     trace_slice(trace, "Setup", sequence_id, "build") do
       setup(builder_man)
+    end
+
+    print_separator
+    if with_tc
+      puts "4b. Typechecking Ruby components"
+      unless ProjectTypechecker.new(builder_man.ruby_src_dir).typecheck
+        raise "Sorbet typecheck failed"
+      end
+    else
+      puts "> Typecheck skipped (--typecheck not set)"
     end
 
     print_separator
@@ -86,55 +94,12 @@ class BuildMain
     puts "> Compilation took #{mochi_comp_time.total_milliseconds.to_i}ms"
 
     print_separator
-    puts "6. Generating Opal Runtime"
-
-    opal_rt_time = Time.measure do
-      trace_slice(trace, "OpalRuntimeGen", sequence_id, "build") do
-        opal_rt_gen = OpalRuntimeGenerator.new()
-        opal_rt_gen.generate(builder_man.build_dir)
-      end
-    end
-    puts "> Opal RT gen took #{opal_rt_time.total_milliseconds.to_i}ms"
-
-    step_nr = 7
-
-    print_separator
-    puts "#{step_nr}. Bundling"
-    step_nr += 1
-    bundle_file_path = ""
-
-    bundling_time_taken = Time.measure do
-      trace_slice(trace, "Bundling", sequence_id, "build") do
-        `cp "#{builder_man.build_dir}/runtime.js" "#{output_dir}/runtime.js"`
-        `cp "#{builder_man.build_dir}/bundle.js" "#{output_dir}/bundle.js"`
-
-        bundle_js = File.read("#{output_dir}/bundle.js")
-        File.write("#{output_dir}/bundle.js", "#{bundle_js}\n#{JsLoggerGenerator.generate()}")
-      end
-    end
-    puts "> Bundling took #{bundling_time_taken.total_milliseconds.to_i}ms"
-
-    print_separator
-    puts "#{step_nr}. Minify the output: #{with_mini}"
-    step_nr += 1
-
-    mini_time_taken = Time.measure do
-      trace_slice(trace, "Minification", sequence_id, "build") do
-        if with_mini
-          unless Process.find_executable("swc")
-            STDERR.puts "Error: swc is not installed. Please run 'npm install -g @swc/cli @swc/core'."
-            exit 1
-          end
-          `npx swc "#{output_dir}/runtime.js" -o "#{output_dir}/runtime.js"`
-        end
-      end
-    end
-    puts "> Minification took #{mini_time_taken.total_milliseconds.to_i}ms"
+    puts "6. Copying Entry Page"
+    copy_entry_page(input_dir, output_dir)
 
     if !keep_granular_build_artifacts
       puts "removing granular build artifacts"
 
-      remove_file("#{builder_man.build_dir}/ruby.js")
       remove_directory("#{builder_man.build_dir}/pre_tp")
       remove_directory("#{builder_man.build_dir}/src")
     end
@@ -142,16 +107,28 @@ class BuildMain
     trace.close
     puts "Trace saved to mochi_build.pftrace"
 
+    total_ms = (Time.monotonic.total_nanoseconds.to_u64 - start_time) // 1_000_000
+    puts "> Total build took #{total_ms}ms"
+
     print_separator
     puts "Done."
   end
 
-  def remove_file(file_path : String)
-    begin
-      File.delete(file_path)
-    rescue Exception
-      puts "Unable to remove file, as I couldnt find it: #{file_path}"
+  private def prepare_output_dir(output_dir : String)
+    Dir.mkdir_p(output_dir)
+    remove_directory(File.join(output_dir, "components"))
+    File.delete(File.join(output_dir, "bundle.js")) if File.exists?(File.join(output_dir, "bundle.js"))
+  end
+
+  private def copy_entry_page(input_dir : String, output_dir : String)
+    source = File.join(input_dir, "index.html")
+    unless File.file?(source)
+      puts "> No index.html in #{input_dir}; skipped"
+      return
     end
+
+    FileUtils.cp(source, File.join(output_dir, "index.html"))
+    puts "> Copied index.html"
   end
 
   def remove_directory(dir_path : String)

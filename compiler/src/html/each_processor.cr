@@ -27,13 +27,13 @@ class EachBlock
   property id : Int32
 
   def initialize(@loop_def : EachLoopDef, @content : String, @start_pos : Int32, @end_pos : Int32, @content_start_pos : Int32, @id : Int32 = 0)
-    end
+  end
 
   def contains?(other : EachBlock) : Bool
     other.start_pos > start_pos && other.end_pos < end_pos
   end
 
-  def to_s (io : IO)
+  def to_s(io : IO)
     io << "EachBlock(loop_def: #{loop_def}, content: #{@content}, start_pos: #{start_pos}, end_pos: #{end_pos}, content_start_pos: #{content_start_pos}, id: #{id})"
   end
 end
@@ -58,13 +58,13 @@ class EachLoopDef
 end
 
 class EachProcessor
-  EACH_TOKEN    = "{each "
-  END_TOKEN     = "{end}"
-  EACH_TOKEN_LEN  = 6
-  END_TOKEN_LEN = 5
+  EACH_TOKEN     = "{each "
+  END_TOKEN      = "{end}"
+  EACH_TOKEN_LEN = 6
+  END_TOKEN_LEN  = 5
 
-  def self.process(html : String) : EachResult
-    all_blocks = extract_each_blocks(html)
+  def self.process(html : String, id_start : Int32 = 0) : EachResult
+    all_blocks = extract_each_blocks(html, id_start)
     processed_html = replace_blocks_with_elements(html, all_blocks)
 
     # TODO testing
@@ -114,31 +114,31 @@ class EachProcessor
     return content
   end
 
-  def self.extract_each_blocks(html : String) : Array(EachBlock)
+  def self.extract_each_blocks(html : String, id_start : Int32 = 0) : Array(EachBlock)
     result = [] of EachBlock
     stack = [] of EachStackFrame
-    next_id = 0
+    next_id = id_start
     pos = 0
 
     while pos < html.size
       if match = try_match_each_token(html, pos)
-          stack << EachStackFrame.new(match.loop_def, pos, match.content_start, next_id)
-          next_id += 1
-          pos = match.content_start
-        elsif try_match_end_token(html, pos)
-          unless stack.empty?
-            frame = stack.pop
-            result << EachBlock.new(
-              loop_def: frame.loop_def,
-              content: html[frame.content_start...pos],
-              start_pos: frame.start_pos,
-              end_pos: pos + END_TOKEN_LEN,
-              content_start_pos: frame.content_start,
-              id: frame.id
-            )
-          end
-          pos += END_TOKEN_LEN
-        else
+        stack << EachStackFrame.new(match.loop_def, pos, match.content_start, next_id)
+        next_id += 1
+        pos = match.content_start
+      elsif try_match_end_token(html, pos)
+        unless stack.empty?
+          frame = stack.pop
+          result << EachBlock.new(
+            loop_def: frame.loop_def,
+            content: html[frame.content_start...pos],
+            start_pos: frame.start_pos,
+            end_pos: pos + END_TOKEN_LEN,
+            content_start_pos: frame.content_start,
+            id: frame.id
+          )
+        end
+        pos += END_TOKEN_LEN
+      else
         pos += 1
       end
     end
@@ -176,4 +176,3 @@ class EachProcessor
     return html[pos..].starts_with?(END_TOKEN)
   end
 end
-

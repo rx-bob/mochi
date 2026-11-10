@@ -2,7 +2,23 @@
 .gradle
 .claude
 .idea
+.task/
+.ruby-lsp/
+ideas/
+notes/
+prototype_yiseq/
+runtime/spinel/
 build
+build_gvm
+
+build_wasm/counter_test.mrb
+build_wasm/mochi-ruby-micro.js
+build_wasm/mochi-ruby-micro.wasm
+build_wasm/mruby/*.o
+build_wasm/mruby/*.orig
+build_wasm/mruby/*.lock
+build_wasm/mruby/src
+build_wasm/ruby-src
 
 components/Gemfile.lock
 mo_build
@@ -30,6 +46,8 @@ e2e/node_modules
 e2e/test-results
 e2e/playwright-report
 
+runtime/node_modules
+
 testapp/package-lock.json
 testapp/node_modules
 
@@ -40,3 +58,4 @@ fragments/libs/lib*.a
 todo/
 done/
 inprogress/
+poc_yiseq/

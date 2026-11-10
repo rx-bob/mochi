@@ -10,7 +10,7 @@ class MyCounter
   def html
     %Q{
           <div class="wrapper">
-            <h1>Count: {count}</h1>
+            <h1>Count: {@count}</h1>
             <button onclick="{increment}">Increment</button>
             <button onclick="{decrement}">Decrement</button>
           </div>

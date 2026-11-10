@@ -24,8 +24,8 @@ class Counter
   def html
     %Q{
       <div class="wrapper">
-        <h1>Count123: {count}</h1>
-        <h2>Modifications: {modifications}</h2>
+        <h1>Count123: {@count}</h1>
+        <h2>Modifications: {@modifications}</h2>
         {if @count > 5}
           <p style="background: green; padding: 10px; border-radius: 8px;">Count is greater than 5!</p>
         {end}
@@ -34,8 +34,8 @@ class Counter
         {end}
         <button onclick="{increment}">Increment</button>
         <button onclick="{decrement}">Decrement</button>
-        <plus-five bind:pfcount="{count}"></plus-five>
-        <input value={count} onchange="{input_changed}" type="text"></input>
+        <plus-five bind:pfcount="{@count}"></plus-five>
+        <input value="{@count}" onchange="{input_changed}" type="text"></input>
       </div>
     }
   end

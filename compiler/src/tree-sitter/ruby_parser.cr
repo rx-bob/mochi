@@ -51,6 +51,14 @@ module TreeSitter
       @source.byte_slice(start_byte, end_byte - start_byte)
     end
 
+    def start_byte : Int32
+      LibTreeSitter.ts_node_start_byte(@raw).to_i
+    end
+
+    def end_byte : Int32
+      LibTreeSitter.ts_node_end_byte(@raw).to_i
+    end
+
     def to_s(io : IO)
       ptr = LibTreeSitter.ts_node_string(@raw)
       str = String.new(ptr)

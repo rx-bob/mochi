@@ -16,16 +16,13 @@ require "./ruby/ruby_understander"
 require "./ruby/ruby_rewriter"
 require "./webcomponents/web_component"
 require "./mochi_cmp"
-require "./opal/opal_runtime_generator"
 require "./initializer"
 require "./entrypoints/building/build_main"
 require "./entrypoints/building/transpiler"
 require "./entrypoints/typechecker"
 
-require "./batteries/sorbet_types_battery"
 require "./batteries/core_battery"
 require "./sorbet/sorbet"
-require "./js/js_logger"
 require "./tooling/dev_server"
 
 def self.get_attr(component, name) : String
@@ -67,11 +64,9 @@ def print_separator
   puts "------------------------------------------------------------------------------------"
 end
 
-
 project_name = ""
 input_dir = ""
 output_dir = ""
-with_mini = false
 with_tc = false
 is_dev_server = false
 dev_server_root = ""
@@ -95,10 +90,6 @@ OptionParser.parse do |p|
 
   p.on("-o OUT_DIR", "--output_dir=OUT_DIR", "Ouput directory to write into") do |o|
     output_dir = o
-  end
-
-  p.on("--minimize", "Minimize output") do |o|
-    with_mini = true
   end
 
   p.on("--typecheck", "Run typechecks with Sorbet") do |o|
@@ -180,16 +171,11 @@ else
   if !project_name.empty?
     Initializer.new(project_name)
   else
-    BuildMain.new().build(
+    BuildMain.new.build(
       input_dir,
       output_dir,
-      parser,
       with_tc,
-      with_mini,
       keep_granular_build_artifacts,
     )
   end
 end
-
-
-

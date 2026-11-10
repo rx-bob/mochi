@@ -9,7 +9,6 @@ require "../tree-sitter/method_body_extractor"
 require "../tree-sitter/string_extractor"
 
 class RubyUnderstander
-
   def self.extract_raw_string_from_def_body(body : Array(String), name : String) : String
     return TreeSitter::StringExtractor.extract_raw_string_from_def_body(body, name)
   end
@@ -26,8 +25,15 @@ class RubyUnderstander
     return TreeSitter::MethodBodyExtractor.extract_method_bodies(rb_file, cls_name)
   end
 
+  def self.remove_methods(rb_file : String, cls_name : String, method_names : Array(String)) : String
+    return TreeSitter::MethodBodyExtractor.remove_methods(rb_file, cls_name, method_names)
+  end
+
+  def self.attribute_readers(rb_file : String, cls_name : String) : Set(String)
+    return TreeSitter::MethodBodyExtractor.extract_attribute_readers(rb_file, cls_name)
+  end
+
   def self.get_cmp_name(rb_file : String, cls_name : String) : String?
     TreeSitter::PropertyExtractor.extract_property(rb_file, "@tag_name")
   end
-
 end

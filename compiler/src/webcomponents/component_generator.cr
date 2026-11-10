@@ -1,305 +1,399 @@
+require "json"
 require "lexbor"
-require "./web_component"
+require "./binding_manifest"
 require "../html/conditional_processor"
 require "../html/each_processor"
 
 class ComponentGenerator
+  CONTROL_TEMPLATE_PREFIXES = ["if ", "unless ", "elsif ", "each "]
+  CONTROL_TEMPLATE_KEYWORDS = ["else", "end"]
 
-  class Binding
-    property path : Array(Int32)
-    property type : Symbol # :text, :html, :attr, :anchor
-    property name : String? # attribute name or nil
-    property value : String # variable name or anchor id
+  @each_blocks : Array(EachBlock) = [] of EachBlock
+  @conditionals : Array(ConditionalBlock) = [] of ConditionalBlock
+  @next_binding_id : Int32 = 0
+  @next_each_id : Int32 = 0
+  @mochi_cmp_name : String = ""
+  @event_expressions : Array(String) = [] of String
 
-    def initialize(@path, @type, @value, @name = nil)
-    end
-  end
-
-  def initialize
-  end
-
-  def generate_static() : String
-    return ""
-  end
+  # Includes top-level and branch-discovered each blocks so callers can inject
+  # every generated each helper method after generation.
+  getter each_blocks
 
   def generate(
     mochi_cmp_name : String,
     tag_name : String,
     css : String,
     html : String,
-    reactables : String,
-    bindings : Hash(String, String),
+    _reactables : String = "[]",
+    _bindings : Hash(String, String) = {} of String => String,
     conditionals : Array(ConditionalBlock) = [] of ConditionalBlock,
-    each_blocks : Array(EachBlock) = [] of EachBlock) : WebComponent
+    each_blocks : Array(EachBlock) = [] of EachBlock,
+    method_names : Array(String) = [] of String,
+  ) : ComponentManifest
+    @mochi_cmp_name = mochi_cmp_name
+    @conditionals = conditionals
+    @each_blocks = each_blocks
+    @next_binding_id = 0
+    @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
+    @event_expressions.clear
 
-    # 1. Parse HTML and find bindings
-    doc = Lexbor.new(html)
-    doc_bindings = [] of Binding
+    bindings = [] of BindingDescriptor
+    events = [] of EventDescriptor
+    html_template = walk_html(html, bindings, events)
+    chi_file = "#{tag_name}.chi"
 
-    body = doc.body
-    if body
-      traverse(body, [] of Int32, doc_bindings)
-    end
+    manifest = ComponentManifest.new(
+      tag_name,
+      mochi_cmp_name,
+      chi_file,
+      html_template,
+      css,
+      bindings,
+      events
+    )
 
-    # Clean HTML for template
-    clean_html = body ? body.inner_html : ""
-
-    # Parse reactables string to array
-    react_vars = reactables.gsub(/[\[\]"']/, "").split(",").map(&.strip).reject(&.empty?)
-
-    # 2. Generate JS
-    js = String.build do |s|
-        # Template registry must come BEFORE customElements.define so that when
-        # connectedCallback fires synchronously during define (for already-connected
-        # elements), getTemplate() can find the template.
-        s << "if(!window._mochi_templates['#{mochi_cmp_name}']) {\n"
-        s << "  const t = document.createElement('template');\n"
-        s << "  t.innerHTML = `#{clean_html.gsub("`", "\\`").gsub("${", "\\${")}`;\n"
-        s << "  window._mochi_templates['#{mochi_cmp_name}'] = t;\n"
-
-        conditionals.each do |c|
-           s << "  const tif#{c.id} = document.createElement('template');\n"
-           s << "  tif#{c.id}.innerHTML = `#{c.content.gsub("`", "\\`").gsub("${", "\\${")}`;\n"
-           s << "  window._mochi_templates['#{mochi_cmp_name}_if_#{c.id}'] = tif#{c.id};\n"
-        end
-        each_blocks.each do |e|
-           s << "  const teach#{e.id} = document.createElement('template');\n"
-           s << "  teach#{e.id}.innerHTML = `#{e.content.gsub("`", "\\`").gsub("${", "\\${")}`;\n"
-           s << "  window._mochi_templates['#{mochi_cmp_name}_each_#{e.id}'] = teach#{e.id};\n"
-        end
-        s << "}\n\n"
-
-        s << "class #{mochi_cmp_name}WebComp extends MochiComponent {\n"
-        s << "  constructor() {\n"
-        s << "    super();\n"
-        s << "    this.element = this;\n"
-        s << "    this.rubyComp = Opal.#{mochi_cmp_name}.$new();\n"
-        s << "  }\n\n"
-
-        # Mount
-        s << "  mount(target) {\n"
-        s << "    this.rubyComp.$__mochi_mounted(this);\n"
-        s << "    const t = MochiComponent.getTemplate('#{mochi_cmp_name}');\n"
-        s << "    const r = t.content.cloneNode(true);\n"
-        s << "    this.dom_refs = {};\n"
-        s << "    this.anchors = {};\n\n"
-
-        # Event Delegation
-        s << "    this.shadow.addEventListener('click', (event) => {\n"
-        s << "      const target = event.target.closest('[onclick]');\n"
-        s << "      if (target) {\n"
-        s << "        const action = target.getAttribute('onclick').replace(/[{}]/g, '');\n"
-        s << "        const methodName = action.split('(')[0].trim();\n"
-        s << "        const args = [];\n"
-        s << "        let i = 0;\n"
-        s << "        while (target.hasAttribute('data-mochi-arg-'+i)) {\n"
-        s << "          let rawVal = target.getAttribute('data-mochi-arg-'+i);\n"
-        s << "          if (rawVal === '$event') {\n"
-        s << "            args.push(event);\n"
-        s << "          } else if (rawVal === '$element') {\n"
-        s << "            args.push(target);\n"
-        s << "          } else {\n"
-        s << "          let primVal = Number(rawVal);\n"
-        s << "          args.push(Number.isFinite(primVal) ? primVal : rawVal);\n"
-        s << "        }\n"
-        s << "        i++;\n"
-        s << "      }\n"
-        s << "      if (target.dataset) {\n"
-        s << "        args.push(Object.assign({}, target.dataset));\n"
-        s << "      }\n"
-        s << "      this.rubyComp['$'+methodName](...args);\n"
-        s << "      this.updateAll();\n"
-        s << "    }\n"
-        s << "    });\n"
-        s << "    this.shadow.addEventListener('change', (event) => {\n"
-        s << "      const target = event.target.closest('input[onchange], select[onchange], textarea[onchange]');\n"
-        s << "      if (target) {\n"
-        s << "        const action = target.getAttribute('onchange').replace(/[{}]/g, '');\n"
-        s << "        const methodName = action.split('(')[0].trim();\n"
-        s << "        const args = [];\n"
-        s << "        let i = 0;\n"
-        s << "        let hasArgs = false;\n"
-        s << "        while (target.hasAttribute('data-mochi-arg-'+i)) {\n"
-        s << "          hasArgs = true;\n"
-        s << "          let rawVal = target.getAttribute('data-mochi-arg-'+i);\n"
-        s << "          if (rawVal === '$event') {\n"
-        s << "            args.push(event);\n"
-        s << "          } else if (rawVal === '$element') {\n"
-        s << "            args.push(target);\n"
-        s << "          } else {\n"
-        s << "          let primVal = Number(rawVal);\n"
-        s << "          args.push(Number.isFinite(primVal) ? primVal : rawVal);\n"
-        s << "        }\n"
-        s << "        i++;\n"
-        s << "      }\n"
-        s << "      let dataset = target.dataset ? Object.assign({}, target.dataset) : {};\n"
-        s << "      if (hasArgs) {\n"
-        s << "        args.push(dataset);\n"
-        s << "        this.rubyComp['$'+methodName](...args);\n"
-        s << "      } else {\n"
-        s << "        let val = target.value;\n"
-        s << "        if (!isNaN(val) && val !== '') val = Number(val);\n"
-        s << "        this.rubyComp['$'+methodName](event, val, dataset);\n"
-        s << "      }\n"
-        s << "      this.updateAll();\n"
-        s << "    }\n"
-        s << "    });\n\n"
-
-        # Paths
-        doc_bindings.each_with_index do |b, i|
-            path_str = "r"
-            b.path.each do |idx|
-                path_str += ".childNodes[#{idx}]"
-            end
-
-            ref_name = "ref_#{i}"
-            s << "    const #{ref_name} = #{path_str};\n"
-
-            if b.type == :text
-               var_name = b.value.gsub(/[{}]/, "")
-               # Read template string from the cloned node (contains e.g. "Count123: {count}")
-               s << "    const #{ref_name}_tmpl = #{ref_name}.textContent;\n"
-               s << "    if(!this.dom_refs['#{var_name}']) this.dom_refs['#{var_name}'] = [];\n"
-               s << "    this.dom_refs['#{var_name}'].push({node: #{ref_name}, type: 'text', template: #{ref_name}_tmpl});\n"
-               s << "    #{ref_name}.textContent = #{ref_name}_tmpl.replace('{#{var_name}}', this.rubyComp.$get_#{var_name}());\n"
-            elsif b.type == :html
-               var_name = b.value.gsub(/[{}]/, "")
-               # Pure-variable text node: replace with a span so we can use innerHTML for HTML/SVG content
-               s << "    const #{ref_name}_span = document.createElement('span');\n"
-               s << "    #{ref_name}.parentNode.insertBefore(#{ref_name}_span, #{ref_name});\n"
-               s << "    #{ref_name}.parentNode.removeChild(#{ref_name});\n"
-               s << "    if(!this.dom_refs['#{var_name}']) this.dom_refs['#{var_name}'] = [];\n"
-               s << "    this.dom_refs['#{var_name}'].push({node: #{ref_name}_span, type: 'html'});\n"
-               s << "    #{ref_name}_span.innerHTML = this.rubyComp.$get_#{var_name}();\n"
-            elsif b.type == :attr
-               var_name = b.value.gsub(/[{}]/, "")
-               s << "    if(!this.dom_refs['#{var_name}']) this.dom_refs['#{var_name}'] = [];\n"
-               s << "    this.dom_refs['#{var_name}'].push({node: #{ref_name}, type: 'attr', name: '#{b.name}'});\n"
-               s << "    #{ref_name}.setAttribute('#{b.name}', this.rubyComp.$get_#{var_name}());\n"
-            elsif b.type == :anchor
-               anchor_id = b.value.gsub(/<!--|-->/, "").strip
-               s << "    this.anchors['#{anchor_id}'] = #{ref_name};\n"
-            end
-        end
-
-        # CSS
-        s << "    const style = document.createElement('style');\n"
-        s << "    style.textContent = `#{css.gsub("`", "\\`").gsub("${", "\\${")}`;\n"
-        s << "    this.shadow.appendChild(style);\n"
-
-        s << "    target.appendChild(r);\n"
-        s << "    if (this.rubyComp.$mounted) this.rubyComp.$mounted();\n"
-        s << "    this.updateAll();\n"
-        s << "  }\n\n"
-
-        # Update Methods
-        react_vars.each do |v|
-            s << "  update_#{v}(val) {\n"
-            s << "    const refs = this.dom_refs['#{v}'];\n"
-            s << "    if (refs) {\n"
-            s << "      for (const r of refs) {\n"
-            s << "        if (r.type === 'text') r.node.textContent = r.template.replace('{#{v}}', val);\n"
-            s << "        else if (r.type === 'html') r.node.innerHTML = val;\n"
-            s << "        else if (r.type === 'attr') r.node.setAttribute(r.name, val);\n"
-            s << "      }\n"
-            s << "    }\n"
-            s << "  }\n\n"
-        end
-
-        # syncAttributes: legacy compat alias so mounted() hooks that call comp.syncAttributes() still work
-        s << "  syncAttributes() { this.updateAll(); }\n\n"
-
-        # updateAll: re-read all reactive vars from Ruby and update DOM, then run derived
-        s << "  updateAll() {\n"
-        react_vars.each do |v|
-            s << "    this.update_#{v}(this.rubyComp.$get_#{v}());\n"
-        end
-        s << "    this.updateDerived();\n"
-        s << "  }\n\n"
-
-        # observedAttributes + attributeChangedCallback for initial HTML attribute propagation
-        # Do not expose internal computed attribute conditionals as observed attributes
-        public_react_vars = react_vars.reject { |v| v.starts_with?("__mochi_attr_cond_") || v.starts_with?("__mochi_attr_hash_") }
-        if public_react_vars.size > 0
-            obs_list = public_react_vars.map { |v| "'#{v}'" }.join(", ")
-            s << "  static get observedAttributes() { return [#{obs_list}]; }\n\n"
-            s << "  attributeChangedCallback(name, oldValue, newValue) {\n"
-            s << "    if (oldValue === newValue) return;\n"
-            s << "    const setter = '$set_' + name;\n"
-            s << "    if (this.rubyComp[setter]) {\n"
-            s << "      let val = newValue;\n"
-            s << "      if (!isNaN(val) && val !== '' && val !== null) val = Number(val);\n"
-            s << "      this.rubyComp[setter](val);\n"
-            s << "    }\n"
-            s << "    this.updateAll();\n"
-            s << "  }\n\n"
-        end
-
-        # Derived
-        s << "  updateDerived() {\n"
-        conditionals.each do |c|
-           s << "    this.updateConditional(#{c.id}, '#{mochi_cmp_name}_if_#{c.id}', () => {\n"
-           s << "      let res = this.rubyComp.$__mochi_cond_#{c.id}();\n"
-           s << "      return res !== false && res !== Opal.nil;\n"
-           s << "    });\n"
-        end
-        each_blocks.each do |e|
-           s << "    this.updateEach(#{e.id}, '#{mochi_cmp_name}_each_#{e.id}', () => {\n"
-           s << "      let items = this.rubyComp.$__mochi_each_#{e.id}_items();\n"
-           s << "      if (items && items.$to_a) return items.$to_a();\n"
-           s << "      return items || [];\n"
-           s << "    }, (item, index) => this.rubyComp.$__mochi_each_#{e.id}_key(item, index));\n"
-        end
-        s << "  }\n"
-        s << "}\n"
-        s << "customElements.define('#{tag_name}', #{mochi_cmp_name}WebComp);\n"
-    end
-
-    WebComponent.new("#{mochi_cmp_name}WebComp", js)
+    validate_template_placeholders(mochi_cmp_name, html_template)
+    validate_event_handlers(mochi_cmp_name, manifest.all_events, method_names)
+    manifest
   end
 
-  def traverse(node : Lexbor::Node, path : Array(Int32), bindings : Array(Binding))
+  private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor)) : String
+    doc = Lexbor.new(html)
+    body = doc.body
+
+    if body
+      body.children.each_with_index do |child, index|
+        walk(child, [index], bindings, events)
+      end
+    end
+
+    body ? body.inner_html : ""
+  end
+
+  def rewrite_ruby(
+    ruby_code : String,
+    class_name : String,
+    manifest : ComponentManifest,
+    methods : Hash(String, RubyDef),
+  ) : String
+    removed = ["html", "css"].compact_map { |name| methods[name]? }
+    RubyBindingRewriter.rewrite(ruby_code, class_name, manifest.bindings, removed)
+  end
+
+  private def walk(
+    node : Lexbor::Node,
+    path : Array(Int32),
+    bindings : Array(BindingDescriptor),
+    events : Array(EventDescriptor),
+  )
     tag = node.tag_name
 
     if tag == "_text"
-        text = node.tag_text
-        if text =~ /\{([^}]+)\}/
-             var_name = $1
-             # Pure variable nodes (e.g. "\n  {rendered_svg}\n") use innerHTML to allow HTML/SVG content
-             binding_type = text.strip == "{#{var_name}}" ? :html : :text
-             bindings << Binding.new(path, binding_type, "{#{var_name}}")
-        end
-    elsif tag == "_em_comment"
-        text = node.tag_text
-        if text.includes?("if-anchor") || text.includes?("each-anchor")
-             bindings << Binding.new(path, :anchor, text)
-        end
-    else
-        if node.attributes
-          remove_attrs = [] of String
-          node.attributes.each do |k, v|
-             if k.starts_with?("bind:")
-                attr_name = k[5..-1]
-                var_name = v.gsub(/[{}]/, "")
-                bindings << Binding.new(path, :attr, "{#{var_name}}", attr_name)
-                remove_attrs << k
-             elsif k.starts_with?("on")
-                # Event handler attribute — leave in HTML for event delegation, don't treat as reactive binding
-             elsif v =~ /\{([^}]+)\}/
-                var_name = $1
-                bindings << Binding.new(path, :attr, "{#{var_name}}", k)
-                remove_attrs << k
-             end
-          end
-          remove_attrs.each { |k| node.attribute_remove(k) }
-        end
+      collect_text_bindings(node.tag_text, path, bindings)
+      return
+    end
 
-        if node.children
-           node.children.each_with_index do |child, i|
-               traverse(child, path + [i], bindings)
-           end
-        end
+    if tag == "_em_comment"
+      collect_anchor_binding(node.tag_text, path, bindings)
+      return
+    end
+
+    collect_attribute_bindings(node, path, bindings, events)
+
+    node.children.each_with_index do |child, index|
+      walk(child, path + [index], bindings, events)
     end
   end
 
+  private def collect_text_bindings(text : String, path : Array(Int32), bindings : Array(BindingDescriptor))
+    text.scan(/\{([^}]+)\}/) do |match|
+      expression = match[1].strip
+      kind = text.strip == "{#{expression}}" ? "html" : "text"
+      bindings << new_binding(path, kind, nil, text, expression)
+    end
+  end
+
+  private def collect_anchor_binding(
+    text : String,
+    path : Array(Int32),
+    bindings : Array(BindingDescriptor),
+  )
+    if match = text.match(/if-anchor-(\d+)/)
+      id = match[1].to_i
+      block = @conditionals.find { |candidate| candidate.id == id }
+      return unless block
+
+      binding_id = allocate_binding_id
+      branches = block.branches.map { |branch| process_branch(branch) }
+      template_text = branches.first?.try(&.html_template) || block.content
+
+      bindings << BindingDescriptor.new(
+        binding_id,
+        path.dup,
+        "cond",
+        "__mochi_bind_#{binding_id}",
+        nil,
+        template_text,
+        "__mochi_cond_#{block.id}",
+        branches
+      )
+    elsif match = text.match(/each-anchor-(\d+)/)
+      id = match[1].to_i
+      block = @each_blocks.find { |candidate| candidate.id == id }
+      return unless block
+
+      bindings << new_binding(
+        path,
+        "each",
+        nil,
+        block.content,
+        block.loop_def.array_name
+      )
+    end
+  end
+
+  private def collect_attribute_bindings(
+    node : Lexbor::Node,
+    path : Array(Int32),
+    bindings : Array(BindingDescriptor),
+    events : Array(EventDescriptor),
+  )
+    return unless node.attributes
+
+    attrs = node.attributes
+    additions = [] of Tuple(String, String)
+    removals = [] of String
+
+    attrs.each do |name, value|
+      if name.starts_with?("bind:")
+        attr_name = name[5..]
+        additions << {attr_name, value}
+        removals << name
+        if attr_name == "value" || attr_name == "checked"
+          add_two_way_binding(path, attr_name, value, bindings, events, additions)
+        else
+          add_attribute_binding(path, attr_name, value, bindings)
+        end
+      elsif name.starts_with?("data-mochi-")
+        next
+      elsif name.starts_with?("on")
+        event_name = name[2..]
+        next if event_name.empty?
+
+        if match = value.match(/\{([^}]+)\}/)
+          method_name = match[1].split("(").first.strip
+          additions << {"data-mochi-#{event_name}", method_name}
+          removals << name
+          args = event_args(attrs, event_name)
+          events << EventDescriptor.new(path, event_name, method_name, args)
+          args.each { |arg| add_event_expression_binding(path, arg, bindings) }
+        end
+      elsif value.includes?("{")
+        add_attribute_binding(path, name, value, bindings)
+      end
+    end
+
+    removals.each { |name| node.attribute_remove(name) }
+    additions.each { |name, value| node.attribute_add(name, value) }
+  end
+
+  private def add_attribute_binding(
+    path : Array(Int32),
+    attr_name : String,
+    value : String,
+    bindings : Array(BindingDescriptor),
+  )
+    value.scan(/\{([^}]+)\}/) do |match|
+      expression = match[1].strip
+      bindings << new_binding(path, "attr", attr_name, value, expression)
+    end
+  end
+
+  # `bind:value` and `bind:checked` are two-way: the getter feeds the DOM
+  # property, while a generated setter receives the normalized event payload
+  # and writes the incoming value back into the instance variable.
+  private def add_two_way_binding(
+    path : Array(Int32),
+    attr_name : String,
+    value : String,
+    bindings : Array(BindingDescriptor),
+    events : Array(EventDescriptor),
+    additions : Array(Tuple(String, String)),
+  )
+    matches = value.scan(/\{([^}]+)\}/).to_a
+    if matches.size != 1
+      raise "bind:#{attr_name} requires exactly one @ivar placeholder"
+    end
+
+    expression = matches.first[1].strip
+    unless expression.matches?(/\A@[a-zA-Z_][a-zA-Z0-9_]*\z/)
+      raise "bind:#{attr_name} requires an instance variable, got #{expression}"
+    end
+
+    setter_sym = "__mochi_set_#{expression[1..].gsub(/[^a-zA-Z0-9_]/, "_")}"
+    event_name = attr_name == "checked" ? "change" : "input"
+    bindings << new_binding(path, "prop", attr_name, value, expression, setter_sym: setter_sym)
+    events << EventDescriptor.new(path, event_name, setter_sym)
+    additions << {"data-mochi-#{event_name}", setter_sym}
+  end
+
+  # Event expressions such as `@query` need their value available to the
+  # loader. Registering a hidden binding makes the VM evaluate the expression
+  # and cache the result alongside the element's other binding values.
+  private def add_event_expression_binding(
+    path : Array(Int32),
+    argument : EventArgumentDescriptor,
+    bindings : Array(BindingDescriptor),
+  )
+    return unless argument.kind == "expr"
+    expression = argument.value.try(&.strip)
+    return if expression.nil? || expression.empty?
+    return if @event_expressions.includes?(expression)
+    return if bindings.any? { |binding| binding.getter_expr == expression && binding.kind != "prop" }
+
+    @event_expressions << expression
+    bindings << new_binding(path, "expr", nil, expression, expression)
+  end
+
+  # Build one conditional branch fragment and recursively compile any nested
+  # conditionals or each blocks it contains. Paths and binding IDs are relative
+  # to the branch fragment; IDs themselves are component-global.
+  private def process_branch(branch : ConditionalBranch) : ConditionalBranchDescriptor
+    html = branch_with_anchors(branch)
+    each_result = EachProcessor.process(html, @next_each_id)
+
+    unless each_result.each_blocks.empty?
+      @each_blocks.concat(each_result.each_blocks)
+      @next_each_id += each_result.each_blocks.size
+    end
+
+    branch_bindings = [] of BindingDescriptor
+    branch_events = [] of EventDescriptor
+    template = walk_html(each_result.html, branch_bindings, branch_events)
+    validate_template_placeholders(@mochi_cmp_name, template)
+    ConditionalBranchDescriptor.new(template, branch_bindings, branch_events)
+  end
+
+  private def branch_with_anchors(branch : ConditionalBranch) : String
+    html = branch.content
+
+    branch.children.sort_by { |child| -child.start_pos }.each do |child|
+      rel_start = child.start_pos - branch.start_pos
+      rel_end = child.end_pos - branch.start_pos
+      next if rel_start < 0 || rel_end > html.size || rel_start > rel_end
+
+      html = html[0...rel_start] + "<!--if-anchor-#{child.id}-->" + html[rel_end..-1]
+    end
+
+    html
+  end
+
+  private def allocate_binding_id : Int32
+    id = @next_binding_id
+    @next_binding_id += 1
+    id
+  end
+
+  private def event_args(attrs : Hash(String, String), event_name : String) : Array(EventArgumentDescriptor)
+    if raw = attrs["data-mochi-args-#{event_name}"]?
+      begin
+        parsed = JSON.parse(raw)
+        return parsed.as_a.map { |item| EventArgumentDescriptor.from_json_object(item) }
+      rescue ex
+        raise "invalid event arguments for on#{event_name}: #{ex.message}"
+      end
+    end
+
+    args = [] of EventArgumentDescriptor
+    index = 0
+
+    while attrs.has_key?("data-mochi-arg-#{index}")
+      raw = attrs["data-mochi-arg-#{index}"].strip
+      if raw.starts_with?("{") && raw.ends_with?("}")
+        raw = raw[1...-1]
+      end
+      args << EventArgumentDescriptor.parse(raw)
+      index += 1
+    end
+
+    args
+  end
+
+  private def new_binding(
+    path : Array(Int32),
+    kind : String,
+    attr_name : String?,
+    template_text : String,
+    expression : String,
+    branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
+    setter_sym : String? = nil,
+  ) : BindingDescriptor
+    id = allocate_binding_id
+    BindingDescriptor.new(
+      id,
+      path.dup,
+      kind,
+      "__mochi_bind_#{id}",
+      attr_name,
+      template_text,
+      normalize_expression(expression),
+      branches,
+      setter_sym
+    )
+  end
+
+  # Strict binding syntax: `{@foo}` reads the instance variable `@foo`,
+  # while `{foo}` calls the component method `foo`. Never rewrite one into
+  # the other here; validation in Compiler#transpile_component catches
+  # method bindings that do not resolve to a component method.
+  private def normalize_expression(expression : String) : String
+    expression.strip
+  end
+
+  private def validate_event_handlers(
+    class_name : String,
+    events : Array(EventDescriptor),
+    method_names : Array(String),
+  )
+    return if method_names.empty?
+
+    events.each do |event|
+      next if event.method_sym.starts_with?("__mochi_")
+      next if method_names.includes?(event.method_sym)
+
+      raise "Component '#{class_name}' has an undefined event handler: on#{event.event}=\"{#{event.method_sym}}\""
+    end
+  end
+
+  private def validate_template_placeholders(class_name : String, template : String)
+    index = 0
+
+    while index < template.size
+      char = template[index]
+
+      case char
+      when '{'
+        close = template.index('}', index + 1)
+        unless close
+          snippet = template[index, Math.min(40, template.size - index)]
+          raise "Component '#{class_name}' contains an unclosed template placeholder: #{snippet}"
+        end
+
+        inner = template[(index + 1)...close].strip
+        if inner.empty?
+          raise "Component '#{class_name}' contains an empty template placeholder '{}'"
+        end
+
+        if CONTROL_TEMPLATE_KEYWORDS.includes?(inner) || CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
+          raise "Component '#{class_name}' contains an uncompiled template block '{#{inner}}'"
+        end
+
+        index = close + 1
+      when '}'
+        raise "Component '#{class_name}' contains a stray '}' in its template"
+      else
+        index += 1
+      end
+    end
+  end
 end

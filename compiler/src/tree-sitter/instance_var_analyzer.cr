@@ -37,9 +37,9 @@ module TreeSitter
       root = tree.root_node
 
       variables = {} of String => VariableInfo
-      
+
       visit_node(root, variables, nil)
-      
+
       variables.values.to_a
     end
 
@@ -71,29 +71,29 @@ module TreeSitter
       end
 
       if method_name && method_name.in?("attr_accessor", "attr_writer", "attr_reader")
-          if args_node
-            args_node.each_named_child do |arg|
-              if arg.type == "simple_symbol"
-                # Strip the leading ':' and prefix with '@'
-                var_name = "@#{arg.text.lchop(":")}"
-                var_info = get_var(variables, var_name)
-                if method_name == "attr_accessor" || method_name == "attr_writer"
-                  var_info.attr_mutated = true
-                end
-                if method_name == "attr_accessor" || method_name == "attr_reader"
-                  # Assuming it's readable
-                  var_info.reads += 1
-                end
+        if args_node
+          args_node.each_named_child do |arg|
+            if arg.type == "simple_symbol"
+              # Strip the leading ':' and prefix with '@'
+              var_name = "@#{arg.text.lchop(":")}"
+              var_info = get_var(variables, var_name)
+              if method_name == "attr_accessor" || method_name == "attr_writer"
+                var_info.attr_mutated = true
+              end
+              if method_name == "attr_accessor" || method_name == "attr_reader"
+                # Assuming it's readable
+                var_info.reads += 1
               end
             end
           end
+        end
       end
 
       # 2. Handle assignments and reads for instance_variables
       if node.type.in?("assignment", "operator_assignment")
         left_node = node.child_by_field_name("left")
         right_node = node.child_by_field_name("right")
-        
+
         if left_node
           visit_node(left_node, variables, current_method, true)
         end
@@ -106,7 +106,7 @@ module TreeSitter
       if node.type == "instance_variable"
         var_name = node.text
         var_info = get_var(variables, var_name)
-        
+
         if current_method == "html"
           var_info.is_bound = true
         end
@@ -126,40 +126,29 @@ module TreeSitter
       # 3. Handle string_content for interpolations inside html
       if current_method == "html" && node.type == "string_content"
         content = node.text
-        
+
         # Scan for anything inside braces
         content.scan(/\{([^}]+)\}/) do |match|
           inner = match[1].strip
-          
+
           # Skip control flow
           next if inner.starts_with?("if ") || inner.starts_with?("each ") || inner.starts_with?("elsif ") || inner.starts_with?("unless ") || inner == "else" || inner == "end"
 
-          # Handle explicit instance var: {@var}
+          # Handle explicit instance var: {@var}. Bare `{name}` is a method
+          # call under strict binding syntax, so it must not create a phantom
+          # `@name` variable here.
           if inner =~ /^@[a-zA-Z0-9_]+$/
-             var_name = inner
-             var_info = get_var(variables, var_name)
-             var_info.is_bound = true
-             var_info.reads += 1
-             next
-          end
-
-          # Handle implicit var: {var}
-          if inner =~ /^[a-zA-Z0-9_]+$/
-             name = inner
-             # implicit binding
-             keywords = ["if", "else", "elsif", "end", "unless", "while", "until", "case", "when", "then", "do", "begin", "rescue", "true", "false", "nil", "self", "super"]
-             unless keywords.includes?(name)
-                var_name = "@#{name}"
-                var_info = get_var(variables, var_name)
-                var_info.is_bound = true
-                var_info.reads += 1
-             end
+            var_name = inner
+            var_info = get_var(variables, var_name)
+            var_info.is_bound = true
+            var_info.reads += 1
+            next
           end
         end
       end
-      
+
       # Standard ruby #{} interpolation nodes contain `interpolation` nodes, which we traverse into normally.
-      
+
       # Traverse children
       node.each_named_child do |child|
         visit_node(child, variables, current_method, false)
