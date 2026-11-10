@@ -94,17 +94,31 @@
     state.actionRouterInstalled = true;
 
     global.document.addEventListener("mochi:action", function (event) {
-      var action = event && event.detail && event.detail.action;
-      if (!action) return;
+      var detail = event && event.detail;
+      if (!detail || !detail.action) return;
 
       state.elements.forEach(function (element) {
-        element._dispatchAction(action);
+        element._dispatchAction(detail);
       });
     });
   }
 
-  // Drains Ruby `Mochi.emit("action")` calls. Actions are published on the
-  // document so every mounted component can handle the ones it implements.
+  function parseEmitLine(line) {
+    var parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      return { action: line };
+    }
+    if (typeof parsed === "string") return { action: parsed };
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { action: line };
+    if (typeof parsed.action !== "string") return null;
+    return parsed;
+  }
+
+  // Drains Ruby `Mochi.emit` calls. New entries are JSON objects carrying an
+  // optional target tag and payload; plain action lines from older components
+  // still route through the same document-level action bus.
   function drainEmits(module) {
     if (!module || !module._mochi_emit_outbox_offset ||
         !module._mochi_emit_outbox_len || !module._mochi_emit_outbox_clear) {
@@ -116,10 +130,17 @@
     var text = offset ? decode(module.HEAPU8.subarray(offset, offset + length)) : "";
     module._mochi_emit_outbox_clear();
     if (!text || !global.document) return;
-    text.split("\n").forEach(function (action) {
-      if (!action) return;
+    text.split("\n").forEach(function (line) {
+      var entry = parseEmitLine(line);
+      if (!entry || !entry.action) return;
       global.document.dispatchEvent(new global.CustomEvent("mochi:action", {
-        detail: { action: action }
+        detail: {
+          action: entry.action,
+          target: entry.target === undefined ? null : entry.target,
+          payload: entry.payload,
+          hasPayload: Object.prototype.hasOwnProperty.call(entry, "payload") &&
+            entry.payload !== null && entry.payload !== undefined
+        }
       }));
     });
   }
@@ -939,8 +960,16 @@
         });
       }
 
-      _dispatchAction(action) {
+      _dispatchAction(detail) {
+        var action = typeof detail === "string" ? detail : detail && detail.action;
         if (!action || this._mochiDisconnected) return;
+
+        var target = detail && typeof detail === "object" ? detail.target : null;
+        var component = this._mochiComponent || {};
+        if (target) {
+          var tagName = String(component.tag_name || "").toLowerCase();
+          if (tagName !== String(target).toLowerCase()) return;
+        }
 
         var module = this._mochiModule;
         var instance = this._mochiInstance;
@@ -951,7 +980,20 @@
           if (!actionSupported(module, this, action)) return;
 
           var symbol = intern(module, action);
-          if (module._mochi_dispatch_event(instance, symbol) !== 1) {
+          var hasPayload = false;
+          if (detail && typeof detail === "object") {
+            hasPayload = detail.hasPayload !== undefined
+              ? Boolean(detail.hasPayload)
+              : detail.payload !== undefined && detail.payload !== null;
+          }
+          var payload = hasPayload ? detail.payload : null;
+          var dispatched;
+          if (requiredArgumentCount(module, instance, symbol) === 1) {
+            dispatched = dispatchEventArgs(module, instance, symbol, [payload]);
+          } else {
+            dispatched = module._mochi_dispatch_event(instance, symbol) === 1;
+          }
+          if (!dispatched) {
             throw new Error("mochi-loader: action dispatch failed for " + action + ": " + lastError(module));
           }
           if (!this._mochiDisconnected) {

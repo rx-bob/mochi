@@ -29,6 +29,13 @@ const COMPONENT = {
   ],
 };
 
+const LOGS_COMPONENT = {
+  ...COMPONENT,
+  tag_name: "my-logs",
+  class_name: "MyLogs",
+  chi_file: "my-logs.chi",
+};
+
 function manifest(components) {
   return {
     components,
@@ -346,6 +353,103 @@ test("one document action listener serves every mounted component and caches met
   );
   assert.equal(log.hasMethodCalls.filter((name) => name === "increment").length, 1);
   assert.equal(actionListeners, 1);
+});
+
+test("action payloads reach one-argument handlers and target tags filter sibling components", async () => {
+  const { module, log } = await setup([COMPONENT, LOGS_COMPONENT]);
+  log.methods.add("select_trace");
+  log.requiredArgs.set("select_trace", 1);
+
+  const counter = document.createElement("my-counter");
+  const firstLogs = document.createElement("my-logs");
+  const secondLogs = document.createElement("my-logs");
+  document.body.appendChild(counter);
+  document.body.appendChild(firstLogs);
+  document.body.appendChild(secondLogs);
+  await Promise.all([counter._mochiReady, firstLogs._mochiReady, secondLogs._mochiReady]);
+
+  module.queueEmit(JSON.stringify({
+    action: "select_trace",
+    target: "my-logs",
+    payload: { id: "tr_9f2a" }
+  }) + "\n");
+  counter._dispatchAction("increment");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const selectSymbol = log.symbols.get("select_trace");
+  assert.ok(selectSymbol);
+  assert.deepEqual(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
+    [
+      { instance: "2", methodSymbol: selectSymbol, args: [{ id: "tr_9f2a" }] },
+      { instance: "3", methodSymbol: selectSymbol, args: [{ id: "tr_9f2a" }] }
+    ]
+  );
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === selectSymbol).length,
+    0
+  );
+});
+
+test("unfiltered JSON emits reach every listener and zero-argument handlers ignore payloads", async () => {
+  const { module, log } = await setup([COMPONENT, LOGS_COMPONENT]);
+  log.methods.add("show_home");
+
+  const counter = document.createElement("my-counter");
+  const logs = document.createElement("my-logs");
+  document.body.appendChild(counter);
+  document.body.appendChild(logs);
+  await Promise.all([counter._mochiReady, logs._mochiReady]);
+
+  module.queueEmit(JSON.stringify({
+    action: "show_home",
+    target: null,
+    payload: { ignored: true }
+  }) + "\n");
+  counter._dispatchAction("increment");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const homeSymbol = log.symbols.get("show_home");
+  assert.ok(homeSymbol);
+  assert.deepEqual(
+    log.dispatched.filter((entry) => entry.methodSymbol === homeSymbol),
+    [
+      { instance: "1", methodSymbol: homeSymbol },
+      { instance: "2", methodSymbol: homeSymbol }
+    ]
+  );
+  assert.equal(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === homeSymbol).length,
+    0
+  );
+});
+
+test("plain action lines and null payloads remain backwards compatible", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  log.methods.add("select_trace");
+  log.requiredArgs.set("select_trace", 1);
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit("reset\n");
+  element._dispatchAction("increment");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const resetSymbol = log.symbols.get("reset");
+  assert.ok(resetSymbol);
+  assert.deepEqual(log.dispatched.at(-1), { instance: "1", methodSymbol: resetSymbol });
+
+  module.queueEmit(JSON.stringify({ action: "select_trace", target: null, payload: null }) + "\n");
+  element._dispatchAction("increment");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const selectSymbol = log.symbols.get("select_trace");
+  assert.deepEqual(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
+    [{ instance: "1", methodSymbol: selectSymbol, args: [null] }]
+  );
 });
 
 test("multiple instances share one class and irep but keep independent targets and state", async () => {
