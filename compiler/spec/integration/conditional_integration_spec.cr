@@ -6,7 +6,7 @@ require "../../src/bind_extractor"
 require "../../src/html/conditional_processor"
 require "../../src/ruby/conditional_method_generator"
 require "../../src/ruby/ruby_understander"
-require "../../src/webcomponents/web_component"
+require "../../src/webcomponents/binding_manifest"
 require "../../src/mochi_cmp"
 require "../../src/tree-sitter/instance_var_analyzer"
 require "../../src/html/attribute_conditional_extractor"
@@ -100,7 +100,7 @@ def transpile_test_component(rb_file : String)
       end
 
       web_comp_generator = ComponentGenerator.new
-      web_component = web_comp_generator.generate(
+      manifest = web_comp_generator.generate(
         mochi_cmp_name = cls_name,
         tag_name = tag_name.not_nil!,
         css,
@@ -110,13 +110,20 @@ def transpile_test_component(rb_file : String)
         conditional_result.conditionals
       )
 
+      rewritten_ruby_code = web_comp_generator.rewrite_ruby(
+        amped_ruby_code,
+        cls_name,
+        manifest,
+        methods
+      )
+
       return MochiComponent.new(
         "/test/component.rb",
         cls_name,
         imports,
-        ruby_code = amped_ruby_code,
-        web_component,
-        html,
+        ruby_code = rewritten_ruby_code,
+        manifest,
+        manifest.html_template,
         css
       )
     end
@@ -173,7 +180,7 @@ RUBY
 
       if component
         ruby_code = component.ruby_code
-        js_code = component.web_component.js_code
+        manifest = component.manifest
 
         # Verify Ruby methods were generated
         ruby_code.should contain("def __mochi_cond_0")
@@ -185,20 +192,20 @@ RUBY
         ruby_code.should contain("@enabled")
         ruby_code.should contain("@count < 0")
 
-        # Verify JavaScript calls methods by ID
-        js_code.should contain("updateConditional(")
-        js_code.should contain("$__mochi_cond_")
-
-        # Verify comment anchors are used
-        js_code.should contain("if-anchor-")
-
-        # Verify old approach is removed
-        js_code.should_not contain("condition.replace(/@")
+        # Verify the manifest carries conditional bindings instead of JavaScript
+        cond_bindings = manifest.bindings.select { |binding| binding.kind == "cond" }
+        cond_bindings.size.should eq(3)
+        cond_bindings.map(&.getter_expr).should contain("@count > 5")
+        cond_bindings.map(&.getter_expr).should contain("@enabled")
+        cond_bindings.map(&.getter_expr).should contain("@count < 0")
+        manifest.html_template.should_not contain("{if ")
 
         # Verify original methods still present
         ruby_code.should contain("def increment")
         ruby_code.should contain("def get_count")
         ruby_code.should contain("def set_count")
+        ruby_code.should_not contain("def html")
+        ruby_code.should_not contain("def css")
       end
     end
 
@@ -236,6 +243,7 @@ RUBY
 
         # Should not have conditional methods
         ruby_code.should_not contain("__mochi_cond_")
+        component.manifest.bindings.any? { |binding| binding.kind == "cond" }.should be_false
 
         # Should still have getters/setters
         ruby_code.should contain("def get_value")
@@ -283,7 +291,6 @@ RUBY
 
       if component
         ruby_code = component.ruby_code
-        js_code = component.web_component.js_code
 
         # Should have methods for both conditionals
         ruby_code.should contain("def __mochi_cond_0")
@@ -293,9 +300,10 @@ RUBY
         ruby_code.should contain("@outer")
         ruby_code.should contain("@inner")
 
-        # Both conditionals should be evaluated in JS
-        js_code.should contain("$__mochi_cond_0")
-        js_code.should contain("$__mochi_cond_1")
+        # The manifest binds the top-level conditional to the DOM anchor
+        cond_bindings = component.manifest.bindings.select { |binding| binding.kind == "cond" }
+        cond_bindings.size.should eq(1)
+        cond_bindings.first.getter_expr.should eq("@outer")
       end
     end
 
@@ -384,7 +392,6 @@ RUBY
 
       if component
         ruby_code = component.ruby_code
-        js_code = component.web_component.js_code
 
         # Should have the computed attribute method
         ruby_code.should contain("def __mochi_attr_cond_0")
@@ -392,8 +399,10 @@ RUBY
         ruby_code.should contain(%Q{if @active})
         ruby_code.should contain(%Q{_res += "active-\#{@id}"})
 
-        # JS code should expect the computed property as an observed attribute/reactable
-        js_code.should contain("__mochi_attr_cond_0")
+        # The manifest carries the computed attribute as a normal attribute binding
+        attr_binding = component.manifest.bindings.find! { |binding| binding.kind == "attr" }
+        attr_binding.attr_name.should eq("class")
+        attr_binding.getter_expr.should eq("__mochi_attr_cond_0")
       end
     end
   end

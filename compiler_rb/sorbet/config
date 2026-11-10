@@ -1,6 +1,0 @@
---dir
-src/
---dir
-sorbet/rbi/
---ignore
-tree_sitter/

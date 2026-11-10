@@ -57,14 +57,8 @@ class Compiler
     puts "Done with preparing components for transpilation"
 
     trace_slice(trace, "AssembleJS", sequence_id) do
-      components_js_code = ""
-      components.each do |mochi_comp|
-        components_js_code = components_js_code + "\n" + mochi_comp.web_component.js_code + "\n"
-      end
-      components_js_code = components_js_code + "\n" + "console.log('Mochi booted.');" + "\n"
-
       puts "Writing #{build_dir}/bundle.js"
-      File.write("#{build_dir}/bundle.js", components_js_code)
+      File.write("#{build_dir}/bundle.js", "console.log('Mochi booted.');\n")
     end
 
     puts "Transpilation finished"
@@ -149,45 +143,49 @@ class Compiler
       conditional_result = ConditionalProcessor.process(html)
 
       amped_ruby_code = ConditionalMethodGenerator.inject_methods_into_class(
-      amped_ruby_code,
-      cls_name,
-      conditional_result.conditionals
+        amped_ruby_code,
+        cls_name,
+        conditional_result.conditionals
       )
 
       each_result = EachProcessor.process(conditional_result.html)
 
       amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
-      amped_ruby_code,
-      cls_name,
-      each_result.each_blocks
+        amped_ruby_code,
+        cls_name,
+        each_result.each_blocks
       )
 
-      bindings = BindExtractor.extract(each_result.html)
       tag_name = RubyUnderstander.get_cmp_name(rb_file, cls_name)
 
-
       if tag_name
-        web_component = ComponentGenerator.new.generate(
-            mochi_cmp_name = cls_name,
-            tag_name = tag_name.not_nil!,
-            css,
-            html = each_result.html,
-            reactables,
-            bindings.bindings,
-            conditional_result.conditionals,
-            each_result.each_blocks
+        manifest = ComponentGenerator.new.generate(
+          mochi_cmp_name = cls_name,
+          tag_name = tag_name.not_nil!,
+          css,
+          html = each_result.html,
+          reactables,
+          {} of String => String,
+          conditional_result.conditionals,
+          each_result.each_blocks
+        )
+
+        rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
+          amped_ruby_code,
+          cls_name,
+          manifest,
+          methods
         )
 
         print_cmp_end_seperator(cls_name, i)
-        # puts no_types_ruby_code
         return MochiComponent.new(
-        absolute_path,
-        cls_name,
-        imports,
-        ruby_code = amped_ruby_code,
-        web_component,
-        html,
-        css
+          absolute_path,
+          cls_name,
+          imports,
+          ruby_code = rewritten_ruby_code,
+          manifest,
+          manifest.html_template,
+          css
         )
       end
     else

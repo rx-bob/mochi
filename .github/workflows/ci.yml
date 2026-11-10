@@ -87,14 +87,8 @@ jobs:
       - name: Install Playwright browsers
         run: cd e2e && npx playwright install --with-deps chromium
 
-      - name: Install swc for minification
-        run: npm install -g @swc/cli @swc/core
-
-      - name: Install Opal gem globally
-        run: gem install opal -v '~> 1.8' && gem install opal-browser -v '~> 0.3.5'
-
       - name: Compile Mochi for E2E tests
-        run: cd compiler && crystal run src/mochi.cr --link-flags="-L$GITHUB_WORKSPACE/fragments/libs" -- -i "../devground/components" -o "../devground/public" --minimize
+        run: cd compiler && crystal run src/mochi.cr --link-flags="-L$GITHUB_WORKSPACE/fragments/libs" -- -i "../devground/components" -o "../devground/public"
         env:
           MO_INT_LOGS: false
           MO_INT_LOGS_LEVEL: INFO
