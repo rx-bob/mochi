@@ -1,6 +1,7 @@
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
 require "./trace_helper"
 require "../../webcomponents/component_generator"
+require "../../gvm/mrbc_compiler"
 require "../../tree-sitter/instance_var_analyzer"
 require "../../html/attribute_conditional_extractor"
 require "../../html/attribute_hash_extractor"
@@ -11,7 +12,7 @@ require "../../ruby/attribute_hash_generator"
 class Compiler
   include TraceHelper
 
-  def initialize()
+  def initialize
   end
 
   def transpile_directory(input_dir : String, output_dir : String, builder_man : BuilderMan, trace : Pftrace::Trace? = nil, sequence_id : UInt32 = 1_u32)
@@ -43,8 +44,8 @@ class Compiler
               end
               done_channel.send(nil)
             end
-            rescue ex
-              puts "Error processing file #{path}: #{ex.message}\n#{ex.inspect_with_backtrace}"
+          rescue ex
+            puts "Error processing file #{path}: #{ex.message}\n#{ex.inspect_with_backtrace}"
           end
         end
       end
@@ -61,8 +62,14 @@ class Compiler
       File.write("#{build_dir}/bundle.js", "console.log('Mochi booted.');\n")
     end
 
-    puts "Transpilation finished"
+    trace_slice(trace, "EmitBytecode", sequence_id) do
+      compiler = MrbcCompiler.new
+      compiler.compile(components, output_dir)
+      compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
+      puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
+    end
 
+    puts "Transpilation finished"
   end
 
   private def transpile_component(rb_file : String, i : Int32, absolute_path : String)
@@ -76,13 +83,12 @@ class Compiler
     end
 
     methods : Hash(String, RubyDef) = RubyUnderstander.extract_method_bodies(rb_file, cls_name)
-    #puts methods
+    # puts methods
 
     amped_ruby_code = rb_file
     if methods.has_key?("css")
-
-    #css = methods["css"]
-    #puts "css:#{css.body[1...css.body.size - 1]}"
+      # css = methods["css"]
+      # puts "css:#{css.body[1...css.body.size - 1]}"
       imports = RubyUnderstander.get_imports(rb_file)
       css = RubyUnderstander.extract_raw_string_from_def_body(methods["css"].body, "css")
       html = RubyUnderstander.extract_raw_string_from_def_body(methods["html"].body, "html")
@@ -193,6 +199,4 @@ class Compiler
     end
     print_cmp_end_seperator(cls_name, i)
   end
-
-
 end
