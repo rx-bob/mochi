@@ -9,6 +9,7 @@ require "../../html/attribute_hash_extractor"
 require "../../html/event_argument_extractor"
 require "../../html/conditional_processor"
 require "../../html/each_processor"
+require "../../html/template_expression"
 require "../../ruby/attribute_method_generator"
 require "../../ruby/attribute_hash_generator"
 require "../../ruby/conditional_method_generator"
@@ -119,6 +120,12 @@ class Compiler
             ""
           end
     html = html_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
+    source_locator = TemplateSourceLocator.new(
+      rb_file,
+      absolute_path,
+      html_method.raw_string_start || 0,
+      html_method.raw_string_end || rb_file.bytesize
+    )
 
     # Remove html and css before injecting helpers. Their string bodies may
     # contain `{end}`, which must never be mistaken for the class terminator.
@@ -145,7 +152,7 @@ class Compiler
     )
 
     # 3. Extract event handler arguments into data- attributes
-    html = EventArgumentExtractor.process(html)
+    html = EventArgumentExtractor.process(html, source_locator)
 
     # Analyze instance variables to determine reactables automatically
     vars = TreeSitter::InstanceVarAnalyzer.analyze(root)
@@ -195,7 +202,8 @@ class Compiler
       {} of String => String,
       conditional_result.conditionals,
       each_result.each_blocks,
-      methods.keys
+      methods.keys,
+      source_locator
     )
 
     validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, root)

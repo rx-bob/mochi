@@ -1,3 +1,5 @@
+require "./template_expression"
+
 class ConditionalResult
   property html : String
   property conditionals : Array(ConditionalBlock)
@@ -199,8 +201,10 @@ class ConditionalProcessor
   private def self.match_token(html : String, pos : Int32, token : String, token_len : Int32) : ConditionalMatch?
     return nil unless html.index(token, pos) == pos
 
-    close_brace = html.index('}', pos + token_len)
-    return nil unless close_brace
+    open_byte = TemplateExpressionParser.char_to_byte(html, pos)
+    close_byte = TemplateExpressionParser.matching_brace(html, open_byte)
+    return nil unless close_byte
+    close_brace = TemplateExpressionParser.byte_to_char(html, close_byte)
 
     ConditionalMatch.new(
       html[(pos + token_len)...close_brace].strip,
@@ -219,10 +223,11 @@ class ConditionalProcessor
   private def self.try_match_each_token(html : String, pos : Int32) : Int32?
     return nil unless html.index(EACH_TOKEN, pos) == pos
 
-    close_brace = html.index('}', pos + EACH_TOKEN_LEN)
-    return nil unless close_brace
+    open_byte = TemplateExpressionParser.char_to_byte(html, pos)
+    close_byte = TemplateExpressionParser.matching_brace(html, open_byte)
+    return nil unless close_byte
 
-    close_brace + 1
+    TemplateExpressionParser.byte_to_char(html, close_byte) + 1
   end
 
   private def self.skip_each_block(html : String, content_start : Int32) : Int32

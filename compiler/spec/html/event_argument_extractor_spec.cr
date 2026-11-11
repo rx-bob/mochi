@@ -81,4 +81,15 @@ describe EventArgumentExtractor do
     args[1]["value"].as_s.should eq("format(1, 2)")
     args[2]["value"].as_s.should eq("a,b")
   end
+
+  it "finds event attributes after multibyte text" do
+    html = %Q[<p>café</p><button onclick="{delete_item(item.id, "}")}">Delete</button>]
+    result = EventArgumentExtractor.process(html)
+
+    result.should contain(%Q(onclick="{delete_item}"))
+    args = event_arguments(result, "click")
+    args.size.should eq(2)
+    args[0]["value"].as_s.should eq("item.id")
+    args[1]["value"].as_s.should eq("}")
+  end
 end

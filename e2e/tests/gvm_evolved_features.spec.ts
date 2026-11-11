@@ -772,6 +772,82 @@ end
   }
 });
 
+test("nested template expressions keep hashes, quoted braces, and event arguments", async ({ page }) => {
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-expressions-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "lib", "NestedProbe.rb"), `
+class NestedProbe
+  @tag_name = "nested-probe"
+  @record
+  @status
+
+  def initialize
+    @record = { label: "alpha", meta: { suffix: "}" } }
+    @status = "idle"
+  end
+
+  def format_record(record, suffix)
+    "#{record[:label]}#{suffix}"
+  end
+
+  def html
+    %Q[
+      <div class="nested-probe">
+        <p class="nested">{format_record(@record, @record[:meta][:suffix])}</p>
+        <span class="literal">Literal café {{braces}} and {format_record(@record, "}")}</span>
+        <a class="attr" title="{format_record(@record, @record[:meta][:suffix])}">link</a>
+        <button class="act" onclick="{apply(@record[:label])}">Apply</button>
+        <p class="status">{@status}</p>
+      </div>
+    ]
+  end
+
+  def apply(value)
+    @status = "picked=#{value}"
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <nested-probe></nested-probe>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const probe = page.locator("nested-probe");
+    await expect(probe.locator("p.nested")).toHaveText("alpha}");
+    await expect(probe.locator("span.literal")).toHaveText("Literal café {braces} and alpha}");
+    await expect(probe.locator("a.attr")).toHaveAttribute("title", "alpha}");
+
+    await probe.locator("button.act").click();
+    await expect(probe.locator("p.status")).toHaveText("picked=alpha");
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 test("Sencha frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
   test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);

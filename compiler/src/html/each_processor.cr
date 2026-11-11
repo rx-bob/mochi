@@ -1,3 +1,5 @@
+require "./template_expression"
+
 class EachResult
   property html : String
   property each_blocks : Array(EachBlock)
@@ -156,8 +158,10 @@ class EachProcessor
   def self.try_match_each_token(html : String, pos : Int32) : EachMatch?
     return nil unless html.index(EACH_TOKEN, pos) == pos
 
-    close_brace = html.index('}', pos + EACH_TOKEN_LEN)
-    return nil unless close_brace
+    open_byte = TemplateExpressionParser.char_to_byte(html, pos)
+    close_byte = TemplateExpressionParser.matching_brace(html, open_byte)
+    return nil unless close_byte
+    close_brace = TemplateExpressionParser.byte_to_char(html, close_byte)
 
     loop_str = html[(pos + EACH_TOKEN_LEN)...close_brace].strip
     loop_def = extract_loop_definition(loop_str)

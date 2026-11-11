@@ -1789,6 +1789,57 @@ test("strict @ivar, method, and attribute conditional placeholders patch in plac
   assert.equal(box.classList.contains("active"), false);
 });
 
+test("compiler placeholder ranges preserve nested and literal braces", async () => {
+  const mixedText = 'Literal \uE000braces\uE001 and {format(@h["key"], {a: 1})}';
+  const mixedStart = Buffer.byteLength(mixedText.slice(0, mixedText.indexOf("{format")), "utf8");
+  const nestedAttr = "{format(@h['key'], '}')}";
+  const component = {
+    tag_name: "range-check",
+    class_name: "RangeCheck",
+    chi_file: "range-check.chi",
+    html_template:
+      '<span class="mixed">Literal {braces} and {format(@h["key"], {a: 1})}</span>' +
+      `<a class="nested" title="${nestedAttr}">link</a>`,
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0, 0],
+        kind: "text",
+        attr_name: null,
+        template_text: mixedText,
+        getter_sym: "__mochi_bind_0",
+        template_start: mixedStart,
+        template_end: Buffer.byteLength(mixedText, "utf8"),
+      },
+      {
+        id: 1,
+        path: [1],
+        kind: "attr",
+        attr_name: "title",
+        template_text: nestedAttr,
+        getter_sym: "__mochi_bind_1",
+        template_start: 0,
+        template_end: Buffer.byteLength(nestedAttr, "utf8"),
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([component]);
+  module.patchQueue.push({ patches: [{ id: 0, value: "ok" }, { id: 1, value: "tip" }] });
+  const element = document.createElement("range-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element.shadowRoot.querySelector(".mixed").textContent, "Literal {braces} and ok");
+  assert.equal(element.shadowRoot.querySelector(".nested").getAttribute("title"), "tip");
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "" }] });
+  loader.applyPatches(element);
+  assert.equal(element.shadowRoot.querySelector(".nested").hasAttribute("title"), false);
+});
+
 test("html and attribute patches update their cached targets", async () => {
   const htmlComponent = {
     tag_name: "html-check",

@@ -20,6 +20,15 @@ describe ConditionalProcessor do
       result.conditionals[0].id.should eq(0)
     end
 
+    it "processes conditionals after multibyte text" do
+      html = "café{if @show}<p>Visible!</p>{end}"
+      result = ConditionalProcessor.process(html)
+
+      result.html.should contain("<!--if-anchor-0-->")
+      result.conditionals.size.should eq(1)
+      result.conditionals[0].condition.should eq("@show")
+    end
+
     it "processes multiple if conditions" do
       html = %Q{
         <div>

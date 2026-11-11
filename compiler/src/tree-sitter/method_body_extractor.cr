@@ -180,6 +180,7 @@ module TreeSitter
       parameters = extract_parameters(method_node)
       body = extract_body_as_lines(method_node, source_lines)
       raw_string = StringExtractor.extract_string_from_method_node(method_node)
+      raw_range = StringExtractor.string_source_range(method_node)
 
       return RubyDef.new(
         method_name,
@@ -187,7 +188,9 @@ module TreeSitter
         class_name,
         body,
         parameters,
-        raw_string
+        raw_string,
+        raw_range.try(&.[0]),
+        raw_range.try(&.[1])
       )
     end
 

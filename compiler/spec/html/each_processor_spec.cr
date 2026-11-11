@@ -130,4 +130,12 @@ describe EachProcessor do
     second_top.id.should eq(2)
   end
 
+  it "finds each blocks after multibyte text" do
+    html = "é{each @items as item}<li>{item}</li>{end}"
+    result = EachProcessor.extract_each_blocks(html)
+    result.size.should eq(1)
+    check_loop_def(result[0].loop_def, "@items", "item", nil)
+    result[0].content.should eq("<li>{item}</li>")
+  end
+
 end

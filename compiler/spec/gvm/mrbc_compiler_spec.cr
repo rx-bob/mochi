@@ -27,7 +27,21 @@ RUBY
     [] of EventDescriptor
   )
   bindings = [
-    BindingDescriptor.new(0, [0, 0], "text", "__mochi_bind_0", nil, "Count: {count}", "@count"),
+    BindingDescriptor.new(
+      0,
+      [0, 0],
+      "text",
+      "__mochi_bind_0",
+      nil,
+      "Count: {count}",
+      "@count",
+      [] of ConditionalBranchDescriptor,
+      nil,
+      8,
+      21,
+      [] of String,
+      TemplateSourceSpan.new("lib/my_counter.rb", 12, 9, 12, 22, 13)
+    ),
     BindingDescriptor.new(
       1,
       [2],
@@ -37,6 +51,15 @@ RUBY
       "<p>High</p>",
       "__mochi_cond_0",
       [branch]
+    ),
+    BindingDescriptor.new(
+      3,
+      [1],
+      "expr",
+      "__mochi_bind_3",
+      nil,
+      "@query",
+      "@query"
     ),
   ]
   events = [
@@ -139,6 +162,12 @@ describe MrbcCompiler do
       bindings.first.as_h["id"].as_i.should eq(0)
       bindings.first.as_h["path"].as_a.map(&.as_i).should eq([0, 0])
       bindings.first.as_h["getter_sym"].as_s.should eq("__mochi_bind_0")
+      bindings.first.as_h["template_start"].as_i.should eq(8)
+      bindings.first.as_h["template_end"].as_i.should eq(21)
+      source = bindings.first.as_h["source"].as_h
+      source["file"].as_s.should eq("lib/my_counter.rb")
+      source["line"].as_i.should eq(12)
+      source["column"].as_i.should eq(9)
 
       cond = bindings.find { |entry| entry.as_h["kind"].as_s == "cond" }.not_nil!
       cond.as_h["getter_sym"].as_s.should eq("__mochi_bind_1")
@@ -148,6 +177,9 @@ describe MrbcCompiler do
       branch_bindings = branches.first.as_h["bindings"].as_a
       branch_bindings.first.as_h["id"].as_i.should eq(2)
       branch_bindings.first.as_h["getter_sym"].as_s.should eq("__mochi_bind_2")
+
+      expr = bindings.find { |entry| entry.as_h["kind"].as_s == "expr" }.not_nil!
+      expr.as_h["getter_expr"].as_s.should eq("@query")
 
       events = component_json["events"].as_a
       events.first.as_h["event"].as_s.should eq("click")

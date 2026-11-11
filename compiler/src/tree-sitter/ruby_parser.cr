@@ -59,6 +59,18 @@ module TreeSitter
       LibTreeSitter.ts_node_end_byte(@raw).to_i
     end
 
+    def has_error? : Bool
+      LibTreeSitter.ts_node_has_error(@raw)
+    end
+
+    def start_point : LibTreeSitter::TSPoint
+      LibTreeSitter.ts_node_start_point(@raw)
+    end
+
+    def end_point : LibTreeSitter::TSPoint
+      LibTreeSitter.ts_node_end_point(@raw)
+    end
+
     def to_s(io : IO)
       ptr = LibTreeSitter.ts_node_string(@raw)
       str = String.new(ptr)

@@ -36,6 +36,50 @@ describe ComponentGenerator do
     event.method_sym.should eq("increment")
   end
 
+  it "keeps nested calls, hashes, and quoted braces in one text binding" do
+    html = %q(<p>{format(@h["key"], {a: 1, b: "}"})}</p>)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    binding = manifest.bindings.first
+    binding.kind.should eq("html")
+    binding.getter_expr.should eq(%q(format(@h["key"], {a: 1, b: "}"})))
+    binding.template_start.should eq(0)
+    binding.template_end.should eq(binding.template_text.not_nil!.bytesize)
+    manifest.html_template.should contain(html)
+  end
+
+  it "records placeholder ranges without consuming literal double braces" do
+    html = %q(<p>{{literal}} {@count}</p>)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    binding = manifest.bindings.first
+    binding.getter_expr.should eq("@count")
+    start = binding.template_start.not_nil!
+    finish = binding.template_end.not_nil!
+    binding.template_text.not_nil!.byte_slice(start, finish - start).should eq("{@count}")
+    manifest.html_template.should contain("{literal}")
+  end
+
+  it "uses the same parser for nested event arguments" do
+    html = EventArgumentExtractor.process(
+      %q(<button onclick="{select({a: 1}, "}", format(1, 2))}">Pick</button>)
+    )
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      html,
+      method_names: ["select"]
+    )
+
+    event = manifest.events.first
+    event.args.size.should eq(3)
+    event.args[0].kind.should eq("expr")
+    event.args[0].value.should eq(%q({a: 1}))
+    event.args[1].value.should eq("}")
+    event.args[2].value.should eq("format(1, 2)")
+  end
+
   it "records structured event arguments from the template" do
     html = EventArgumentExtractor.process(
       %Q(<button onclick="{select_row('tr_9f2a', 1, $event)}">Pick</button>)

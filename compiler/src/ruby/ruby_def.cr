@@ -5,7 +5,18 @@ class RubyDef
   property body : Array(String)
   property parameters : Array(String)
   property raw_string : String?
+  property raw_string_start : Int32?
+  property raw_string_end : Int32?
 
-  def initialize(@name, @file_name, @class_name, @body, @parameters, @raw_string : String? = nil)
+  def initialize(
+    @name,
+    @file_name,
+    @class_name,
+    @body,
+    @parameters,
+    @raw_string : String? = nil,
+    @raw_string_start : Int32? = nil,
+    @raw_string_end : Int32? = nil,
+  )
   end
 end

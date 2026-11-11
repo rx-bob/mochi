@@ -1,4 +1,5 @@
 require "../html/event_argument"
+require "../html/template_expression"
 require "../ruby/inject_utils"
 require "../ruby/ruby_def"
 require "../tree-sitter/method_body_extractor"
@@ -13,6 +14,10 @@ struct BindingDescriptor
   property getter_expr : String?
   property branches : Array(ConditionalBranchDescriptor)
   property setter_sym : String?
+  property template_start : Int32?
+  property template_end : Int32?
+  property scope : Array(String)
+  property span : TemplateSourceSpan?
 
   def initialize(
     @id : Int32,
@@ -24,6 +29,10 @@ struct BindingDescriptor
     @getter_expr : String? = nil,
     @branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
     @setter_sym : String? = nil,
+    @template_start : Int32? = nil,
+    @template_end : Int32? = nil,
+    @scope : Array(String) = [] of String,
+    @span : TemplateSourceSpan? = nil,
   )
   end
 end

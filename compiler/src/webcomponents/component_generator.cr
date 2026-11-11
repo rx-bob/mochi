@@ -4,6 +4,7 @@ require "./binding_manifest"
 require "../html/conditional_processor"
 require "../html/each_processor"
 require "../html/event_argument_extractor"
+require "../html/template_expression"
 
 class ComponentGenerator
   CONTROL_TEMPLATE_PREFIXES = ["if ", "unless ", "elsif ", "each "]
@@ -17,10 +18,15 @@ class ComponentGenerator
   @next_each_id : Int32 = 0
   @mochi_cmp_name : String = ""
   @event_expressions : Array(String) = [] of String
+  @expression_parser : TemplateExpressionParser
 
   # Includes top-level and branch-discovered each blocks so callers can inject
   # every generated each helper method after generation.
   getter each_blocks
+
+  def initialize
+    @expression_parser = TemplateExpressionParser.new
+  end
 
   def self.escape_double_braces(html : String) : String
     html.gsub("{{", ESCAPED_LBRACE).gsub("}}", ESCAPED_RBRACE)
@@ -40,6 +46,7 @@ class ComponentGenerator
     conditionals : Array(ConditionalBlock) = [] of ConditionalBlock,
     each_blocks : Array(EachBlock) = [] of EachBlock,
     method_names : Array(String) = [] of String,
+    source_locator : TemplateSourceLocator? = nil,
   ) : ComponentManifest
     @mochi_cmp_name = mochi_cmp_name
     @conditionals = conditionals
@@ -47,6 +54,10 @@ class ComponentGenerator
     @next_binding_id = 0
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
     @event_expressions.clear
+    @expression_parser = TemplateExpressionParser.new(source_locator)
+
+    validate_conditional_expressions(conditionals)
+    validate_each_expressions(each_blocks)
 
     escaped_html = self.class.escape_double_braces(html)
     bindings = [] of BindingDescriptor
@@ -120,10 +131,11 @@ class ComponentGenerator
   end
 
   private def collect_text_bindings(text : String, path : Array(Int32), bindings : Array(BindingDescriptor))
-    text.scan(/\{([^}]+)\}/) do |match|
-      expression = match[1].strip
-      kind = text.strip == "{#{expression}}" ? "html" : "text"
-      bindings << new_binding(path, kind, nil, text, expression)
+    @expression_parser.scan(text, "text").each do |expression|
+      before = text.byte_slice(0, expression.template_start).strip
+      after = text.byte_slice(expression.template_end, text.bytesize - expression.template_end).strip
+      kind = before.empty? && after.empty? ? "html" : "text"
+      bindings << new_expression_binding(path, kind, nil, text, expression)
     end
   end
 
@@ -178,13 +190,28 @@ class ComponentGenerator
     path : Array(Int32),
     events : Array(EventDescriptor),
   ) : String
+    scope = [block.loop_def.item_name]
+    if index_name = block.loop_def.index_name
+      scope << index_name
+    end
+    validate_each_template_expressions(block.content, scope)
+
     content = self.class.escape_double_braces(EventArgumentExtractor.process(block.content))
-    content.gsub(/\bon([a-zA-Z]+)\s*=\s*(["'])\{([^}()]+)\}\2/) do |_, match|
+    content.gsub(/\bon([a-zA-Z]+)\s*=\s*(["'])\{([^}]+)\}\2/) do |_, match|
       event_name = match[1].downcase
       quote = match[2]
-      method_name = match[3].strip
+      method_name = match[3].strip.split("(").first
       events << EventDescriptor.new(path, event_name, method_name)
       "data-mochi-#{event_name}=#{quote}#{method_name}#{quote}"
+    end
+  end
+
+  private def validate_each_template_expressions(content : String, scope : Array(String))
+    @expression_parser.scan(scannable_template(content), "each", scope, validate: false).each do |expression|
+      inner = expression.source
+      next if CONTROL_TEMPLATE_KEYWORDS.includes?(inner)
+      next if CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
+      @expression_parser.validate!(expression)
     end
   end
 
@@ -221,8 +248,8 @@ class ComponentGenerator
         event_name = name[2..]
         next if event_name.empty?
 
-        if match = value.match(/\{([^}]+)\}/)
-          method_name = match[1].split("(").first.strip
+        if expression = @expression_parser.scan(value, "event").first?
+          method_name = expression.source.split("(").first.strip
           additions << {"data-mochi-#{event_name}", method_name}
           removals << name
           args = event_args(attrs, event_name)
@@ -244,9 +271,8 @@ class ComponentGenerator
     value : String,
     bindings : Array(BindingDescriptor),
   )
-    value.scan(/\{([^}]+)\}/) do |match|
-      expression = match[1].strip
-      bindings << new_binding(path, "attr", attr_name, value, expression)
+    @expression_parser.scan(value, "attribute").each do |expression|
+      bindings << new_expression_binding(path, "attr", attr_name, value, expression)
     end
   end
 
@@ -261,19 +287,19 @@ class ComponentGenerator
     events : Array(EventDescriptor),
     additions : Array(Tuple(String, String)),
   )
-    matches = value.scan(/\{([^}]+)\}/).to_a
+    matches = @expression_parser.scan(value, "prop")
     if matches.size != 1
       raise "bind:#{attr_name} requires exactly one @ivar placeholder"
     end
 
-    expression = matches.first[1].strip
-    unless expression.matches?(/\A@[a-zA-Z_][a-zA-Z0-9_]*\z/)
-      raise "bind:#{attr_name} requires an instance variable, got #{expression}"
+    expression = matches.first
+    unless expression.source.matches?(/\A@[a-zA-Z_][a-zA-Z0-9_]*\z/)
+      raise "bind:#{attr_name} requires an instance variable, got #{expression.source}"
     end
 
-    setter_sym = "__mochi_set_#{expression[1..].gsub(/[^a-zA-Z0-9_]/, "_")}"
+    setter_sym = "__mochi_set_#{expression.source[1..].gsub(/[^a-zA-Z0-9_]/, "_")}"
     event_name = attr_name == "checked" ? "change" : "input"
-    bindings << new_binding(path, "prop", attr_name, value, expression, setter_sym: setter_sym)
+    bindings << new_expression_binding(path, "prop", attr_name, value, expression, setter_sym: setter_sym)
     events << EventDescriptor.new(path, event_name, setter_sym)
     additions << {"data-mochi-#{event_name}", setter_sym}
   end
@@ -361,6 +387,33 @@ class ComponentGenerator
     args
   end
 
+  private def new_expression_binding(
+    path : Array(Int32),
+    kind : String,
+    attr_name : String?,
+    template_text : String,
+    expression : TemplateExpression,
+    branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
+    setter_sym : String? = nil,
+  ) : BindingDescriptor
+    id = allocate_binding_id
+    BindingDescriptor.new(
+      id,
+      path.dup,
+      kind,
+      "__mochi_bind_#{id}",
+      attr_name,
+      template_text,
+      normalize_expression(expression.source),
+      branches,
+      setter_sym,
+      expression.template_start,
+      expression.template_end,
+      expression.scope,
+      expression.span
+    )
+  end
+
   private def new_binding(
     path : Array(Int32),
     kind : String,
@@ -407,35 +460,40 @@ class ComponentGenerator
     end
   end
 
+  # Event argument descriptors are JSON in a data attribute. Their braces are
+  # data, not template syntax, so blank the value before scanning the DOM.
+  private def scannable_template(template : String) : String
+    template.gsub(/data-mochi-args-([a-zA-Z0-9_-]+)=(["'])(.*?)\2/m) do |_, match|
+      %(data-mochi-args-#{match[1]}="")
+    end
+  end
+
   private def validate_template_placeholders(class_name : String, template : String)
-    index = 0
-
-    while index < template.size
-      char = template[index]
-
-      case char
-      when '{'
-        close = template.index('}', index + 1)
-        unless close
-          snippet = template[index, Math.min(40, template.size - index)]
-          raise "Component '#{class_name}' contains an unclosed template placeholder: #{snippet}"
-        end
-
-        inner = template[(index + 1)...close].strip
-        if inner.empty?
-          raise "Component '#{class_name}' contains an empty template placeholder '{}'"
-        end
-
-        if CONTROL_TEMPLATE_KEYWORDS.includes?(inner) || CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
-          raise "Component '#{class_name}' contains an uncompiled template block '{#{inner}}'"
-        end
-
-        index = close + 1
-      when '}'
-        raise "Component '#{class_name}' contains a stray '}' in its template"
-      else
-        index += 1
+    @expression_parser.scan(scannable_template(template), "template", validate: false).each do |expression|
+      inner = expression.source
+      if CONTROL_TEMPLATE_KEYWORDS.includes?(inner) || CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
+        raise TemplateExpressionError.new(
+          "Component '#{class_name}' contains an uncompiled template block '{#{inner}}'",
+          expression.span
+        )
       end
+      @expression_parser.validate!(expression)
+    end
+  end
+
+  private def validate_conditional_expressions(conditionals : Array(ConditionalBlock))
+    conditionals.each do |block|
+      block.branches.each do |branch|
+        if condition = branch.condition
+          @expression_parser.validate_source!(condition, "condition")
+        end
+      end
+    end
+  end
+
+  private def validate_each_expressions(each_blocks : Array(EachBlock))
+    each_blocks.each do |block|
+      @expression_parser.validate_source!(block.loop_def.array_name, "each")
     end
   end
 end

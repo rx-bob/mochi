@@ -380,6 +380,25 @@ class MrbcCompiler
       json.field "template_text", binding.template_text
       json.field "getter_sym", binding.getter_sym
       json.field "setter_sym", binding.setter_sym
+      if binding.kind == "expr"
+        json.field "getter_expr", binding.getter_expr
+      end
+      if start = binding.template_start
+        json.field "template_start", start
+      end
+      if finish = binding.template_end
+        json.field "template_end", finish
+      end
+      unless binding.scope.empty?
+        json.field "scope" do
+          json.array do
+            binding.scope.each { |name| json.string(name) }
+          end
+        end
+      end
+      if span = binding.span
+        write_span(json, span)
+      end
 
       unless binding.branches.empty?
         json.field "branches" do
@@ -393,6 +412,19 @@ class MrbcCompiler
             end
           end
         end
+      end
+    end
+  end
+
+  private def write_span(json : JSON::Builder, span : TemplateSourceSpan) : Nil
+    json.field "source" do
+      json.object do
+        json.field "file", span.file
+        json.field "line", span.line
+        json.field "column", span.column
+        json.field "end_line", span.end_line
+        json.field "end_column", span.end_column
+        json.field "length", span.length
       end
     end
   end

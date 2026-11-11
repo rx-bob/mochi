@@ -989,10 +989,84 @@
     return patches;
   }
 
-  function substitute(template, ids, values) {
+  function bindingRange(binding) {
+    if (typeof binding.template_start !== "number" ||
+        typeof binding.template_end !== "number" ||
+        binding.template_end <= binding.template_start) {
+      return null;
+    }
+    return { id: binding.id, start: binding.template_start, end: binding.template_end };
+  }
+
+  function addBindingEntry(state, binding) {
+    if (state.ids.indexOf(binding.id) !== -1) return;
+    state.ids.push(binding.id);
+    var range = bindingRange(binding);
+    if (range) state.entries.push(range);
+  }
+
+  // Compiler ranges are UTF-8 byte offsets. JavaScript strings index by
+  // UTF-16 code unit, so literals such as the private-use brace escapes and
+  // any non-ASCII user text need translating before `slice`.
+  function byteOffsetToIndex(text, target) {
+    var bytes = 0;
     var index = 0;
-    var result = String(template || "").replace(/\{([^}]+)\}/g, function (match) {
-      var id = ids[index++];
+    while (index < text.length && bytes < target) {
+      var code = text.codePointAt(index);
+      if (code <= 0x7f) {
+        bytes += 1;
+      } else if (code <= 0x7ff) {
+        bytes += 2;
+      } else if (code <= 0xffff) {
+        bytes += 3;
+      } else {
+        bytes += 4;
+      }
+      index += code > 0xffff ? 2 : 1;
+    }
+    return index;
+  }
+
+  function entryRange(state, entry) {
+    return {
+      id: entry.id,
+      start: byteOffsetToIndex(state.template, entry.start),
+      end: byteOffsetToIndex(state.template, entry.end)
+    };
+  }
+
+  function substitute(state, values) {
+    var template = String(state.template || "");
+    var result = "";
+
+    // The compiler records the exact byte range of every placeholder. Using
+    // those ranges avoids guessing again in the browser and keeps nested
+    // braces, quoted braces, and literal `{{...}}` text intact.
+    if (state.entries.length === state.ids.length) {
+      var entries = state.entries.map(function (entry) {
+        return entryRange(state, entry);
+      }).sort(function (left, right) {
+        return left.start - right.start;
+      });
+      var cursor = 0;
+      for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        if (entry.start < cursor) continue;
+        result += template.slice(cursor, entry.start);
+        if (Object.prototype.hasOwnProperty.call(values, entry.id)) {
+          result += values[entry.id];
+        } else {
+          result += template.slice(entry.start, entry.end);
+        }
+        cursor = entry.end;
+      }
+      result += template.slice(cursor);
+      return unescapeBraces(result);
+    }
+
+    var index = 0;
+    result = template.replace(/\{([^}]+)\}/g, function (match) {
+      var id = state.ids[index++];
       if (id === undefined || !Object.prototype.hasOwnProperty.call(values, id)) return match;
       return values[id];
     });
@@ -1004,12 +1078,11 @@
       target.__mochiText = {
         template: binding.template_text || target.textContent || "",
         ids: [],
+        entries: [],
         values: {}
       };
     }
-    if (target.__mochiText.ids.indexOf(binding.id) === -1) {
-      target.__mochiText.ids.push(binding.id);
-    }
+    addBindingEntry(target.__mochiText, binding);
     return target.__mochiText;
   }
 
@@ -1020,11 +1093,12 @@
       target.__mochiAttrs[name] = {
         template: binding.template_text || "",
         ids: [],
+        entries: [],
         values: {}
       };
     }
     var state = target.__mochiAttrs[name];
-    if (state.ids.indexOf(binding.id) === -1) state.ids.push(binding.id);
+    addBindingEntry(state, binding);
     return state;
   }
 
@@ -1038,7 +1112,7 @@
     var state = textBindingState(target, binding);
     if (state.values[binding.id] === value) return;
     state.values[binding.id] = value;
-    target.textContent = substitute(state.template, state.ids, state.values);
+    target.textContent = substitute(state, state.values);
   }
 
   function applyHtmlPatch(target, binding, value) {
@@ -1051,8 +1125,15 @@
     var state = attrBindingState(target, binding);
     if (state.values[binding.id] === value) return;
     state.values[binding.id] = value;
-    var nextValue = substitute(state.template, state.ids, state.values);
-    var isSinglePlaceholder = state.ids.length === 1 && /^\s*\{[^}]+\}\s*$/.test(state.template);
+    var nextValue = substitute(state, state.values);
+    var isSinglePlaceholder = false;
+    if (state.entries.length === 1) {
+      var entry = entryRange(state, state.entries[0]);
+      isSinglePlaceholder = state.template.slice(0, entry.start).trim() === "" &&
+        state.template.slice(entry.end).trim() === "";
+    } else if (state.entries.length === 0) {
+      isSinglePlaceholder = state.ids.length === 1 && /^\s*\{[^}]+\}\s*$/.test(state.template);
+    }
     if ((isSinglePlaceholder && (value === "" || value === "false")) || nextValue === "") {
       target.removeAttribute(binding.attr_name);
     } else {

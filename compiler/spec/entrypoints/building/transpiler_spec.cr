@@ -248,6 +248,23 @@ RUBY
       end
     end
 
+    it "reports the original Ruby file and span for an invalid expression" do
+      source = <<-RUBY
+class BadExpression
+  @tag_name = "x-bad-expression"
+  @value = 1
+
+  def html
+    %Q{<p>{@value + }</p>}
+  end
+end
+RUBY
+
+      expect_raises(Exception, /\.rb:6:12: invalid Ruby expression/) do
+        transpile_source(source, "BadExpression")
+      end
+    end
+
     it "raises when a component exceeds the GVM instance variable limit" do
       assignments = (0...257).map { |index| "    @v#{index} = 0\n" }.join
 
