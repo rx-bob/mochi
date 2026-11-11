@@ -11,11 +11,14 @@
     manifest: null,
     manifestUrl: null,
     modulePromise: null,
+    activeModule: null,
+    loadChain: Promise.resolve(),
     irepPromises: new Map(),
     internCache: new Map(),
     tags: new Set(),
     elements: new Map(),
     pendingFetches: [],
+    timers: new Map(),
     unmountedInstances: new Set(),
     actionRouterInstalled: false,
     actionSupportCache: new Map()
@@ -36,7 +39,9 @@
   }
 
   function chiUrl(component, manifestUrl) {
-    var path = component.chi_file || (component.tag_name + ".chi");
+    var path = typeof component === "string"
+      ? component
+      : (component.chi_file || (component.tag_name + ".chi"));
     if (path.indexOf("/") === -1) path = COMPONENT_DIR + path;
     return absoluteUrl(path, manifestUrl);
   }
@@ -47,6 +52,10 @@
 
   function decode(bytes) {
     return new TextDecoder().decode(bytes);
+  }
+
+  function unescapeBraces(text) {
+    return String(text || "").replace(/\uE000/g, "{").replace(/\uE001/g, "}");
   }
 
   // Flattens top-level and conditional-branch bindings so every getter can be
@@ -92,6 +101,50 @@
     return supported;
   }
 
+  function currentRoutePath() {
+    if (!global.location) return "/";
+    if (global.location.hash && global.location.hash.length > 1) {
+      return global.location.hash.slice(1);
+    }
+    return global.location.pathname || "/";
+  }
+
+  function syncRouteToVm(module) {
+    if (!module || typeof module._mochi_set_route_state !== "function") return;
+    var route = currentRoutePath();
+    withUtf8(module, route, function (ptr, len) {
+      module._mochi_set_route_state(ptr, len);
+    });
+  }
+
+  function seedStorageToVm(module) {
+    if (!module || typeof module._mochi_seed_storage !== "function") return;
+    try {
+      var storage = global.localStorage;
+      if (!storage) return;
+      for (var i = 0; i < storage.length; i++) {
+        var key = storage.key(i);
+        if (key === null) continue;
+        var val = storage.getItem(key);
+        if (val === null) continue;
+        withUtf8(module, key, function (kPtr, kLen) {
+          withUtf8(module, val, function (vPtr, vLen) {
+            module._mochi_seed_storage(kPtr, kLen, vPtr, vLen);
+          });
+        });
+      }
+    } catch (error) {
+      // Ignore storage access errors in restricted environments.
+    }
+  }
+
+  function notifyRouteChange(route) {
+    if (state.activeModule) syncRouteToVm(state.activeModule);
+    state.elements.forEach(function (element) {
+      element._dispatchAction({ action: "on_route", payload: route, hasPayload: true });
+    });
+  }
+
   function ensureActionRouter() {
     if (state.actionRouterInstalled || !global.document) return;
     state.actionRouterInstalled = true;
@@ -102,6 +155,34 @@
 
       state.elements.forEach(function (element) {
         element._dispatchAction(detail);
+      });
+    });
+
+    if (typeof global.addEventListener === "function") {
+      global.addEventListener("popstate", function () {
+        notifyRouteChange(currentRoutePath());
+      });
+      global.addEventListener("hashchange", function () {
+        notifyRouteChange(currentRoutePath());
+      });
+    }
+
+    global.document.addEventListener("keydown", function (event) {
+      if (!event) return;
+      var targetNode = event.target;
+      var targetTag = targetNode && targetNode.tagName ? String(targetNode.tagName).toLowerCase() : "";
+      var payload = {
+        type: "keydown",
+        key: event.key || "",
+        code: event.code || "",
+        shift_key: !!event.shiftKey,
+        ctrl_key: !!event.ctrlKey,
+        meta_key: !!event.metaKey,
+        alt_key: !!event.altKey,
+        target_tag: targetTag
+      };
+      state.elements.forEach(function (element) {
+        element._dispatchAction({ action: "on_key", payload: payload, hasPayload: true });
       });
     });
   }
@@ -115,6 +196,7 @@
     }
     if (typeof parsed === "string") return { action: parsed };
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { action: line };
+    if (typeof parsed.__host === "string") return parsed;
     if (typeof parsed.action !== "string") return null;
     return parsed;
   }
@@ -316,10 +398,89 @@
     });
   }
 
+  function clearTimerEntry(id) {
+    var record = state.timers.get(id);
+    if (!record) return;
+    if (record.kind === "every") {
+      clearInterval(record.handle);
+    } else {
+      clearTimeout(record.handle);
+    }
+    state.timers.delete(id);
+  }
 
-  // Drains Ruby `Mochi.emit` calls. New entries are JSON objects carrying an
-  // optional target tag and payload; plain action lines from older components
-  // still route through the same document-level action bus.
+  function handleHostCommand(module, entry) {
+    var hostKind = entry.__host;
+    if (hostKind === "storage_set") {
+      try {
+        if (global.localStorage && typeof entry.key === "string") {
+          global.localStorage.setItem(entry.key, String(entry.value !== undefined ? entry.value : ""));
+        }
+      } catch (error) {}
+      return;
+    }
+    if (hostKind === "storage_remove") {
+      try {
+        if (global.localStorage && typeof entry.key === "string") {
+          global.localStorage.removeItem(entry.key);
+        }
+      } catch (error) {}
+      return;
+    }
+    if (hostKind === "set_route") {
+      var path = typeof entry.path === "string" ? entry.path : "/";
+      try {
+        if (global.history && typeof global.history.pushState === "function") {
+          var targetUrl = path.charAt(0) === "#" || path.charAt(0) === "/" ? path : "#" + path;
+          global.history.pushState(null, "", targetUrl);
+        }
+      } catch (error) {}
+      notifyRouteChange(path);
+      return;
+    }
+    if (hostKind === "timer") {
+      var timerId = Number(entry.id);
+      if (entry.kind === "cancel") {
+        clearTimerEntry(timerId);
+        return;
+      }
+      var ms = Math.max(0, Number(entry.ms) || 0);
+      var instanceKey = String(entry.instance || "");
+      var callbackName = String(entry.callback || "");
+      if (!callbackName) return;
+
+      var invokeTimer = function () {
+        if (entry.kind !== "every") state.timers.delete(timerId);
+        var element = state.elements.get(instanceKey);
+        if (!element || element._mochiDisconnected || element._mochiUnmounted) {
+          clearTimerEntry(timerId);
+          return;
+        }
+        try {
+          var symbol = intern(module, callbackName);
+          module._mochi_dispatch_event(element._mochiInstance, symbol);
+          applyPatches(element, module);
+          drainEmits(module);
+          drainFetches(module);
+        } catch (error) {
+          element.mochiError = error;
+          console.error("[mochi] timer callback failed", error);
+        }
+      };
+
+      var handle = entry.kind === "every"
+        ? setInterval(invokeTimer, ms)
+        : setTimeout(invokeTimer, ms);
+      state.timers.set(timerId, {
+        id: timerId,
+        instance: instanceKey,
+        kind: entry.kind,
+        handle: handle
+      });
+    }
+  }
+
+  // Drains Ruby `Mochi.emit` and `Mochi.*` host calls.
   function drainEmits(module) {
     if (!module || !module._mochi_emit_outbox_offset ||
         !module._mochi_emit_outbox_len || !module._mochi_emit_outbox_clear) {
@@ -330,10 +491,16 @@
     var offset = module._mochi_emit_outbox_offset();
     var text = offset ? decode(module.HEAPU8.subarray(offset, offset + length)) : "";
     module._mochi_emit_outbox_clear();
-    if (!text || !global.document) return;
+    if (!text) return;
     text.split("\n").forEach(function (line) {
+      if (!line) return;
       var entry = parseEmitLine(line);
-      if (!entry || !entry.action) return;
+      if (!entry) return;
+      if (typeof entry.__host === "string") {
+        handleHostCommand(module, entry);
+        return;
+      }
+      if (!entry.action || !global.document) return;
       global.document.dispatchEvent(new global.CustomEvent("mochi:action", {
         detail: {
           action: entry.action,
@@ -418,6 +585,9 @@
         throw new Error("mochi-loader: runtime init failed: " + lastError(module));
       }
 
+      state.activeModule = module;
+      seedStorageToVm(module);
+      syncRouteToVm(module);
       return module;
     })().catch(function (error) {
       state.modulePromise = null;
@@ -427,12 +597,11 @@
     return state.modulePromise;
   }
 
-  async function loadComponentClass(component, manifest, manifestUrl) {
-    var url = chiUrl(component, manifestUrl);
+  function loadIrepUrl(url, label, manifest, manifestUrl) {
     var existing = state.irepPromises.get(url);
     if (existing) return existing;
 
-    var promise = (async function () {
+    var promise = state.loadChain.then(async function () {
       var module = await loadRuntime(manifest, manifestUrl);
       var response = await global.fetch(url);
       if (!response.ok) throw new Error("mochi-loader: failed to fetch " + url);
@@ -450,21 +619,51 @@
       try {
         module.HEAPU8.set(bytes, pointer);
         if (module._mochi_load_irep(pointer, bytes.length) !== 0) {
-          throw new Error("mochi-loader: load_irep failed for " + component.class_name + ": " + lastError(module));
+          throw new Error("mochi-loader: load_irep failed for " + label + ": " + lastError(module));
         }
       } finally {
         if (free) free(pointer);
       }
 
       return module;
-    })();
+    });
 
+    state.loadChain = promise.catch(function () {});
     state.irepPromises.set(url, promise);
     promise.catch(function () { state.irepPromises.delete(url); });
     return promise;
   }
 
-  async function mountInstance(component, manifest, manifestUrl) {
+  async function loadComponentClass(component, manifest, manifestUrl) {
+    if (manifest && manifest.prelude) {
+      var preludeUrl = chiUrl(manifest.prelude, manifestUrl);
+      await loadIrepUrl(preludeUrl, "prelude", manifest, manifestUrl);
+    }
+    var url = chiUrl(component, manifestUrl);
+    return loadIrepUrl(url, component.class_name || component.tag_name, manifest, manifestUrl);
+  }
+
+  function syncElementAttribute(module, instance, name, value) {
+    if (!module || typeof module._mochi_set_ivar_string !== "function") return false;
+    if (!name || name.indexOf("data-mochi-") === 0 || name.indexOf("on") === 0) return false;
+    var ivarName = name.replace(/-/g, "_");
+    var strVal = value === null || value === undefined ? "" : String(value);
+    return withUtf8(module, ivarName, function (nPtr, nLen) {
+      return withUtf8(module, strVal, function (vPtr, vLen) {
+        return module._mochi_set_ivar_string(instance, nPtr, nLen, vPtr, vLen) === 1;
+      });
+    });
+  }
+
+  function syncAllElementAttributes(module, instance, element) {
+    if (!element || !element.attributes) return;
+    for (var i = 0; i < element.attributes.length; i++) {
+      var attr = element.attributes[i];
+      syncElementAttribute(module, instance, attr.name, attr.value);
+    }
+  }
+
+  async function mountInstance(component, manifest, manifestUrl, element) {
     var module = await loadComponentClass(component, manifest, manifestUrl);
     var instance;
 
@@ -475,6 +674,8 @@
     if (instance === 0 || instance === 0n) {
       throw new Error("mochi-loader: mount failed for " + component.class_name + ": " + lastError(module));
     }
+
+    syncAllElementAttributes(module, instance, element);
 
     flattenBindings(component.bindings).forEach(function (binding) {
       var symbol = intern(module, binding.getter_sym);
@@ -530,6 +731,15 @@
     var node = event.target;
     while (node && node !== root) {
       if (node.nodeType === 1 && node.hasAttribute(attribute)) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function findEachContext(target, root) {
+    var node = target;
+    while (node && node !== root) {
+      if (node.__mochiEachContext) return node.__mochiEachContext;
       node = node.parentNode;
     }
     return null;
@@ -594,10 +804,16 @@
     return value === undefined ? null : value;
   }
 
-  // Ruby expressions used as event arguments are resolved from cached binding
-  // values. The compiler registers a hidden binding for each expression, so the
-  // VM evaluates it once and the loader can pass the resulting value.
-  function resolveEventExpression(element, expression) {
+  // Ruby expressions used as event arguments are resolved from `{each}` loop
+  // context first, then from cached binding values.
+  function resolveEventExpression(element, expression, eachContext) {
+    if (eachContext) {
+      if (expression === eachContext.itemName) return eachContext.item;
+      if (expression === eachContext.indexName || expression === "index") return eachContext.index;
+      var fromItem = itemLookup(eachContext.item, expression, eachContext.itemName);
+      if (fromItem !== undefined) return fromItem;
+    }
+
     var bindingData = element.bindingData || {};
     var bindingValues = element.bindingValues || {};
     var ids = Object.keys(bindingData);
@@ -611,14 +827,14 @@
     throw new Error("mochi-loader: unresolved event argument expression " + expression);
   }
 
-  function eventArgumentValue(element, descriptor, target, payload) {
+  function eventArgumentValue(element, descriptor, target, payload, eachContext) {
     if (descriptor.kind === "event") return payload;
     if (descriptor.kind === "element") {
       throw new Error("mochi-loader: DOM elements cannot be passed to Ruby event handlers; use $event");
     }
     if (descriptor.kind === "literal") return literalEventArgument(descriptor);
     if (descriptor.kind === "expr") {
-      return resolveEventExpression(element, String(descriptor.value || "").trim());
+      return resolveEventExpression(element, String(descriptor.value || "").trim(), eachContext);
     }
     throw new Error("mochi-loader: unknown event argument kind " + descriptor.kind);
   }
@@ -630,6 +846,18 @@
     return withUtf8(module, JSON.stringify(args), function (pointer, length) {
       return module._mochi_dispatch_event_args(instance, methodSymbol, pointer, length) === 1;
     });
+  }
+
+  function evalEachExpr(module, instance, methodName, args) {
+    if (!module || typeof module._mochi_eval_each_expr !== "function") return null;
+    var symbol = intern(module, methodName);
+    var len = withUtf8(module, JSON.stringify(args || []), function (pointer, length) {
+      return module._mochi_eval_each_expr(instance, symbol, pointer, length);
+    });
+    if (len < 0) return null;
+    var offset = module._mochi_eval_buffer_offset ? module._mochi_eval_buffer_offset() : 0;
+    if (!offset || len === 0) return "";
+    return decode(module.HEAPU8.subarray(offset, offset + len));
   }
 
   function requiredArgumentCount(module, instance, methodSymbol) {
@@ -676,11 +904,12 @@
 
   function substitute(template, ids, values) {
     var index = 0;
-    return String(template || "").replace(/\{([^}]+)\}/g, function (match) {
+    var result = String(template || "").replace(/\{([^}]+)\}/g, function (match) {
       var id = ids[index++];
       if (id === undefined || !Object.prototype.hasOwnProperty.call(values, id)) return match;
       return values[id];
     });
+    return unescapeBraces(result);
   }
 
   function textBindingState(target, binding) {
@@ -735,10 +964,12 @@
     var state = attrBindingState(target, binding);
     if (state.values[binding.id] === value) return;
     state.values[binding.id] = value;
-    if (value === "" || value === "false") {
+    var nextValue = substitute(state.template, state.ids, state.values);
+    var isSinglePlaceholder = state.ids.length === 1 && /^\s*\{[^}]+\}\s*$/.test(state.template);
+    if ((isSinglePlaceholder && (value === "" || value === "false")) || nextValue === "") {
       target.removeAttribute(binding.attr_name);
     } else {
-      target.setAttribute(binding.attr_name, substitute(state.template, state.ids, state.values));
+      target.setAttribute(binding.attr_name, nextValue);
     }
   }
 
@@ -855,7 +1086,7 @@
     } else if (binding.kind === "cond") {
       applyCondPatch(element, target, binding, value);
     } else if (binding.kind === "each") {
-      applyEachPatch(target, binding, value);
+      applyEachPatch(element, target, binding, value);
     }
   }
 
@@ -867,32 +1098,92 @@
     return String(index);
   }
 
-  function itemLookup(item, expression) {
-    var path = expression.trim();
-    var parts = path.split(".");
-    var value = item;
-    for (var i = 0; i < parts.length; i++) {
-      if (value === null || value === undefined) break;
-      value = value[parts[i]];
-    }
-    if (value !== undefined || parts.length <= 1) return value;
-    return item[parts[parts.length - 1]];
+  function parseEachLoopMeta(binding) {
+    var raw = binding && binding.attr_name ? String(binding.attr_name) : "";
+    if (!raw) return { itemName: "item", indexName: "index" };
+    var parts = raw.split(",");
+    return {
+      itemName: (parts[0] || "item").trim(),
+      indexName: (parts[1] || "index").trim()
+    };
   }
 
-  function renderEachTemplate(template, item, index) {
-    return String(template || "").replace(/\{([^}]+)\}/g, function (match, expression) {
-      if (expression.trim() === "index") return String(index);
-      var value = itemLookup(item, expression);
+  function itemLookup(item, expression, itemName) {
+    if (item === null || item === undefined) return undefined;
+    var normalized = String(expression || "").trim()
+      .replace(/\[\s*:([a-zA-Z0-9_]+)\s*\]/g, ".$1")
+      .replace(/\[\s*["']([^"']+)["']\s*\]/g, ".$1");
+    var parts = normalized.split(".");
+    if (parts.length === 1 && (parts[0] === itemName || parts[0] === "item")) {
+      return item;
+    }
+    var start = (parts.length > 1 && (parts[0] === itemName || parts[0] === "item")) ? 1 : 0;
+    var value = item;
+    for (var i = start; i < parts.length; i++) {
+      if (value === null || value === undefined) return undefined;
+      value = value[parts[i]];
+    }
+    return value;
+  }
+
+  function resolveEachCallArg(rawArg, item, index, meta) {
+    var arg = String(rawArg || "").trim();
+    if (!arg) return null;
+    if (arg === meta.itemName) return item;
+    if (arg === meta.indexName || arg === "index") return index;
+    if ((arg.charAt(0) === '"' && arg.charAt(arg.length - 1) === '"') ||
+        (arg.charAt(0) === "'" && arg.charAt(arg.length - 1) === "'")) {
+      return arg.slice(1, -1);
+    }
+    if (/^-?\d+$/.test(arg)) return Number(arg);
+    if (arg === "true") return true;
+    if (arg === "false") return false;
+    var lookedUp = itemLookup(item, arg, meta.itemName);
+    return lookedUp !== undefined ? lookedUp : null;
+  }
+
+  function renderEachTemplate(element, binding, template, item, index, meta) {
+    var rendered = String(template || "").replace(/\{([^}]+)\}/g, function (match, expression) {
+      var expr = expression.trim();
+      if (expr === meta.indexName || expr === "index") return String(index);
+      if (expr === meta.itemName && (item === null || typeof item !== "object")) {
+        return item === null || item === undefined ? "" : String(item);
+      }
+
+      var callMatch = expr.match(/^([a-zA-Z_][a-zA-Z0-9_?!]*)\s*\((.*)\)$/);
+      if (callMatch && element && element._mochiModule && element._mochiInstance) {
+        var fnName = callMatch[1];
+        var rawArgs = callMatch[2].trim();
+        var callArgs = rawArgs
+          ? rawArgs.split(",").map(function (part) { return resolveEachCallArg(part, item, index, meta); })
+          : [];
+        var evaluated = evalEachExpr(element._mochiModule, element._mochiInstance, fnName, callArgs);
+        if (evaluated !== null) return evaluated;
+      }
+
+      var value = itemLookup(item, expr, meta.itemName);
+      if (value === undefined && element && element._mochiModule && element._mochiInstance &&
+          /^[a-zA-Z_][a-zA-Z0-9_?!]*$/.test(expr) &&
+          hasMethod(element._mochiModule, element._mochiInstance, expr)) {
+        var zeroArgVal = evalEachExpr(element._mochiModule, element._mochiInstance, expr, []);
+        if (zeroArgVal !== null) return zeroArgVal;
+      }
       if (value === undefined || value === null) return "";
       if (typeof value === "object") return match;
       return String(value);
     });
+    return unescapeBraces(rendered);
   }
 
-  function eachItemHtml(binding, item, index) {
-    if (item && typeof item === "object" && typeof item.html === "string") return item.html;
-    if (typeof item === "string") return item;
-    return renderEachTemplate(binding.template_text, item, index);
+  function eachItemHtml(element, binding, item, index, meta) {
+    if (item && typeof item === "object" && typeof item.html === "string" &&
+        (!binding.template_text || binding.template_text.indexOf("{") === -1)) {
+      return item.html;
+    }
+    if (typeof item === "string" && (!binding.template_text || binding.template_text.indexOf("{") === -1)) {
+      return item;
+    }
+    return renderEachTemplate(element, binding, binding.template_text, item, index, meta);
   }
 
   function entryFollows(entry, cursor) {
@@ -904,7 +1195,7 @@
     return true;
   }
 
-  function applyEachPatch(target, binding, value) {
+  function applyEachPatch(element, target, binding, value) {
     var items;
     if (!value) {
       items = [];
@@ -919,6 +1210,7 @@
       }
     }
 
+    var meta = parseEachLoopMeta(binding);
     var state = target.__mochiEach;
     if (!state) state = target.__mochiEach = { items: new Map() };
     var previous = state.items;
@@ -929,11 +1221,20 @@
 
     items.forEach(function (item, index) {
       var key = itemKey(item, index);
-      var html = eachItemHtml(binding, item, index);
+      var html = eachItemHtml(element, binding, item, index, meta);
       var entry = previous.get(key);
       if (!entry || entry.html !== html) {
         entry = { html: html, nodes: Array.from(fragmentFor(html).childNodes) };
       }
+      var context = {
+        item: item,
+        index: index,
+        itemName: meta.itemName,
+        indexName: meta.indexName
+      };
+      entry.nodes.forEach(function (node) {
+        if (node.nodeType === 1) node.__mochiEachContext = context;
+      });
       next.set(key, entry);
       ordered.push(entry);
     });
@@ -1027,6 +1328,7 @@
         this._mochiReady = null;
         this._mochiModule = null;
         this._mochiInstance = null;
+        this._mochiAttrObserver = null;
         this._mochiDisconnected = false;
         this._mochiUnmounted = false;
       }
@@ -1046,7 +1348,7 @@
         this._attachEvents(root);
 
         var element = this;
-        this._mochiReady = mountInstance(component, state.manifest, manifestUrl).then(function (mounted) {
+        this._mochiReady = mountInstance(component, state.manifest, manifestUrl, element).then(function (mounted) {
           element._mochiModule = mounted.module;
           element._mochiInstance = mounted.instance;
 
@@ -1056,6 +1358,7 @@
           }
 
           state.elements.set(String(mounted.instance), element);
+          element._observeAttributes(mounted.module, mounted.instance);
           applyPatches(element, mounted.module);
           drainEmits(mounted.module);
           drainFetches(mounted.module);
@@ -1065,6 +1368,28 @@
           console.error("[mochi] " + tag + " mount failed", error);
           throw error;
         });
+      }
+
+      _observeAttributes(module, instance) {
+        if (typeof global.MutationObserver !== "function") return;
+        var element = this;
+        this._mochiAttrObserver = new global.MutationObserver(function (mutations) {
+          if (element._mochiDisconnected || element._mochiUnmounted) return;
+          var changed = false;
+          for (var i = 0; i < mutations.length; i++) {
+            var attrName = mutations[i].attributeName;
+            if (!attrName) continue;
+            if (syncElementAttribute(module, instance, attrName, element.getAttribute(attrName))) {
+              changed = true;
+            }
+          }
+          if (changed) {
+            applyPatches(element, module);
+            drainEmits(module);
+            drainFetches(module);
+          }
+        });
+        this._mochiAttrObserver.observe(this, { attributes: true });
       }
 
       disconnectedCallback() {
@@ -1087,10 +1412,18 @@
         if (this._mochiUnmounted) return;
         this._mochiUnmounted = true;
 
+        if (this._mochiAttrObserver) {
+          this._mochiAttrObserver.disconnect();
+          this._mochiAttrObserver = null;
+        }
+
         var key = String(instance);
         state.unmountedInstances.add(key);
         state.pendingFetches = state.pendingFetches.filter(function (request) {
           return String(request.instance) !== key;
+        });
+        state.timers.forEach(function (record, timerId) {
+          if (record.instance === key) clearTimerEntry(timerId);
         });
         if (state.elements.get(key) === this) state.elements.delete(key);
 
@@ -1130,6 +1463,11 @@
         if (!method || !this._mochiReady) return;
 
         var payload = eventPayload(target, event);
+        var eachContext = findEachContext(target, this.shadowRoot);
+        if (eachContext) {
+          payload.item = eachContext.item;
+          payload.index = eachContext.index;
+        }
         var descriptors;
 
         try {
@@ -1146,7 +1484,7 @@
 
           if (descriptors.length > 0) {
             var args = descriptors.map(function (descriptor) {
-              return eventArgumentValue(element, descriptor, target, payload);
+              return eventArgumentValue(element, descriptor, target, payload, eachContext);
             });
             dispatched = dispatchEventArgs(mounted.module, mounted.instance, symbol, args);
           } else if (requiredArgumentCount(mounted.module, mounted.instance, symbol) === 1) {

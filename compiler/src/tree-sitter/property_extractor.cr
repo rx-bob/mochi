@@ -14,22 +14,29 @@ module TreeSitter
     def self.extract_properties(source : String) : Array(Property)
       parser = RubyParser.new
       tree = parser.parse(source)
-      root = tree.root_node
+      extract_properties(tree.root_node)
+    end
 
+    def self.extract_properties(root : Node) : Array(Property)
       properties = [] of Property
       visit_node(root, properties)
       properties
     end
 
     def self.extract_property(source : String, property_name : String) : String?
-      properties = extract_properties(source)
-      property = properties.find { |p| p.name == property_name }
-      property ? property.value : nil
+      extract_properties(source).find { |p| p.name == property_name }.try(&.value)
+    end
+
+    def self.extract_property(root : Node, property_name : String) : String?
+      extract_properties(root).find { |p| p.name == property_name }.try(&.value)
     end
 
     def self.first_property(source : String) : Property?
-      properties = extract_properties(source)
-      properties.first?
+      extract_properties(source).first?
+    end
+
+    def self.first_property(root : Node) : Property?
+      extract_properties(root).first?
     end
 
     private def self.visit_node(node : Node, results : Array(Property))

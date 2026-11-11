@@ -17,23 +17,47 @@ class RubyUnderstander
     return TreeSitter::ClassExtractor.class_name(code)
   end
 
+  def self.class_name(root : TreeSitter::Node) : String
+    return TreeSitter::ClassExtractor.class_name(root)
+  end
+
   def self.get_imports(rb_file : String) : Array(String)
     return TreeSitter::ImportsExtractor.extract_imports(rb_file)
+  end
+
+  def self.get_imports(root : TreeSitter::Node) : Array(String)
+    return TreeSitter::ImportsExtractor.extract_imports(root)
   end
 
   def self.extract_method_bodies(rb_file : String, cls_name : String) : Hash(String, RubyDef)
     return TreeSitter::MethodBodyExtractor.extract_method_bodies(rb_file, cls_name)
   end
 
+  def self.extract_method_bodies(root : TreeSitter::Node, cls_name : String, source : String) : Hash(String, RubyDef)
+    return TreeSitter::MethodBodyExtractor.extract_method_bodies(root, cls_name, source)
+  end
+
   def self.remove_methods(rb_file : String, cls_name : String, method_names : Array(String)) : String
     return TreeSitter::MethodBodyExtractor.remove_methods(rb_file, cls_name, method_names)
+  end
+
+  def self.remove_methods(root : TreeSitter::Node, source : String, cls_name : String, method_names : Array(String)) : String
+    return TreeSitter::MethodBodyExtractor.remove_methods(root, source, cls_name, method_names)
   end
 
   def self.attribute_readers(rb_file : String, cls_name : String) : Set(String)
     return TreeSitter::MethodBodyExtractor.extract_attribute_readers(rb_file, cls_name)
   end
 
+  def self.attribute_readers(root : TreeSitter::Node, cls_name : String) : Set(String)
+    return TreeSitter::MethodBodyExtractor.extract_attribute_readers(root, cls_name)
+  end
+
   def self.get_cmp_name(rb_file : String, cls_name : String) : String?
     TreeSitter::PropertyExtractor.extract_property(rb_file, "@tag_name")
+  end
+
+  def self.get_cmp_name(root : TreeSitter::Node, cls_name : String) : String?
+    TreeSitter::PropertyExtractor.extract_property(root, "@tag_name")
   end
 end

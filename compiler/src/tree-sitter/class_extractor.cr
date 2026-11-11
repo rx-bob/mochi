@@ -6,8 +6,10 @@ module TreeSitter
     def self.extract_class_names(source : String) : Array(String)
       parser = RubyParser.new
       tree = parser.parse(source)
-      root = tree.root_node
+      extract_class_names(tree.root_node)
+    end
 
+    def self.extract_class_names(root : Node) : Array(String)
       class_names = [] of String
       visit_node(root, class_names)
       class_names
@@ -15,6 +17,11 @@ module TreeSitter
 
     def self.class_name(source : String) : String
       names = extract_class_names(source)
+      names.first? || ""
+    end
+
+    def self.class_name(root : Node) : String
+      names = extract_class_names(root)
       names.first? || ""
     end
 

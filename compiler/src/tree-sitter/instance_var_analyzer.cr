@@ -34,8 +34,10 @@ module TreeSitter
     def self.analyze(source : String) : Array(VariableInfo)
       parser = RubyParser.new
       tree = parser.parse(source)
-      root = tree.root_node
+      analyze(tree.root_node)
+    end
 
+    def self.analyze(root : Node) : Array(VariableInfo)
       variables = {} of String => VariableInfo
 
       visit_node(root, variables, nil)

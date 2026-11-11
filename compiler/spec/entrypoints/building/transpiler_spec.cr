@@ -268,5 +268,116 @@ RUBY
         transpile_source(source, "TooManyVars")
       end
     end
+
+    it "raises when @tag_name does not contain a hyphen" do
+      source = <<-RUBY
+class InvalidTag
+  @tag_name = "invalidtag"
+
+  def html
+    %Q{<div>hi</div>}
+  end
+end
+RUBY
+
+      expect_raises(Exception, /InvalidTag.*must contain a hyphen/) do
+        transpile_source(source, "InvalidTag")
+      end
+    end
+
+    it "supports escaped double braces {{ and }} and bare bind:value=\"@ivar\"" do
+      source = <<-RUBY
+class ErgonomicComponent
+  @tag_name = "x-ergonomic"
+  @query = ""
+
+  def html
+    %Q{
+      <div>Literal {{braces}} and <input bind:value="@query"></div>
+    }
+  end
+end
+RUBY
+
+      component = transpile_source(source, "ErgonomicComponent")
+      component.manifest.html_template.should contain("Literal {braces}")
+      prop = component.manifest.bindings.find! { |b| b.kind == "prop" }
+      prop.getter_expr.should eq("@query")
+      prop.setter_sym.should eq("__mochi_set_query")
+    end
+
+    it "registers delegated events and loop metadata inside {each} blocks" do
+      source = <<-RUBY
+class EachEventsComponent
+  @tag_name = "x-each-events"
+  @queues = []
+
+  def toggle_pause(q)
+  end
+
+  def html
+    %Q{
+      <ul>
+        {each @queues as q, idx}
+          <li><button onclick="{toggle_pause(q)}">{q.name}</button></li>
+        {end}
+      </ul>
+    }
+  end
+end
+RUBY
+
+      component = transpile_source(source, "EachEventsComponent")
+      each_binding = component.manifest.bindings.find! { |b| b.kind == "each" }
+      each_binding.attr_name.should eq("q,idx")
+      each_binding.template_text.not_nil!.should contain("data-mochi-click=\"toggle_pause\"")
+      component.manifest.event_names.should contain("click")
+      component.ruby_code.should_not contain("__mochi_each_")
+    end
+
+    if real_mrbc = MrbcCompiler.find_mrbc
+      it "compiles prelude.chi and topologically sorts child components before parents" do
+        parent_src = <<-RUBY
+class ParentBox
+  @tag_name = "a-parent-box"
+  def html
+    %Q{<div><z-child-item></z-child-item></div>}
+  end
+end
+RUBY
+        child_src = <<-RUBY
+class ChildItem
+  @tag_name = "z-child-item"
+  def html
+    %Q{<span>{SharedData.label}</span>}
+  end
+end
+RUBY
+        prelude_src = <<-RUBY
+class SharedData
+  def self.label
+    "shared"
+  end
+end
+RUBY
+
+        parent_comp = transpile_source(parent_src, "ParentBox")
+        child_comp = transpile_source(child_src, "ChildItem")
+        output = temp_output_dir("mochi_topo_prelude_spec")
+
+        begin
+          compiler = MrbcCompiler.new(mrbc_path: real_mrbc)
+          compiler.compile([parent_comp, child_comp], output, prelude_src)
+
+          File.exists?(File.join(output, "components", "prelude.chi")).should be_true
+          json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+          json["prelude"].as_s.should eq("prelude.chi")
+          tags = json["components"].as_a.map { |entry| entry.as_h["tag_name"].as_s }
+          tags.should eq(["z-child-item", "a-parent-box"])
+        ensure
+          FileUtils.rm_rf(output)
+        end
+      end
+    end
   end
 end

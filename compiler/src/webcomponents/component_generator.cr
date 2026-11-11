@@ -3,10 +3,13 @@ require "lexbor"
 require "./binding_manifest"
 require "../html/conditional_processor"
 require "../html/each_processor"
+require "../html/event_argument_extractor"
 
 class ComponentGenerator
   CONTROL_TEMPLATE_PREFIXES = ["if ", "unless ", "elsif ", "each "]
   CONTROL_TEMPLATE_KEYWORDS = ["else", "end"]
+  ESCAPED_LBRACE            = "\uE000"
+  ESCAPED_RBRACE            = "\uE001"
 
   @each_blocks : Array(EachBlock) = [] of EachBlock
   @conditionals : Array(ConditionalBlock) = [] of ConditionalBlock
@@ -18,6 +21,14 @@ class ComponentGenerator
   # Includes top-level and branch-discovered each blocks so callers can inject
   # every generated each helper method after generation.
   getter each_blocks
+
+  def self.escape_double_braces(html : String) : String
+    html.gsub("{{", ESCAPED_LBRACE).gsub("}}", ESCAPED_RBRACE)
+  end
+
+  def self.unescape_double_braces(html : String) : String
+    html.gsub(ESCAPED_LBRACE, "{").gsub(ESCAPED_RBRACE, "}")
+  end
 
   def generate(
     mochi_cmp_name : String,
@@ -37,10 +48,14 @@ class ComponentGenerator
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
     @event_expressions.clear
 
+    escaped_html = self.class.escape_double_braces(html)
     bindings = [] of BindingDescriptor
     events = [] of EventDescriptor
-    html_template = walk_html(html, bindings, events)
+    html_template = walk_html(escaped_html, bindings, events)
     chi_file = "#{tag_name}.chi"
+
+    validate_template_placeholders(mochi_cmp_name, html_template)
+    html_template = self.class.unescape_double_braces(html_template)
 
     manifest = ComponentManifest.new(
       tag_name,
@@ -52,7 +67,6 @@ class ComponentGenerator
       events
     )
 
-    validate_template_placeholders(mochi_cmp_name, html_template)
     validate_event_handlers(mochi_cmp_name, manifest.all_events, method_names)
     manifest
   end
@@ -94,7 +108,7 @@ class ComponentGenerator
     end
 
     if tag == "_em_comment"
-      collect_anchor_binding(node.tag_text, path, bindings)
+      collect_anchor_binding(node.tag_text, path, bindings, events)
       return
     end
 
@@ -117,6 +131,7 @@ class ComponentGenerator
     text : String,
     path : Array(Int32),
     bindings : Array(BindingDescriptor),
+    events : Array(EventDescriptor),
   )
     if match = text.match(/if-anchor-(\d+)/)
       id = match[1].to_i
@@ -142,13 +157,34 @@ class ComponentGenerator
       block = @each_blocks.find { |candidate| candidate.id == id }
       return unless block
 
+      each_template = process_each_template(block, path, events)
+      loop_meta = if idx = block.loop_def.index_name
+                    "#{block.loop_def.item_name},#{idx}"
+                  else
+                    block.loop_def.item_name
+                  end
       bindings << new_binding(
         path,
         "each",
-        nil,
-        block.content,
+        loop_meta,
+        each_template,
         block.loop_def.array_name
       )
+    end
+  end
+
+  private def process_each_template(
+    block : EachBlock,
+    path : Array(Int32),
+    events : Array(EventDescriptor),
+  ) : String
+    content = self.class.escape_double_braces(EventArgumentExtractor.process(block.content))
+    content.gsub(/\bon([a-zA-Z]+)\s*=\s*(["'])\{([^}()]+)\}\2/) do |_, match|
+      event_name = match[1].downcase
+      quote = match[2]
+      method_name = match[3].strip
+      events << EventDescriptor.new(path, event_name, method_name)
+      "data-mochi-#{event_name}=#{quote}#{method_name}#{quote}"
     end
   end
 
@@ -167,12 +203,17 @@ class ComponentGenerator
     attrs.each do |name, value|
       if name.starts_with?("bind:")
         attr_name = name[5..]
-        additions << {attr_name, value}
+        normalized_value = if value.strip.matches?(/\A@[a-zA-Z_][a-zA-Z0-9_]*\z/)
+                             "{#{value.strip}}"
+                           else
+                             value
+                           end
+        additions << {attr_name, normalized_value}
         removals << name
         if attr_name == "value" || attr_name == "checked"
-          add_two_way_binding(path, attr_name, value, bindings, events, additions)
+          add_two_way_binding(path, attr_name, normalized_value, bindings, events, additions)
         else
-          add_attribute_binding(path, attr_name, value, bindings)
+          add_attribute_binding(path, attr_name, normalized_value, bindings)
         end
       elsif name.starts_with?("data-mochi-")
         next
@@ -259,7 +300,7 @@ class ComponentGenerator
   # conditionals or each blocks it contains. Paths and binding IDs are relative
   # to the branch fragment; IDs themselves are component-global.
   private def process_branch(branch : ConditionalBranch) : ConditionalBranchDescriptor
-    html = branch_with_anchors(branch)
+    html = self.class.escape_double_braces(branch_with_anchors(branch))
     each_result = EachProcessor.process(html, @next_each_id)
 
     unless each_result.each_blocks.empty?
@@ -271,6 +312,7 @@ class ComponentGenerator
     branch_events = [] of EventDescriptor
     template = walk_html(each_result.html, branch_bindings, branch_events)
     validate_template_placeholders(@mochi_cmp_name, template)
+    template = self.class.unescape_double_braces(template)
     ConditionalBranchDescriptor.new(template, branch_bindings, branch_events)
   end
 

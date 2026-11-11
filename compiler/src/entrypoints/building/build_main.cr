@@ -8,24 +8,34 @@ require "./trace_helper"
 class BuildMain
   include TraceHelper
 
-  def setup(builder_man : BuilderMan)
-    build_dir = builder_man.build_dir
+  STATIC_ASSET_EXTS = {".css", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2"}
 
+  def setup(builder_man : BuilderMan)
     print_separator
     puts "2. Copying Ruby code to pre_tp"
     builder_man.copy_ruby_code_to_pre_tp
     puts "Ruby code copied to #{builder_man.pre_tp_dir}"
-    # built-in components (need to be compiled)
+
+    all_rb_sources = String.build do |io|
+      Dir.glob(Path[builder_man.pre_tp_dir, "lib", "**", "*.rb"].to_s) do |path|
+        io << File.read(path) << "\n" if File.file?(path)
+      end
+    end
+
     rb_rewriter = RubyRewriter.new
 
-    builtin_feather_icon_comp = rb_rewriter.gen_builtin_component_feather_icon
-    File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_feathericon_comp.rb", builtin_feather_icon_comp)
+    if all_rb_sources.includes?("feather-icon") || all_rb_sources.includes?("FeatherIcon")
+      builtin_feather_icon_comp = rb_rewriter.gen_builtin_component_feather_icon
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_feathericon_comp.rb", builtin_feather_icon_comp)
+    end
 
-    builtin_mochi_router = rb_rewriter.gen_builtin_mochi_router
-    File.write("#{builder_man.pre_tp_dir}/lib/mochi_router.rb", builtin_mochi_router)
+    if all_rb_sources.includes?("mochi-router") || all_rb_sources.includes?("mochi-route") || all_rb_sources.includes?("MochiRouter")
+      builtin_mochi_router = rb_rewriter.gen_builtin_mochi_router
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_router.rb", builtin_mochi_router)
 
-    builtin_route_comp = rb_rewriter.gen_builtin_route_component
-    File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_route_comp.rb", builtin_route_comp)
+      builtin_route_comp = rb_rewriter.gen_builtin_route_component
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_route_comp.rb", builtin_route_comp)
+    end
 
     print_separator
     puts "3. Copying pre_tp to src for transpilation"
@@ -94,8 +104,9 @@ class BuildMain
     puts "> Compilation took #{mochi_comp_time.total_milliseconds.to_i}ms"
 
     print_separator
-    puts "6. Copying Entry Page"
+    puts "6. Copying Entry Page & Static Assets"
     copy_entry_page(input_dir, output_dir)
+    copy_static_assets(input_dir, output_dir)
 
     if !keep_granular_build_artifacts
       puts "removing granular build artifacts"
@@ -121,6 +132,7 @@ class BuildMain
   end
 
   private def copy_entry_page(input_dir : String, output_dir : String)
+    return if File.expand_path(input_dir) == File.expand_path(output_dir)
     source = File.join(input_dir, "index.html")
     unless File.file?(source)
       puts "> No index.html in #{input_dir}; skipped"
@@ -129,6 +141,27 @@ class BuildMain
 
     FileUtils.cp(source, File.join(output_dir, "index.html"))
     puts "> Copied index.html"
+  end
+
+  private def copy_static_assets(input_dir : String, output_dir : String)
+    return if File.expand_path(input_dir) == File.expand_path(output_dir)
+
+    public_src = File.join(input_dir, "public")
+    if File.directory?(public_src)
+      public_dst = File.join(output_dir, "public")
+      remove_directory(public_dst) if File.exists?(public_dst)
+      FileUtils.cp_r(public_src, public_dst)
+      puts "> Copied public/"
+    end
+
+    Dir.children(input_dir).each do |entry|
+      src_path = File.join(input_dir, entry)
+      next unless File.file?(src_path)
+      ext = File.extname(entry).downcase
+      next unless STATIC_ASSET_EXTS.includes?(ext)
+      FileUtils.cp(src_path, File.join(output_dir, entry))
+      puts "> Copied #{entry}"
+    end
   end
 
   def remove_directory(dir_path : String)

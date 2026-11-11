@@ -18,6 +18,7 @@ end
 class AttributeConditionalExtractor
   def self.process(html : String) : AttributeConditionalResult
     conditionals = [] of ExtractedAttributeConditional
+    return AttributeConditionalResult.new(html, conditionals) unless html.includes?("{if ") || html.includes?("{unless ")
     next_id = 0
     
     # Regex finds attributes whose values contain `{if ` or `{unless `

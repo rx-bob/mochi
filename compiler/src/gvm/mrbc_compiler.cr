@@ -3,6 +3,7 @@ require "file_utils"
 require "../mochi_cmp"
 require "../sorbet/type_stripper"
 require "./source_preparer"
+require "./rite_verifier"
 
 class MrbcCompiler
   RITE_HEADER    = "RITE0400\u0000\u0000"
@@ -10,6 +11,7 @@ class MrbcCompiler
 
   getter manifest_path : String?
   getter chi_paths : Array(String)
+  getter prelude_path : String?
   getter wasm_path : String?
   getter js_path : String?
   getter loader_path : String?
@@ -23,41 +25,37 @@ class MrbcCompiler
   )
     @manifest_path = nil
     @chi_paths = [] of String
+    @prelude_path = nil
     @wasm_path = nil
     @js_path = nil
     @loader_path = nil
     @warnings = [] of String
   end
 
-  def compile(components : Array(MochiComponent), output_dir : String) : Nil
+  def compile(components : Array(MochiComponent), output_dir : String, prelude_code : String = "") : Nil
     @chi_paths.clear
+    @prelude_path = nil
     @warnings.clear
     Dir.mkdir_p(output_dir)
     components_dir = File.join(output_dir, COMPONENTS_DIR)
     Dir.mkdir_p(components_dir)
 
-    sorted_components = components.sort_by { |component| component.manifest.tag_name }
-    results = Channel(Tuple(String, String?, String?)).new(sorted_components.size)
-    chi_paths_by_tag = {} of String => String
+    @mrbc_path ||= resolved_mrbc_path
 
-    sorted_components.each do |component|
-      spawn do
-        begin
-          chi_path = compile_component(component, components_dir)
-          results.send({component.manifest.tag_name, chi_path, nil})
-        rescue ex
-          results.send({component.manifest.tag_name, nil, ex.message})
-        end
-      end
+    unless prelude_code.strip.empty?
+      @prelude_path = compile_prelude(prelude_code, components_dir)
     end
 
+    sorted_components = sort_components_topologically(components)
+    chi_paths_by_tag = {} of String => String
     errors = [] of String
-    sorted_components.size.times do
-      tag_name, chi_path, error = results.receive
-      if error
-        errors << "#{tag_name}: #{error}"
-      elsif chi_path
-        chi_paths_by_tag[tag_name] = chi_path
+
+    sorted_components.each do |component|
+      begin
+        chi_path = compile_component(component, components_dir)
+        chi_paths_by_tag[component.manifest.tag_name] = chi_path
+      rescue ex
+        errors << "#{component.manifest.tag_name}: #{ex.message}"
       end
     end
 
@@ -84,6 +82,73 @@ class MrbcCompiler
     File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components))
   end
 
+  private def sort_components_topologically(components : Array(MochiComponent)) : Array(MochiComponent)
+    alphabetical = components.sort_by { |component| component.manifest.tag_name }
+    by_tag = {} of String => MochiComponent
+    alphabetical.each { |c| by_tag[c.manifest.tag_name] = c }
+
+    visited = Set(String).new
+    visiting = Set(String).new
+    ordered = [] of MochiComponent
+
+    visit = uninitialized Proc(MochiComponent, Nil)
+    visit = ->(comp : MochiComponent) do
+      tag = comp.manifest.tag_name
+      return if visited.includes?(tag)
+      return if visiting.includes?(tag)
+
+      visiting << tag
+      all_html = String.build do |io|
+        io << comp.manifest.html_template
+        comp.manifest.all_bindings.each do |b|
+          io << " " << b.template_text if b.template_text
+          b.branches.each { |br| io << " " << br.html_template }
+        end
+      end
+
+      alphabetical.each do |candidate|
+        ctag = candidate.manifest.tag_name
+        next if ctag == tag
+        if all_html.includes?("<#{ctag}")
+          visit.call(candidate)
+        end
+      end
+
+      visiting.delete(tag)
+      visited << tag
+      ordered << comp
+    end
+
+    alphabetical.each { |comp| visit.call(comp) }
+    ordered
+  end
+
+  private def compile_prelude(prelude_code : String, components_dir : String) : String
+    source = SorbetTypeStripper.strip(prelude_code)
+    source = GvmSourcePreparer.strip_class_ivars(source)
+
+    ruby_file = File.tempfile("mochi-prelude", ".rb")
+    mrb_file = File.tempfile("mochi-prelude", ".mrb")
+
+    begin
+      ruby_file.print(source)
+      ruby_file.close
+      mrb_file.close
+
+      run_mrbc(ruby_file.path, mrb_file.path)
+      bytecode = File.read(mrb_file.path).to_slice
+      RiteVerifier.verify!(bytecode, "prelude.chi")
+      body = strip_rite_header(bytecode, "prelude")
+
+      chi_path = File.join(components_dir, "prelude.chi")
+      File.write(chi_path, body)
+      chi_path
+    ensure
+      File.delete(ruby_file.path) if File.exists?(ruby_file.path)
+      File.delete(mrb_file.path) if File.exists?(mrb_file.path)
+    end
+  end
+
   private def compile_component(component : MochiComponent, components_dir : String) : String
     manifest = component.manifest
     source = SorbetTypeStripper.strip(component.ruby_code)
@@ -98,7 +163,10 @@ class MrbcCompiler
       mrb_file.close
 
       run_mrbc(ruby_file.path, mrb_file.path)
+
       bytecode = File.read(mrb_file.path).to_slice
+      RiteVerifier.verify!(bytecode, manifest.tag_name)
+
       body = strip_rite_header(bytecode, manifest.tag_name)
 
       chi_path = File.join(components_dir, manifest.chi_file)
@@ -160,47 +228,86 @@ class MrbcCompiler
     @loader_source || self.class.find_loader
   end
 
+  private def self.search_roots : Array(String)
+    roots = [Dir.current]
+    if exe = Process.executable_path
+      exe_dir = File.dirname(exe)
+      roots << exe_dir
+      roots << File.expand_path("..", exe_dir)
+    end
+    roots.uniq
+  end
+
+  @@cached_mrbc : String?
+  @@mrbc_resolved : Bool = false
+  @@cached_wasm : String?
+  @@wasm_resolved : Bool = false
+  @@cached_js : String?
+  @@js_resolved : Bool = false
+  @@cached_loader : String?
+  @@loader_resolved : Bool = false
+
   def self.find_mrbc : String?
-    Process.find_executable("mrbc") || first_existing_executable([
-      File.join(Dir.current, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
-      File.join(Dir.current, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
-      File.join(Dir.current, "..", "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
-      File.join(Dir.current, "..", "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
-    ])
+    return @@cached_mrbc if @@mrbc_resolved
+    @@mrbc_resolved = true
+
+    if found = Process.find_executable("mrbc")
+      return @@cached_mrbc = found
+    end
+    candidates = [] of String
+    search_roots.each do |root|
+      candidates << File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc")
+      candidates << File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
+      candidates << File.join(root, "..", "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc")
+      candidates << File.join(root, "..", "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
+    end
+    @@cached_mrbc = first_existing_executable(candidates)
   end
 
   def self.find_wasm : String?
-    candidates = [
-      File.join(Dir.current, "..", "mochi-gvm", "dist", "mochi-gvm.wasm"),
-      File.join(Dir.current, "..", "..", "mochi-gvm", "dist", "mochi-gvm.wasm"),
-      File.join(Dir.current, "mochi-gvm", "dist", "mochi-gvm.wasm"),
-      File.join(Dir.current, "dist", "mochi-gvm.wasm"),
-    ]
+    return @@cached_wasm if @@wasm_resolved
+    @@wasm_resolved = true
 
-    first_existing_file(candidates)
+    candidates = [] of String
+    search_roots.each do |root|
+      candidates << File.join(root, "..", "mochi-gvm", "dist", "mochi-gvm.wasm")
+      candidates << File.join(root, "..", "..", "mochi-gvm", "dist", "mochi-gvm.wasm")
+      candidates << File.join(root, "mochi-gvm", "dist", "mochi-gvm.wasm")
+      candidates << File.join(root, "dist", "mochi-gvm.wasm")
+    end
+
+    @@cached_wasm = first_existing_file(candidates)
   end
 
   def self.find_js : String?
-    candidates = [
-      File.join(Dir.current, "..", "mochi-gvm", "dist", "mochi-gvm.js"),
-      File.join(Dir.current, "..", "..", "mochi-gvm", "dist", "mochi-gvm.js"),
-      File.join(Dir.current, "mochi-gvm", "dist", "mochi-gvm.js"),
-      File.join(Dir.current, "dist", "mochi-gvm.js"),
-    ]
+    return @@cached_js if @@js_resolved
+    @@js_resolved = true
 
-    first_existing_file(candidates)
+    candidates = [] of String
+    search_roots.each do |root|
+      candidates << File.join(root, "..", "mochi-gvm", "dist", "mochi-gvm.js")
+      candidates << File.join(root, "..", "..", "mochi-gvm", "dist", "mochi-gvm.js")
+      candidates << File.join(root, "mochi-gvm", "dist", "mochi-gvm.js")
+      candidates << File.join(root, "dist", "mochi-gvm.js")
+    end
+
+    @@cached_js = first_existing_file(candidates)
   end
 
   def self.find_loader : String?
-    candidates = [
-      File.join(Dir.current, "runtime", "mochi-loader.js"),
-      File.join(Dir.current, "..", "runtime", "mochi-loader.js"),
-      File.join(Dir.current, "..", "..", "runtime", "mochi-loader.js"),
-      File.join(Dir.current, "..", "mochi-gvm", "runtime", "mochi-loader.js"),
-      File.join(Dir.current, "..", "..", "mochi-gvm", "runtime", "mochi-loader.js"),
-    ]
+    return @@cached_loader if @@loader_resolved
+    @@loader_resolved = true
 
-    first_existing_file(candidates)
+    candidates = [] of String
+    search_roots.each do |root|
+      candidates << File.join(root, "runtime", "mochi-loader.js")
+      candidates << File.join(root, "..", "runtime", "mochi-loader.js")
+      candidates << File.join(root, "..", "..", "runtime", "mochi-loader.js")
+      candidates << File.join(root, "..", "mochi-gvm", "runtime", "mochi-loader.js")
+      candidates << File.join(root, "..", "..", "mochi-gvm", "runtime", "mochi-loader.js")
+    end
+
+    @@cached_loader = first_existing_file(candidates)
   end
 
   private def self.first_existing_file(candidates : Array(String)) : String?
@@ -222,6 +329,9 @@ class MrbcCompiler
   private def build_manifest_json(components : Array(MochiComponent)) : String
     JSON.build do |json|
       json.object do
+        if prelude = @prelude_path
+          json.field "prelude", File.basename(prelude)
+        end
         json.field "components" do
           json.array do
             components.each do |component|

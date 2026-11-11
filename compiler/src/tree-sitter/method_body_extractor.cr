@@ -1,5 +1,6 @@
 require "./ruby_parser"
 require "./bindings"
+require "./string_extractor"
 require "../ruby/ruby_def"
 
 module TreeSitter
@@ -7,14 +8,17 @@ module TreeSitter
     def self.extract_method_bodies(source : String, class_name : String) : Hash(String, RubyDef)
       parser = RubyParser.new
       tree = parser.parse(source)
-      root = tree.root_node
+      extract_method_bodies(tree.root_node, class_name, source)
+    end
 
+    def self.extract_method_bodies(root : Node, class_name : String, source : String) : Hash(String, RubyDef)
       methods = {} of String => RubyDef
 
       class_node = find_class_by_name(root, class_name)
       return methods unless class_node
 
-      visit_node_for_methods(class_node, class_name, methods, source)
+      source_lines = source.lines
+      visit_node_for_methods(class_node, class_name, methods, source, source_lines)
       return methods
     end
 
@@ -22,10 +26,14 @@ module TreeSitter
     # the component class. Strict bindings treat a bare `{name}` as a method
     # call, and these generated readers count as defined methods.
     def self.extract_attribute_readers(source : String, class_name : String) : Set(String)
-      readers = Set(String).new
       parser = RubyParser.new
       tree = parser.parse(source)
-      class_node = find_class_by_name(tree.root_node, class_name)
+      extract_attribute_readers(tree.root_node, class_name)
+    end
+
+    def self.extract_attribute_readers(root : Node, class_name : String) : Set(String)
+      readers = Set(String).new
+      class_node = find_class_by_name(root, class_name)
       return readers unless class_node
 
       body = class_node.child_by_field_name("body")
@@ -68,7 +76,13 @@ module TreeSitter
 
       parser = RubyParser.new
       tree = parser.parse(source)
-      class_node = find_class_by_name(tree.root_node, class_name)
+      remove_methods(tree.root_node, source, class_name, method_names)
+    end
+
+    def self.remove_methods(root : Node, source : String, class_name : String, method_names : Array(String)) : String
+      return source if method_names.empty?
+
+      class_node = find_class_by_name(root, class_name)
       return source unless class_node
 
       body = class_node.child_by_field_name("body")
@@ -146,32 +160,34 @@ module TreeSitter
       return parts.join("::")
     end
 
-    private def self.visit_node_for_methods(node : Node, class_name : String, methods : Hash(String, RubyDef), source : String)
+    private def self.visit_node_for_methods(node : Node, class_name : String, methods : Hash(String, RubyDef), source : String, source_lines : Array(String))
       if node.type == "method"
-        if ruby_def = extract_method_def(node, class_name, source)
+        if ruby_def = extract_method_def(node, class_name, source, source_lines)
           methods[ruby_def.name.not_nil!] = ruby_def
         end
       end
 
       node.each_named_child do |child|
-        visit_node_for_methods(child, class_name, methods, source)
+        visit_node_for_methods(child, class_name, methods, source, source_lines)
       end
     end
 
-    private def self.extract_method_def(method_node : Node, class_name : String, source : String) : RubyDef?
+    private def self.extract_method_def(method_node : Node, class_name : String, source : String, source_lines : Array(String)) : RubyDef?
       name_node = method_node.child_by_field_name("name")
       return nil unless name_node
 
       method_name = name_node.text
       parameters = extract_parameters(method_node)
-      body = extract_body_as_lines(method_node)
+      body = extract_body_as_lines(method_node, source_lines)
+      raw_string = StringExtractor.extract_string_from_method_node(method_node)
 
       return RubyDef.new(
         method_name,
         "/todo",
         class_name,
         body,
-        parameters
+        parameters,
+        raw_string
       )
     end
 
@@ -203,11 +219,10 @@ module TreeSitter
       return parameters
     end
 
-    private def self.extract_body_as_lines(method_node : Node) : Array(String)
+    private def self.extract_body_as_lines(method_node : Node, source_lines : Array(String)) : Array(String)
       start_point = LibTreeSitter.ts_node_start_point(method_node.raw)
       end_point = LibTreeSitter.ts_node_end_point(method_node.raw)
 
-      source_lines = method_node.source.lines
       start_row = start_point.row.to_i
       end_row = end_point.row.to_i
 

@@ -20,46 +20,41 @@ class Compiler
   MAX_TRACKED_IVARS = 256
   BINDING_LITERALS  = ["true", "false", "nil", "self"]
 
+  @ruby_parser : TreeSitter::RubyParser
+
   def initialize
+    @ruby_parser = TreeSitter::RubyParser.new
   end
 
   def transpile_directory(input_dir : String, output_dir : String, builder_man : BuilderMan, trace : Pftrace::Trace? = nil, sequence_id : UInt32 = 1_u32)
     puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'"
 
     components = [] of MochiComponent
+    prelude_files = [] of Tuple(String, String)
     i = 1
 
-    nr_files = 0
-    done_channel = Channel(Nil).new
     errors = [] of String
 
+    t_start = Time.monotonic
     trace_slice(trace, "ProcessComponents", sequence_id) do
-      Dir.glob(Path[input_dir, "**", "*.rb"].to_s) do |path|
-        if File.file?(path) && path.ends_with?(".rb")
-          nr_files += 1
-          spawn do
-            begin
-              puts "Processing #{path}"
-              absolute_path = Path[path].expand.to_s
+      paths = Dir.glob(Path[input_dir, "**", "*.rb"].to_s).select { |p| File.file?(p) && p.ends_with?(".rb") }.sort
+      paths.each do |path|
+        begin
+          puts "Processing #{path}"
+          absolute_path = Path[path].expand.to_s
 
-              rb_file = File.read(absolute_path)
-              component = transpile_component(rb_file, i, absolute_path)
+          rb_file = File.read(absolute_path)
+          component = transpile_component(rb_file, i, absolute_path)
 
-              i += 1
-              if component
-                components << component
-              end
-            rescue ex
-              errors << "Error processing file #{path}: #{ex.message}"
-            ensure
-              done_channel.send(nil)
-            end
+          i += 1
+          if component
+            components << component
+          elsif !rb_file.strip.empty?
+            prelude_files << {absolute_path, rb_file}
           end
+        rescue ex
+          errors << "Error processing file #{path}: #{ex.message}"
         end
-      end
-
-      nr_files.times do
-        done_channel.receive
       end
     end
 
@@ -67,11 +62,12 @@ class Compiler
       raise "Component transpilation failed:\n#{errors.join("\n")}"
     end
 
-    puts "Done with preparing components for transpilation"
+    puts "Done with preparing components for transpilation (#{Time.monotonic})"
+    prelude_code = prelude_files.sort_by(&.[0]).map(&.[1]).join("\n\n")
 
     trace_slice(trace, "EmitBytecode", sequence_id) do
       compiler = MrbcCompiler.new
-      compiler.compile(components, output_dir)
+      compiler.compile(components, output_dir, prelude_code)
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
       puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
     end
@@ -80,7 +76,10 @@ class Compiler
   end
 
   def transpile_component(rb_file : String, i : Int32, absolute_path : String)
-    cls_name = RubyUnderstander.class_name(rb_file)
+    tree = @ruby_parser.parse(rb_file)
+    root = tree.root_node
+
+    cls_name = RubyUnderstander.class_name(root)
 
     print_cmp_start_separator(cls_name, i)
     puts "ClassName:'#{cls_name}'"
@@ -89,8 +88,8 @@ class Compiler
       return
     end
 
-    methods : Hash(String, RubyDef) = RubyUnderstander.extract_method_bodies(rb_file, cls_name)
-    tag_name = RubyUnderstander.get_cmp_name(rb_file, cls_name)
+    methods : Hash(String, RubyDef) = RubyUnderstander.extract_method_bodies(root, cls_name, rb_file)
+    tag_name = RubyUnderstander.get_cmp_name(root, cls_name)
     html_method = methods["html"]?
 
     # A component is identified by its tag name or its html method. Classes
@@ -105,25 +104,29 @@ class Compiler
       raise "Component '#{cls_name}' defines an html method but no @tag_name"
     end
 
+    unless tag_name.includes?("-")
+      raise "Component '#{cls_name}' has invalid @tag_name '#{tag_name}': custom element tag names must contain a hyphen"
+    end
+
     if html_method.nil?
       raise "Component '#{cls_name}' defines @tag_name but no html method"
     end
 
-    imports = RubyUnderstander.get_imports(rb_file)
+    imports = RubyUnderstander.get_imports(root)
     css = if css_method = methods["css"]?
-            RubyUnderstander.extract_raw_string_from_def_body(css_method.body, "css")
+            css_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(css_method.body, "css")
           else
             ""
           end
-    html = RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
+    html = html_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
 
     # Remove html and css before injecting helpers. Their string bodies may
     # contain `{end}`, which must never be mistaken for the class terminator.
-    amped_ruby_code = RubyUnderstander.remove_methods(rb_file, cls_name, ["html", "css"])
+    amped_ruby_code = RubyUnderstander.remove_methods(root, rb_file, cls_name, ["html", "css"])
 
     # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
     attr_hash_result = AttributeHashExtractor.process(html)
-    html = attr_hash_result.html
+    html = ComponentGenerator.escape_double_braces(attr_hash_result.html)
 
     amped_ruby_code = AttributeHashGenerator.inject_methods_into_class(
       amped_ruby_code,
@@ -145,7 +148,7 @@ class Compiler
     html = EventArgumentExtractor.process(html)
 
     # Analyze instance variables to determine reactables automatically
-    vars = TreeSitter::InstanceVarAnalyzer.analyze(rb_file)
+    vars = TreeSitter::InstanceVarAnalyzer.analyze(root)
     validate_ivar_capacity(cls_name, vars)
 
     # Filter for variables that are either:
@@ -166,14 +169,11 @@ class Compiler
       reactables_arr << "__mochi_attr_hash_#{hash_cond.id}"
     end
 
-    # puts "Computed reactables for #{cls_name}: #{reactables_arr}"
     reactables = if reactables_arr.empty?
                    "[]"
                  else
                    "['#{reactables_arr.join("', '")}']"
                  end
-
-    # puts "reactables: #{reactables}"
 
     conditional_result = ConditionalProcessor.process(html)
 
@@ -198,13 +198,7 @@ class Compiler
       methods.keys
     )
 
-    amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
-      amped_ruby_code,
-      cls_name,
-      generator.each_blocks
-    )
-
-    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, rb_file)
+    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, root)
 
     rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
       amped_ruby_code,
@@ -229,11 +223,11 @@ class Compiler
     cls_name : String,
     bindings : Array(BindingDescriptor),
     method_names : Array(String),
-    rb_file : String,
+    root : TreeSitter::Node,
   ) : Nil
     readable = Set(String).new
     method_names.each { |name| readable << name }
-    RubyUnderstander.attribute_readers(rb_file, cls_name).each { |name| readable << name }
+    RubyUnderstander.attribute_readers(root, cls_name).each { |name| readable << name }
 
     bindings.each do |binding|
       expression = binding.getter_expr
@@ -247,6 +241,16 @@ class Compiler
 
       raise "Component '#{cls_name}' binds undefined method '#{name}' in #{binding.template_text.inspect}; use '@#{name}' for an instance variable"
     end
+  end
+
+  private def validate_binding_methods(
+    cls_name : String,
+    bindings : Array(BindingDescriptor),
+    method_names : Array(String),
+    rb_file : String,
+  ) : Nil
+    tree = @ruby_parser.parse(rb_file)
+    validate_binding_methods(cls_name, bindings, method_names, tree.root_node)
   end
 
   private def validate_ivar_capacity(cls_name : String, vars : Array(TreeSitter::InstanceVarAnalyzer::VariableInfo)) : Nil

@@ -108,11 +108,14 @@ class ConditionalProcessor
   IF_TOKEN_LEN    = IF_TOKEN.size
   ELSIF_TOKEN_LEN = ELSIF_TOKEN.size
   ELSE_TOKEN_LEN  = ELSE_TOKEN.size
+  EACH_TOKEN_LEN  = EACH_TOKEN.size
   END_TOKEN_LEN   = END_TOKEN.size
 
   # Main entry point. Processes HTML with `{if}` / `{elsif}` / `{else}` /
   # `{end}` chains and replaces each top-level chain with a comment anchor.
   def self.process(html : String) : ConditionalResult
+    return ConditionalResult.new(html, [] of ConditionalBlock) unless html.includes?("{if ")
+
     blocks = extract_conditionals(html)
     processed_html = replace_blocks_with_elements(html, blocks)
     ConditionalResult.new(processed_html, blocks)
@@ -123,11 +126,17 @@ class ConditionalProcessor
   # containing branch so callers can recursively compile branch templates.
   def self.extract_conditionals(html : String) : Array(ConditionalBlock)
     blocks = [] of ConditionalBlock
+    return blocks unless html.includes?("{if ")
+
     stack = [] of StackFrame
     next_id = 0
     pos = 0
 
     while pos < html.size
+      next_brace = html.index('{', pos)
+      break unless next_brace
+      pos = next_brace
+
       if match = try_match_if_token(html, pos)
         stack << StackFrame.new(match.condition, pos, match.content_start, next_id)
         next_id += 1
@@ -188,9 +197,9 @@ class ConditionalProcessor
   end
 
   private def self.match_token(html : String, pos : Int32, token : String, token_len : Int32) : ConditionalMatch?
-    return nil unless html[pos..].starts_with?(token)
+    return nil unless html.index(token, pos) == pos
 
-    close_brace = html.index("}", pos)
+    close_brace = html.index('}', pos + token_len)
     return nil unless close_brace
 
     ConditionalMatch.new(
@@ -200,17 +209,17 @@ class ConditionalProcessor
   end
 
   private def self.try_match_else_token(html : String, pos : Int32) : Bool
-    html[pos..].starts_with?(ELSE_TOKEN)
+    html.index(ELSE_TOKEN, pos) == pos
   end
 
   private def self.try_match_end_token(html : String, pos : Int32) : Bool
-    html[pos..].starts_with?(END_TOKEN)
+    html.index(END_TOKEN, pos) == pos
   end
 
   private def self.try_match_each_token(html : String, pos : Int32) : Int32?
-    return nil unless html[pos..].starts_with?(EACH_TOKEN)
+    return nil unless html.index(EACH_TOKEN, pos) == pos
 
-    close_brace = html.index("}", pos)
+    close_brace = html.index('}', pos + EACH_TOKEN_LEN)
     return nil unless close_brace
 
     close_brace + 1
@@ -221,6 +230,10 @@ class ConditionalProcessor
     pos = content_start
 
     while pos < html.size
+      next_brace = html.index('{', pos)
+      return html.size unless next_brace
+      pos = next_brace
+
       if block_open_at?(html, pos)
         depth += 1
         pos += 1
@@ -237,9 +250,9 @@ class ConditionalProcessor
   end
 
   private def self.block_open_at?(html : String, pos : Int32) : Bool
-    html[pos..].starts_with?(IF_TOKEN) ||
-      html[pos..].starts_with?(UNLESS_TOKEN) ||
-      html[pos..].starts_with?(EACH_TOKEN)
+    html.index(IF_TOKEN, pos) == pos ||
+      html.index(UNLESS_TOKEN, pos) == pos ||
+      html.index(EACH_TOKEN, pos) == pos
   end
 
   private def self.finish_branch(frame : StackFrame, html : String, content_end : Int32)

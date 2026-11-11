@@ -5,8 +5,10 @@ module TreeSitter
     def self.extract_imports(source : String) : Array(String)
       parser = RubyParser.new
       tree = parser.parse(source)
-      root = tree.root_node
+      extract_imports(tree.root_node)
+    end
 
+    def self.extract_imports(root : Node) : Array(String)
       imports = [] of String
       visit_node(root, imports)
       imports

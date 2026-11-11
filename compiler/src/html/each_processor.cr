@@ -64,6 +64,8 @@ class EachProcessor
   END_TOKEN_LEN  = 5
 
   def self.process(html : String, id_start : Int32 = 0) : EachResult
+    return EachResult.new(html, [] of EachBlock) unless html.includes?("{each ")
+
     all_blocks = extract_each_blocks(html, id_start)
     processed_html = replace_blocks_with_elements(html, all_blocks)
 
@@ -116,11 +118,17 @@ class EachProcessor
 
   def self.extract_each_blocks(html : String, id_start : Int32 = 0) : Array(EachBlock)
     result = [] of EachBlock
+    return result unless html.includes?("{each ")
+
     stack = [] of EachStackFrame
     next_id = id_start
     pos = 0
 
     while pos < html.size
+      next_brace = html.index('{', pos)
+      break unless next_brace
+      pos = next_brace
+
       if match = try_match_each_token(html, pos)
         stack << EachStackFrame.new(match.loop_def, pos, match.content_start, next_id)
         next_id += 1
@@ -146,9 +154,9 @@ class EachProcessor
   end
 
   def self.try_match_each_token(html : String, pos : Int32) : EachMatch?
-    return nil unless html[pos..].starts_with?(EACH_TOKEN)
+    return nil unless html.index(EACH_TOKEN, pos) == pos
 
-    close_brace = html.index("}", pos)
+    close_brace = html.index('}', pos + EACH_TOKEN_LEN)
     return nil unless close_brace
 
     loop_str = html[(pos + EACH_TOKEN_LEN)...close_brace].strip
@@ -173,6 +181,6 @@ class EachProcessor
   end
 
   def self.try_match_end_token(html : String, pos : Int32) : Bool
-    return html[pos..].starts_with?(END_TOKEN)
+    html.index(END_TOKEN, pos) == pos
   end
 end
