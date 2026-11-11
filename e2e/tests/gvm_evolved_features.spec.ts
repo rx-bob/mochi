@@ -223,6 +223,134 @@ end
   }
 });
 
+function screenComponentSource(tagName: string, className: string, bindingCount: number): string {
+  const ivars = Array.from({ length: bindingCount }, (_, index) => `  @v${index}`).join("\n");
+  const assignments = Array.from(
+    { length: bindingCount },
+    (_, index) => `    @v${index} = "${tagName}-${index}"`,
+  ).join("\n");
+  const spans = Array.from(
+    { length: bindingCount },
+    (_, index) => `        <span class="v v${index}">{@v${index}}</span>`,
+  ).join("\n");
+  return `class ${className}
+  @tag_name = "${tagName}"
+${ivars}
+
+  def initialize
+${assignments}
+  end
+
+  def html
+    %Q{
+      <div class="screen">
+${spans}
+      </div>
+    }
+  end
+end
+`;
+}
+
+test("VM registrations return to the active-screen baseline across 200 round trips", async ({ page }) => {
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-lifetime-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  const bindingCount = 40;
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, "lib", "ScreenA.rb"),
+    screenComponentSource("screen-a", "ScreenA", bindingCount),
+  );
+  fs.writeFileSync(
+    path.join(projectDir, "lib", "ScreenB.rb"),
+    screenComponentSource("screen-b", "ScreenB", bindingCount),
+  );
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await page.waitForFunction(() => {
+      const loader = (window as any).MochiLoader;
+      return loader && loader.components.length === 2 &&
+        window.customElements.get("screen-a") &&
+        window.customElements.get("screen-b");
+    });
+
+    const result = await page.evaluate(async () => {
+      const root = document.getElementById("root");
+      if (!root) throw new Error("missing root");
+      const stats = () => (window as any).MochiLoader.debugStats();
+      const mount = async (tag: string) => {
+        const element = document.createElement(tag);
+        root.appendChild(element);
+        await (element as any)._mochiReady;
+        return element;
+      };
+
+      let current = await mount("screen-a");
+      const baseline = stats();
+      const samples: Array<Record<string, number>> = [];
+      let mountCount = 1;
+      for (let round = 0; round < 200; round += 1) {
+        current.remove();
+        const second = await mount("screen-b");
+        mountCount += 1;
+        samples.push(stats());
+        second.remove();
+        const first = await mount("screen-a");
+        mountCount += 1;
+        samples.push(stats());
+        current = first;
+      }
+      current.remove();
+      const finalStats = stats();
+      const bad = samples.filter((sample) =>
+        sample.components !== baseline.components ||
+        sample.bindings !== baseline.bindings ||
+        sample.elements !== baseline.elements
+      );
+      return { baseline, finalStats, badCount: bad.length, firstBad: bad[0] || null, mountCount };
+    });
+
+    expect(result.baseline.components).toBe(1);
+    expect(result.baseline.bindings).toBe(bindingCount);
+    expect(result.baseline.elements).toBe(1);
+    expect(result.badCount).toBe(0);
+    expect(result.finalStats.components).toBe(0);
+    expect(result.finalStats.bindings).toBe(0);
+    expect(result.finalStats.elements).toBe(0);
+    expect(result.finalStats.timers).toBe(0);
+    expect(result.finalStats.pendingFetches).toBe(0);
+    expect(result.mountCount).toBe(401);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 test("Sencha frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
   test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);

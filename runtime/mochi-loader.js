@@ -20,6 +20,7 @@
     pendingFetches: [],
     timers: new Map(),
     unmountedInstances: new Set(),
+    nextMountToken: 0,
     actionRouterInstalled: false,
     actionSupportCache: new Map()
   };
@@ -244,6 +245,9 @@
   function fetchElement(request) {
     var element = state.elements.get(String(request.instance));
     if (!element || element._mochiDisconnected || element._mochiUnmounted) return null;
+    if (request.mountToken !== undefined && element._mochiMountToken !== request.mountToken) {
+      return null;
+    }
     return element;
   }
 
@@ -320,7 +324,8 @@
   }
 
   function deliverFetch(module, element, request, envelope) {
-    if (!fetchElement(request)) return;
+    var liveElement = fetchElement(request);
+    if (!liveElement || liveElement !== element) return;
     try {
       writeFetchEnvelope(module, element, request, envelope);
       if (!element._mochiDisconnected) {
@@ -335,6 +340,9 @@
   }
 
   function startFetch(module, request, element) {
+    // Capture the mount attempt so a response that arrives after disposal
+    // cannot reach a later component that reused the VM instance slot.
+    request.mountToken = element._mochiMountToken;
     if (typeof global.fetch !== "function") {
       deliverFetch(module, element, request, fetchNetworkEnvelope("fetch unavailable"));
       return;
@@ -448,11 +456,14 @@
       var instanceKey = String(entry.instance || "");
       var callbackName = String(entry.callback || "");
       if (!callbackName) return;
+      var liveElement = state.elements.get(instanceKey);
+      var mountToken = liveElement ? liveElement._mochiMountToken : undefined;
 
       var invokeTimer = function () {
         if (entry.kind !== "every") state.timers.delete(timerId);
         var element = state.elements.get(instanceKey);
-        if (!element || element._mochiDisconnected || element._mochiUnmounted) {
+        if (!element || element._mochiDisconnected || element._mochiUnmounted ||
+            element._mochiMountToken !== mountToken) {
           clearTimerEntry(timerId);
           return;
         }
@@ -474,6 +485,7 @@
       state.timers.set(timerId, {
         id: timerId,
         instance: instanceKey,
+        mountToken: mountToken,
         kind: entry.kind,
         handle: handle
       });
@@ -663,7 +675,40 @@
     }
   }
 
-  async function mountInstance(component, manifest, manifestUrl, element) {
+  // Drops host work produced by a mount attempt that is being rolled back. The
+  // outboxes are drained after every completed entry, so during a synchronous
+  // mount failure their contents belong to the failed instance.
+  function discardHostOutboxes(module) {
+    if (!module) return;
+    try {
+      if (typeof module._mochi_fetch_outbox_clear === "function") module._mochi_fetch_outbox_clear();
+    } catch (error) {}
+    try {
+      if (typeof module._mochi_emit_outbox_clear === "function") module._mochi_emit_outbox_clear();
+    } catch (error) {}
+  }
+
+  // Removes one instance's VM bindings and component root. Returns an Error on
+  // failure so callers can report cleanup problems without masking the original
+  // mount or unmount error.
+  function disposeVmInstance(module, instance) {
+    if (!module || instance === null || instance === undefined) {
+      return new Error("mochi-loader: missing VM instance");
+    }
+    if (typeof module._mochi_unmount_component !== "function") {
+      return new Error("mochi-loader: runtime does not support component disposal");
+    }
+    var result = module._mochi_unmount_component(instance);
+    if (result !== 0) {
+      return new Error("mochi-loader: component disposal failed: " + lastError(module));
+    }
+    return null;
+  }
+
+  // A mount is one transaction: instance creation, attribute sync, binding
+  // registration, then the mounted hook. Any failure removes everything the
+  // transaction created and rethrows the original error.
+  async function mountInstance(component, manifest, manifestUrl, element, mountToken) {
     var module = await loadComponentClass(component, manifest, manifestUrl);
     var instance;
 
@@ -675,21 +720,47 @@
       throw new Error("mochi-loader: mount failed for " + component.class_name + ": " + lastError(module));
     }
 
-    syncAllElementAttributes(module, instance, element);
+    var mountedStarted = false;
+    try {
+      syncAllElementAttributes(module, instance, element);
 
-    flattenBindings(component.bindings).forEach(function (binding) {
-      var symbol = intern(module, binding.getter_sym);
-      if (module._mochi_register_binding(instance, binding.id, symbol) !== 0) {
-        throw new Error("mochi-loader: binding registration failed for " + binding.getter_sym + ": " + lastError(module));
+      flattenBindings(component.bindings).forEach(function (binding) {
+        var symbol = intern(module, binding.getter_sym);
+        if (module._mochi_register_binding(instance, binding.id, symbol) !== 0) {
+          throw new Error("mochi-loader: binding registration failed for " +
+            binding.getter_sym + ": " + lastError(module));
+        }
+      });
+
+      if (hasMethod(module, instance, "mounted")) {
+        mountedStarted = true;
+        var mounted = intern(module, "mounted");
+        if (module._mochi_dispatch_event(instance, mounted) !== 1) {
+          throw new Error("mochi-loader: mounted dispatch failed for " +
+            component.class_name + ": " + lastError(module));
+        }
       }
-    });
 
-    if (hasMethod(module, instance, "mounted")) {
-      var mounted = intern(module, "mounted");
-      module._mochi_dispatch_event(instance, mounted);
+      return { module: module, instance: instance, mountToken: mountToken };
+    } catch (error) {
+      if (mountedStarted) {
+        // The component reached `mounted`, so give its `unmounted` hook one
+        // chance to reverse partial Ruby-side setup before the registrations go.
+        try {
+          if (hasMethod(module, instance, "unmounted")) {
+            module._mochi_dispatch_event(instance, intern(module, "unmounted"));
+          }
+        } catch (hookError) {
+          console.error("[mochi] " + component.tag_name + " rollback unmounted failed", hookError);
+        }
+      }
+      discardHostOutboxes(module);
+      var cleanupError = disposeVmInstance(module, instance);
+      if (cleanupError) {
+        console.error("[mochi] " + component.tag_name + " rollback cleanup failed", cleanupError);
+      }
+      throw error;
     }
-
-    return { module: module, instance: instance };
   }
 
   function resolveTarget(root, path) {
@@ -1277,7 +1348,7 @@
 
   function applyPatches(target, module) {
     var element = target && target.bindingTargets ? target : state.elements.get(String(target));
-    if (!element) return;
+    if (!element || element._mochiUnmounted) return;
     var activeModule = module || element._mochiModule;
     var instance = element._mochiInstance;
     if (!activeModule || instance === null || instance === undefined) return;
@@ -1331,13 +1402,41 @@
         this._mochiAttrObserver = null;
         this._mochiDisconnected = false;
         this._mochiUnmounted = false;
+        this._mochiMountState = "idle";
+        this._mochiMountToken = 0;
+        this._mochiEventsAttached = false;
       }
 
       connectedCallback() {
         ensureActionRouter();
-        if (this.shadowRoot) return;
+        if (this._mochiMountState === "mounting" || this._mochiMountState === "mounted") return;
+        if (this.shadowRoot && this._mochiMountState !== "failed") return;
+        this._beginMount();
+      }
 
-        var root = this.attachShadow({ mode: "open" });
+      _beginMount() {
+        var root = this.shadowRoot;
+        if (!root) {
+          root = this.attachShadow({ mode: "open" });
+        } else {
+          while (root.firstChild) root.removeChild(root.firstChild);
+        }
+
+        this._mochiMountState = "mounting";
+        this._mochiDisconnected = false;
+        this._mochiUnmounted = false;
+        this._mochiModule = null;
+        this._mochiInstance = null;
+        this.bindingTargets = {};
+        this.bindingValues = {};
+        this.bindingData = {};
+        allBindings.forEach(function (binding) {
+          this.bindingData[binding.id] = binding;
+        }, this);
+        this.refs = this.bindingTargets;
+        this._mochiMountToken = ++state.nextMountToken;
+        var mountToken = this._mochiMountToken;
+
         var style = global.document.createElement("style");
         style.textContent = component.css || "";
         root.appendChild(style);
@@ -1345,29 +1444,46 @@
         var fragment = template.content.cloneNode(true);
         this._resolveBindings(fragment);
         root.appendChild(fragment);
-        this._attachEvents(root);
+        if (!this._mochiEventsAttached) {
+          this._attachEvents(root);
+          this._mochiEventsAttached = true;
+        }
 
         var element = this;
-        this._mochiReady = mountInstance(component, state.manifest, manifestUrl, element).then(function (mounted) {
-          element._mochiModule = mounted.module;
-          element._mochiInstance = mounted.instance;
+        this._mochiReady = mountInstance(component, state.manifest, manifestUrl, element, mountToken)
+          .then(function (mounted) {
+            if (mounted.mountToken !== element._mochiMountToken) {
+              var staleError = disposeVmInstance(mounted.module, mounted.instance);
+              if (staleError) {
+                console.error("[mochi] " + tag + " stale mount cleanup failed", staleError);
+              }
+              return mounted;
+            }
 
-          if (element._mochiDisconnected) {
-            element._unmount(mounted.module, mounted.instance);
+            element._mochiModule = mounted.module;
+            element._mochiInstance = mounted.instance;
+
+            if (element._mochiDisconnected || element._mochiUnmounted) {
+              element._unmount(mounted.module, mounted.instance, mounted.mountToken);
+              return mounted;
+            }
+
+            element._mochiMountState = "mounted";
+            state.elements.set(String(mounted.instance), element);
+            state.unmountedInstances.delete(String(mounted.instance));
+            element._observeAttributes(mounted.module, mounted.instance);
+            applyPatches(element, mounted.module);
+            drainEmits(mounted.module);
+            drainFetches(mounted.module);
             return mounted;
-          }
-
-          state.elements.set(String(mounted.instance), element);
-          element._observeAttributes(mounted.module, mounted.instance);
-          applyPatches(element, mounted.module);
-          drainEmits(mounted.module);
-          drainFetches(mounted.module);
-          return mounted;
-        }).catch(function (error) {
-          element.mochiError = error;
-          console.error("[mochi] " + tag + " mount failed", error);
-          throw error;
-        });
+          }).catch(function (error) {
+            if (mountToken === element._mochiMountToken) {
+              element._mochiMountState = "failed";
+              element.mochiError = error;
+            }
+            console.error("[mochi] " + tag + " mount failed", error);
+            throw error;
+          });
       }
 
       _observeAttributes(module, instance) {
@@ -1396,21 +1512,27 @@
         this._mochiDisconnected = true;
 
         if (this._mochiModule && this._mochiInstance !== null && this._mochiInstance !== undefined) {
-          this._unmount(this._mochiModule, this._mochiInstance);
+          this._unmount(this._mochiModule, this._mochiInstance, this._mochiMountToken);
           return;
         }
 
         var element = this;
         if (this._mochiReady) {
           this._mochiReady.then(function (mounted) {
-            element._unmount(mounted.module, mounted.instance);
+            element._unmount(mounted.module, mounted.instance, mounted.mountToken);
           }).catch(function () {});
         }
       }
 
-      _unmount(module, instance) {
+      // Disposal order: stop routing, cancel the instance's pending host work,
+      // run the unmounted hook once, flush host commands, then always remove the
+      // VM registrations. The DOM/binding caches clear last, after the hook can
+      // no longer read them, and a failed hook never skips VM cleanup.
+      _unmount(module, instance, mountToken) {
         if (this._mochiUnmounted) return;
+        if (mountToken !== undefined && mountToken !== this._mochiMountToken) return;
         this._mochiUnmounted = true;
+        this._mochiMountState = "unmounted";
 
         if (this._mochiAttrObserver) {
           this._mochiAttrObserver.disconnect();
@@ -1434,11 +1556,38 @@
               throw new Error("mochi-loader: unmounted dispatch failed for " + tag + ": " + lastError(module));
             }
           }
-          drainEmits(module);
         } catch (error) {
           this.mochiError = error;
           console.error("[mochi] " + tag + " unmount failed", error);
         }
+
+        // Host drains run even when the hook failed. Consuming the fetch outbox
+        // while the instance is still marked unmounted prevents a later mount
+        // from inheriting the old handle's requests.
+        try {
+          drainEmits(module);
+        } catch (error) {
+          this.mochiError = this.mochiError || error;
+          console.error("[mochi] " + tag + " unmount emit drain failed", error);
+        }
+        try {
+          drainFetches(module);
+        } catch (error) {
+          this.mochiError = this.mochiError || error;
+          console.error("[mochi] " + tag + " unmount fetch drain failed", error);
+        }
+
+        var disposeError = disposeVmInstance(module, instance);
+        if (disposeError) {
+          this.mochiError = this.mochiError || disposeError;
+          console.error("[mochi] " + tag + " VM cleanup failed", disposeError);
+        }
+
+        this._mochiModule = null;
+        this._mochiInstance = null;
+        this.bindingTargets = {};
+        this.bindingValues = {};
+        this.refs = this.bindingTargets;
       }
 
       _resolveBindings(root) {
@@ -1478,7 +1627,12 @@
           return;
         }
 
+        var mountToken = this._mochiMountToken;
         this._mochiReady.then(function (mounted) {
+          if (element._mochiUnmounted || mounted.mountToken !== element._mochiMountToken ||
+              mountToken !== element._mochiMountToken) {
+            return;
+          }
           var symbol = intern(mounted.module, method);
           var dispatched;
 
@@ -1507,7 +1661,7 @@
 
       _dispatchAction(detail) {
         var action = typeof detail === "string" ? detail : detail && detail.action;
-        if (!action || this._mochiDisconnected) return;
+        if (!action || this._mochiDisconnected || this._mochiUnmounted) return;
 
         var target = detail && typeof detail === "object" ? detail.target : null;
         var component = this._mochiComponent || {};
@@ -1541,7 +1695,7 @@
           if (!dispatched) {
             throw new Error("mochi-loader: action dispatch failed for " + action + ": " + lastError(module));
           }
-          if (!this._mochiDisconnected) {
+          if (!this._mochiDisconnected && !this._mochiUnmounted) {
             applyPatches(this, module);
             drainEmits(module);
             drainFetches(module);
@@ -1582,10 +1736,27 @@
     return manifest;
   }
 
+  // Small inspection surface for lifetime tests. VM counts come from the
+  // bridge; the rest describe loader bookkeeping that must also drain.
+  function debugStats() {
+    var module = state.activeModule;
+    return {
+      bindings: module && typeof module._mochi_binding_count === "function"
+        ? Number(module._mochi_binding_count()) : -1,
+      components: module && typeof module._mochi_component_count === "function"
+        ? Number(module._mochi_component_count()) : -1,
+      elements: state.elements.size,
+      timers: state.timers.size,
+      pendingFetches: state.pendingFetches.length,
+      unmountedInstances: state.unmountedInstances.size
+    };
+  }
+
   var loader = {
     boot: boot,
     moduleFactory: null,
     applyPatches: applyPatches,
+    debugStats: debugStats,
     get manifest() { return state.manifest; },
     get components() { return state.manifest ? state.manifest.components : []; }
   };

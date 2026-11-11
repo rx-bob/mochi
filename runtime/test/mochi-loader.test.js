@@ -78,6 +78,9 @@ function fakeModule(log) {
   log.hasMethodCalls = [];
   log.dispatchedArgs = [];
   log.deliveredFetches = [];
+  log.unmounts = [];
+  log.components = new Set();
+  log.failDispatch = new Set();
   log.requiredArgs = new Map();
   log.methods = new Set(["mounted", "increment", "reset"]);
   let nextSymbol = 100;
@@ -118,15 +121,34 @@ function fakeModule(log) {
       return log.methods.has(name) ? 1 : 0;
     },
     _mochi_mount_component() {
-      return String(nextInstance++);
+      const instance = String(nextInstance++);
+      log.components.add(instance);
+      return instance;
+    },
+    _mochi_unmount_component(instance) {
+      log.unmounts.push(instance);
+      log.components.delete(String(instance));
+      log.bindings = log.bindings.filter((binding) => binding.instance !== instance);
+      return 0;
+    },
+    _mochi_binding_count() {
+      return log.bindings.length;
+    },
+    _mochi_component_count() {
+      return log.components.size;
     },
     _mochi_register_binding(instance, bindingId, getterSymbol) {
+      if (log.failBindingAt !== undefined && log.bindings.length + 1 === log.failBindingAt) {
+        return -1;
+      }
       log.bindings.push({ instance, bindingId, getterSymbol });
       return 0;
     },
     _mochi_dispatch_event(instance, methodSymbol) {
+      const name = log.symbolNames.get(methodSymbol);
       log.dispatched.push({ instance, methodSymbol });
-      return 1;
+      if (log.onDispatch) log.onDispatch(name, instance);
+      return log.failDispatch.has(name) ? 0 : 1;
     },
     _mochi_dispatch_event_args(instance, methodSymbol, pointer, length) {
       const json = decoder.decode(module.HEAPU8.slice(pointer, pointer + length));
@@ -198,6 +220,9 @@ function fakeModule(log) {
     queueFetch(text) {
       fetchText = text;
       module.HEAPU8.set(new TextEncoder().encode(text), fetchOutboxOffset);
+    },
+    reuseInstance(value) {
+      nextInstance = value;
     },
     symbols,
   };
@@ -348,6 +373,150 @@ test("disconnect without an unmounted method does not dispatch or error", async 
   assert.equal(log.dispatched.length, dispatchedBefore);
   assert.equal(element.mochiError, undefined);
   assert.equal(log.symbols.get("unmounted"), undefined);
+});
+
+test("failed binding registration rolls back the partial mount and a retry succeeds", async () => {
+  const { log } = await setup([COMPONENT]);
+  log.failBindingAt = 2;
+
+  const failed = document.createElement("my-counter");
+  document.body.appendChild(failed);
+  await assert.rejects(failed._mochiReady);
+
+  assert.equal(failed._mochiMountState, "failed");
+  assert.ok(failed.mochiError);
+  assert.deepEqual(log.unmounts, ["1"]);
+  assert.deepEqual(log.bindings, []);
+  assert.equal(log.components.size, 0);
+  failed.remove();
+
+  log.failBindingAt = undefined;
+  const retry = document.createElement("my-counter");
+  document.body.appendChild(retry);
+  await retry._mochiReady;
+
+  assert.equal(retry._mochiMountState, "mounted");
+  assert.equal(log.bindings.length, 2);
+  assert.equal(log.components.size, 1);
+  assert.deepEqual(log.unmounts, ["1"]);
+});
+
+test("mounted failure runs the unmounted hook once and discards pending host work", async () => {
+  const { module, loader, log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+  log.failDispatch.add("mounted");
+  log.onDispatch = (name, instance) => {
+    if (name !== "mounted") return;
+    module.queueEmit(JSON.stringify({
+      __host: "timer",
+      id: 77,
+      kind: "timeout",
+      ms: 10,
+      instance: instance,
+      callback: "increment",
+    }));
+  };
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await assert.rejects(element._mochiReady);
+
+  assert.ok(element.mochiError);
+  assert.deepEqual(log.unmounts, ["1"]);
+  assert.equal(log.components.size, 0);
+  assert.equal(log.bindings.length, 0);
+  const statistics = loader.debugStats();
+  assert.equal(statistics.timers, 0);
+  const unmountedSymbol = log.symbols.get("unmounted");
+  assert.deepEqual(log.dispatched.filter((entry) => entry.methodSymbol === unmountedSymbol), [
+    { instance: "1", methodSymbol: unmountedSymbol },
+  ]);
+});
+
+test("disconnect disposes VM registrations once and clears binding caches", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const mountToken = element._mochiMountToken;
+  assert.equal(log.bindings.length, 2);
+  assert.equal(log.components.size, 1);
+
+  element.remove();
+  assert.deepEqual(log.unmounts, ["1"]);
+  assert.equal(log.components.size, 0);
+  assert.equal(log.bindings.length, 0);
+  assert.deepEqual(element.bindingTargets, {});
+  assert.deepEqual(element.bindingValues, {});
+  assert.equal(element._mochiMountState, "unmounted");
+
+  element._unmount(module, "1", mountToken);
+  assert.deepEqual(log.unmounts, ["1"]);
+  const unmountedSymbol = log.symbols.get("unmounted");
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === unmountedSymbol).length,
+    1,
+  );
+});
+
+test("unmounted hook failure still removes VM registrations", async () => {
+  const { log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+  log.failDispatch.add("unmounted");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  element.remove();
+
+  assert.ok(element.mochiError);
+  assert.match(element.mochiError.message, /unmounted dispatch failed/);
+  assert.deepEqual(log.unmounts, ["1"]);
+  assert.equal(log.components.size, 0);
+  assert.equal(log.bindings.length, 0);
+});
+
+test("late fetch delivery cannot reach a component that reused the instance slot", async () => {
+  let resolveResponse;
+  const pending = new Promise((resolve) => { resolveResponse = resolve; });
+  const { module, log } = await setup([COMPONENT], { fetch: () => pending });
+
+  const first = document.createElement("my-counter");
+  document.body.appendChild(first);
+  await first._mochiReady;
+
+  module.queueFetch(JSON.stringify({
+    instance: "1",
+    url: "/api/late",
+    callback: "increment",
+    options: {},
+  }));
+  first.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(log.fetches.includes("/api/late"));
+
+  first.remove();
+  assert.deepEqual(log.unmounts, ["1"]);
+
+  module.reuseInstance(1);
+  const second = document.createElement("my-counter");
+  document.body.appendChild(second);
+  await second._mochiReady;
+  assert.equal(second._mochiInstance, "1");
+
+  resolveResponse({
+    ok: true,
+    status: 200,
+    headers: { get: () => "application/json" },
+    text: async () => JSON.stringify({ ok: true }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(log.deliveredFetches, []);
+  assert.equal(second.mochiError, undefined);
 });
 
 test("one document action listener serves every mounted component and caches method support", async () => {
@@ -1336,7 +1505,10 @@ test("strict @ivar, method, and attribute conditional placeholders patch in plac
 
   module.patchQueue.push({ patches: [{ id: 2, value: "" }] });
   loader.applyPatches(element, module);
-  assert.equal(box.hasAttribute("class"), false);
+  // The literal `box` prefix survives an empty conditional placeholder; only
+  // a template made solely of the placeholder removes the attribute.
+  assert.equal(box.classList.contains("box"), true);
+  assert.equal(box.classList.contains("active"), false);
 });
 
 test("html and attribute patches update their cached targets", async () => {
