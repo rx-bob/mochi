@@ -1748,7 +1748,13 @@
       elements: state.elements.size,
       timers: state.timers.size,
       pendingFetches: state.pendingFetches.length,
-      unmountedInstances: state.unmountedInstances.size
+      unmountedInstances: state.unmountedInstances.size,
+      stateObjects: module && typeof module._mochi_state_object_count === "function"
+        ? Number(module._mochi_state_object_count()) : -1,
+      stateAllocated: module && typeof module._mochi_state_allocated_count === "function"
+        ? Number(module._mochi_state_allocated_count()) : -1,
+      stateFreeBytes: module && typeof module._mochi_state_free_bytes === "function"
+        ? Number(module._mochi_state_free_bytes()) : -1
     };
   }
 

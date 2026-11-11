@@ -430,3 +430,167 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("shared values survive unmount while replaced storage stays bounded", async ({ page }) => {
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-reclaim-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "lib", "SharedLifetime.rb"), `SHARED = []
+
+class SharedLifetime
+  @tag_name = "shared-lifetime"
+  @payload
+  @count
+  @shared
+
+  def initialize
+    @payload = "payload-start"
+    @count = 0
+    @shared = SHARED
+  end
+
+  def html
+    %Q{
+      <div class="shared-lifetime">
+        <p class="payload">{@payload}</p>
+        <p class="count">{@count}</p>
+        <button class="churn" onclick="{churn}">Churn</button>
+        <button class="late" onclick="{start_late}">Late</button>
+      </div>
+    }
+  end
+
+  def churn
+    SHARED.push("kept")
+    i = 0
+    even = true
+    while i < 1000
+      if even
+        @payload = "payload-even"
+      else
+        @payload = "payload-odd"
+      end
+      even = !even
+      i += 1
+    end
+    @count = i
+  end
+
+  def start_late
+    Mochi.after(300, :late_callback)
+  end
+
+  def late_callback
+    @payload = "late-fired"
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "SharedPeer.rb"), `class SharedPeer
+  @tag_name = "shared-peer"
+  @seen
+  @shared
+
+  def initialize
+    @seen = 0
+    @shared = SHARED
+  end
+
+  def html
+    %Q{
+      <div class="shared-peer">
+        <p class="seen">{@seen}</p>
+        <button class="sync" onclick="{sync}">Sync</button>
+      </div>
+    }
+  end
+
+  def sync
+    @seen = @shared.length
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await page.waitForFunction(() => {
+      const loader = (window as any).MochiLoader;
+      return loader && loader.components.length === 2 &&
+        window.customElements.get("shared-lifetime") &&
+        window.customElements.get("shared-peer");
+    });
+
+    const result = await page.evaluate(async () => {
+      const root = document.getElementById("root");
+      if (!root) throw new Error("missing root");
+      const stats = () => (window as any).MochiLoader.debugStats();
+      const mount = async (tag: string) => {
+        const element = document.createElement(tag);
+        root.appendChild(element);
+        await (element as any)._mochiReady;
+        return element;
+      };
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const owner = await mount("shared-lifetime");
+      const peer = await mount("shared-peer");
+      const before = stats();
+      const shadow = (element: Element) => element.shadowRoot as ShadowRoot;
+      shadow(owner).querySelector<HTMLButtonElement>(".churn")!.click();
+      await wait(150);
+      const payload = shadow(owner).querySelector(".payload")!.textContent;
+      const count = shadow(owner).querySelector(".count")!.textContent;
+      const afterChurn = stats();
+
+      shadow(owner).querySelector<HTMLButtonElement>(".late")!.click();
+      owner.remove();
+      await wait(500);
+      const afterUnmount = stats();
+
+      shadow(peer).querySelector<HTMLButtonElement>(".sync")!.click();
+      await wait(100);
+      const seen = shadow(peer).querySelector(".seen")!.textContent;
+      peer.remove();
+      await wait(100);
+      const finalStats = stats();
+      return { before, afterChurn, afterUnmount, finalStats, payload, count, seen };
+    });
+
+    expect(result.payload).toBe("payload-odd");
+    expect(result.count).toBe("1000");
+    expect(result.afterChurn.stateAllocated).toBeLessThanOrEqual(result.before.stateAllocated + 80);
+    expect(result.afterChurn.stateObjects).toBeLessThanOrEqual(result.before.stateObjects + 80);
+    expect(result.afterUnmount.components).toBe(1);
+    expect(result.afterUnmount.timers).toBe(0);
+    expect(result.afterUnmount.stateAllocated).toBeLessThan(result.afterChurn.stateAllocated);
+    expect(result.seen).toBe("1");
+    expect(result.finalStats.components).toBe(0);
+    expect(result.finalStats.stateAllocated).toBeLessThanOrEqual(2);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
