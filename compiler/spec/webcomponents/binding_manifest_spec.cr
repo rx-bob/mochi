@@ -92,6 +92,58 @@ RUBY
     rewritten.should contain("def box_class")
   end
 
+  it "keeps argument-bearing, nested, and class helper calls in generated getters" do
+    source = <<-RUBY
+class HelperProbe
+  @tag_name = "helper-probe"
+  @total
+
+  def html
+    %Q{
+      <p>{number(@total)}</p>
+      <p>{wrap(number(@total), " nested")}</p>
+      <p>{total_label}</p>
+      <p>{MathHelper.scaled(@total, 2)}</p>
+    }
+  end
+
+  def number(value)
+    value.to_s
+  end
+
+  def wrap(value, suffix)
+    value + suffix
+  end
+
+  def total_label
+    compact(@total)
+  end
+
+  def compact(value)
+    value.to_s + " total"
+  end
+end
+RUBY
+
+    methods = RubyUnderstander.extract_method_bodies(source, "HelperProbe")
+    html = RubyUnderstander.extract_raw_string_from_def_body(methods["html"].body, "html")
+    manifest = ComponentGenerator.new.generate("HelperProbe", "helper-probe", "", html)
+
+    manifest.bindings.map(&.getter_expr).should eq([
+      "number(@total)",
+      %Q{wrap(number(@total), " nested")},
+      "total_label",
+      "MathHelper.scaled(@total, 2)",
+    ])
+
+    rewritten = ComponentGenerator.new.rewrite_ruby(source, "HelperProbe", manifest, methods)
+    rewritten.should contain("def __mochi_bind_0; number(@total); end")
+    rewritten.should contain(%Q{def __mochi_bind_1; wrap(number(@total), " nested"); end})
+    rewritten.should contain("def __mochi_bind_2; total_label; end")
+    rewritten.should contain("def __mochi_bind_3; MathHelper.scaled(@total, 2); end")
+    rewritten.should contain("def compact(value)")
+  end
+
   it "keeps template text for conditionals and lists" do
     descriptor = BindingDescriptor.new(
       4,

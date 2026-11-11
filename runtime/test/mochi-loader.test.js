@@ -45,6 +45,12 @@ function manifest(components) {
   };
 }
 
+// Disposal waits one microtask so a same-turn DOM move can cancel it. Tests
+// that expect a final removal to complete flush that boundary explicitly.
+function flushLifecycle() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function encodePatches(records) {
   const encoder = new TextEncoder();
   const encoded = records.map((record) => encoder.encode(record.value));
@@ -79,6 +85,7 @@ function fakeModule(log) {
   log.dispatchedArgs = [];
   log.deliveredFetches = [];
   log.unmounts = [];
+  log.ivarSets = [];
   log.components = new Set();
   log.failDispatch = new Set();
   log.requiredArgs = new Map();
@@ -142,6 +149,12 @@ function fakeModule(log) {
         return -1;
       }
       log.bindings.push({ instance, bindingId, getterSymbol });
+      return 0;
+    },
+    _mochi_set_ivar_string(instance, namePointer, nameLength, valuePointer, valueLength) {
+      const name = decoder.decode(module.HEAPU8.slice(namePointer, namePointer + nameLength));
+      const value = decoder.decode(module.HEAPU8.slice(valuePointer, valuePointer + valueLength));
+      log.ivarSets.push({ instance, name, value });
       return 0;
     },
     _mochi_dispatch_event(instance, methodSymbol) {
@@ -251,6 +264,9 @@ async function setup(components, options) {
     if (target.endsWith("mochi-manifest.json")) {
       return { ok: true, json: async () => body };
     }
+    if (target.endsWith(".chi") && options.classFetch) {
+      return options.classFetch(target, init);
+    }
     if (options.fetch && !target.endsWith(".chi")) {
       return options.fetch(target, init);
     }
@@ -327,6 +343,7 @@ test("disconnect dispatches unmounted and stops routing actions", async () => {
   await element._mochiReady;
 
   element.remove();
+  await flushLifecycle();
 
   const unmountedSymbol = log.symbols.get("unmounted");
   assert.ok(unmountedSymbol);
@@ -352,7 +369,7 @@ test("unmounted drains emitted actions after unregistering the removed component
 
   module.queueEmit("increment");
   first.remove();
-  await new Promise((resolve) => setImmediate(resolve));
+  await flushLifecycle();
 
   const incrementSymbol = log.symbols.get("increment");
   assert.ok(incrementSymbol);
@@ -369,6 +386,7 @@ test("disconnect without an unmounted method does not dispatch or error", async 
 
   const dispatchedBefore = log.dispatched.length;
   element.remove();
+  await flushLifecycle();
 
   assert.equal(log.dispatched.length, dispatchedBefore);
   assert.equal(element.mochiError, undefined);
@@ -445,6 +463,7 @@ test("disconnect disposes VM registrations once and clears binding caches", asyn
   assert.equal(log.components.size, 1);
 
   element.remove();
+  await flushLifecycle();
   assert.deepEqual(log.unmounts, ["1"]);
   assert.equal(log.components.size, 0);
   assert.equal(log.bindings.length, 0);
@@ -470,6 +489,7 @@ test("unmounted hook failure still removes VM registrations", async () => {
   document.body.appendChild(element);
   await element._mochiReady;
   element.remove();
+  await flushLifecycle();
 
   assert.ok(element.mochiError);
   assert.match(element.mochiError.message, /unmounted dispatch failed/);
@@ -498,6 +518,7 @@ test("late fetch delivery cannot reach a component that reused the instance slot
   assert.ok(log.fetches.includes("/api/late"));
 
   first.remove();
+  await flushLifecycle();
   assert.deepEqual(log.unmounts, ["1"]);
 
   module.reuseInstance(1);
@@ -517,6 +538,262 @@ test("late fetch delivery cannot reach a component that reused the instance slot
 
   assert.deepEqual(log.deliveredFetches, []);
   assert.equal(second.mochiError, undefined);
+});
+
+test("a same-turn DOM move preserves the instance, bindings, and listener set", async () => {
+  const { log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+
+  const firstParent = document.createElement("div");
+  const secondParent = document.createElement("div");
+  document.body.appendChild(firstParent);
+  document.body.appendChild(secondParent);
+  const element = document.createElement("my-counter");
+  firstParent.appendChild(element);
+  await element._mochiReady;
+
+  const mountToken = element._mochiMountToken;
+  const mountedSymbol = log.symbols.get("mounted");
+  assert.ok(mountedSymbol);
+
+  secondParent.appendChild(element);
+  await flushLifecycle();
+
+  assert.equal(element.isConnected, true);
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(element._mochiDisconnected, false);
+  assert.equal(element._mochiMountToken, mountToken);
+  assert.equal(element._mochiInstance, "1");
+  assert.deepEqual(log.unmounts, []);
+  assert.equal(log.components.size, 1);
+  assert.equal(log.bindings.length, 2);
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === mountedSymbol).length,
+    1,
+  );
+
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await flushLifecycle();
+  assert.deepEqual(log.dispatched.at(-1), {
+    instance: "1",
+    methodSymbol: log.symbols.get("increment"),
+  });
+});
+
+test("reinsertion after completed disposal mounts one fresh instance", async () => {
+  const { log } = await setup([COMPONENT]);
+  log.methods.add("unmounted");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const firstToken = element._mochiMountToken;
+  const mountedSymbol = log.symbols.get("mounted");
+
+  element.remove();
+  await flushLifecycle();
+  const unmountedSymbol = log.symbols.get("unmounted");
+  assert.ok(unmountedSymbol);
+
+  assert.equal(element._mochiMountState, "unmounted");
+  assert.deepEqual(log.unmounts, ["1"]);
+  assert.equal(log.components.size, 0);
+  assert.equal(log.bindings.length, 0);
+  assert.deepEqual(element.bindingTargets, {});
+
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element._mochiMountState, "mounted");
+  assert.notEqual(element._mochiMountToken, firstToken);
+  assert.equal(element._mochiInstance, "2");
+  assert.equal(log.components.size, 1);
+  assert.equal(log.bindings.length, 2);
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === mountedSymbol).length,
+    2,
+  );
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === unmountedSymbol).length,
+    1,
+  );
+  assert.ok(element.shadowRoot.querySelector('button[data-mochi-click="increment"]'));
+
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await flushLifecycle();
+  assert.deepEqual(log.dispatched.at(-1), {
+    instance: "2",
+    methodSymbol: log.symbols.get("increment"),
+  });
+
+  element.remove();
+  await flushLifecycle();
+  assert.deepEqual(log.unmounts, ["1", "2"]);
+  assert.equal(log.components.size, 0);
+});
+
+test("attribute changes update the instance and flush bindings once", async () => {
+  const { dom, log } = await setup([COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+
+  try {
+    const element = document.createElement("my-counter");
+    element.setAttribute("label", "one");
+    document.body.appendChild(element);
+    await element._mochiReady;
+
+    assert.deepEqual(log.ivarSets.at(-1), { instance: "1", name: "label", value: "one" });
+    const setsAfterMount = log.ivarSets.length;
+    const flushesAfterMount = log.flushes.length;
+
+    element.setAttribute("label", "two");
+    await flushLifecycle();
+
+    assert.equal(log.ivarSets.length, setsAfterMount + 1);
+    assert.deepEqual(log.ivarSets.at(-1), { instance: "1", name: "label", value: "two" });
+    assert.equal(log.flushes.length, flushesAfterMount + 1);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("a fresh mount replaces its attribute observer without stacking", async () => {
+  const { dom } = await setup([COMPONENT]);
+  const observers = [];
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = class {
+    constructor(callback) {
+      this.inner = new dom.window.MutationObserver(callback);
+      this.disconnects = 0;
+      observers.push(this);
+    }
+
+    observe(target, options) {
+      return this.inner.observe(target, options);
+    }
+
+    disconnect() {
+      this.disconnects += 1;
+      return this.inner.disconnect();
+    }
+  };
+
+  try {
+    const element = document.createElement("my-counter");
+    document.body.appendChild(element);
+    await element._mochiReady;
+    assert.equal(observers.length, 1);
+    assert.equal(observers[0].disconnects, 0);
+
+    element.remove();
+    await flushLifecycle();
+    assert.equal(observers[0].disconnects, 1);
+
+    document.body.appendChild(element);
+    await element._mochiReady;
+    assert.equal(observers.length, 2);
+    assert.equal(observers[0].disconnects, 1);
+
+    element.remove();
+    await flushLifecycle();
+    assert.equal(observers[1].disconnects, 1);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("a detached tree receives neither patches nor delegated events", async () => {
+  const { loader, module, log } = await setup([COMPONENT]);
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const incrementSymbol = log.symbols.get("increment");
+  const flushesBefore = log.flushes.length;
+
+  element.remove();
+  module.patchQueue.push({ patches: [{ id: 0, value: "Count: detached" }] });
+  loader.applyPatches(element, module);
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+
+  assert.equal(log.flushes.length, flushesBefore);
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === incrementSymbol).length,
+    0,
+  );
+
+  await flushLifecycle();
+  assert.equal(
+    log.dispatched.filter((entry) => entry.methodSymbol === incrementSymbol).length,
+    0,
+  );
+});
+
+test("removal during the class download cancels the mount before instance creation", async () => {
+  let releaseClass;
+  const classGate = new Promise((resolve) => { releaseClass = resolve; });
+  const { log } = await setup([COMPONENT], { classFetch: () => classGate });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  const ready = element._mochiReady;
+  element.remove();
+  await flushLifecycle();
+
+  releaseClass({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
+  await ready;
+  await flushLifecycle();
+
+  assert.equal(element._mochiMountState, "unmounted");
+  assert.deepEqual(log.unmounts, []);
+  assert.deepEqual(log.dispatched, []);
+  assert.equal(log.components.size, 0);
+  assert.equal(log.bindings.length, 0);
+
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(element._mochiInstance, "1");
+  assert.equal(log.components.size, 1);
+  assert.equal(log.bindings.length, 2);
+});
+
+test("a reconnect during the class download keeps one pending mount", async () => {
+  let releaseClass;
+  const classGate = new Promise((resolve) => { releaseClass = resolve; });
+  const { log } = await setup([COMPONENT], { classFetch: () => classGate });
+
+  const firstParent = document.createElement("div");
+  const secondParent = document.createElement("div");
+  document.body.appendChild(firstParent);
+  document.body.appendChild(secondParent);
+  const element = document.createElement("my-counter");
+  firstParent.appendChild(element);
+  const mountToken = element._mochiMountToken;
+
+  element.remove();
+  secondParent.appendChild(element);
+  releaseClass({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
+  await element._mochiReady;
+  await flushLifecycle();
+
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(element._mochiMountToken, mountToken);
+  assert.equal(element._mochiInstance, "1");
+  assert.deepEqual(log.unmounts, []);
+  assert.equal(log.components.size, 1);
+  assert.equal(log.bindings.length, 2);
+  assert.equal(log.dispatched.filter((entry) => entry.methodSymbol === log.symbols.get("mounted")).length, 1);
 });
 
 test("one document action listener serves every mounted component and caches method support", async () => {
@@ -843,6 +1120,7 @@ test("skips fetch delivery when the component unmounts before the response", asy
   document.body.appendChild(element);
   await element._mochiReady;
   element.remove();
+  await flushLifecycle();
   resolveFetch({
     status: 200,
     ok: true,

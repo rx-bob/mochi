@@ -7,6 +7,13 @@
   var DEFAULT_MANIFEST = "mochi-manifest.json";
   var MAX_PENDING_FETCHES = 256;
 
+  // Custom element reactions for a same-task DOM move run before queued
+  // microtasks, so deferring disposal one microtask distinguishes a renderer
+  // move from a final removal without guessing which code moved the node.
+  var deferDisposal = typeof global.queueMicrotask === "function"
+    ? global.queueMicrotask
+    : function (callback) { Promise.resolve().then(callback); };
+
   var state = {
     manifest: null,
     manifestUrl: null,
@@ -662,7 +669,7 @@
     var strVal = value === null || value === undefined ? "" : String(value);
     return withUtf8(module, ivarName, function (nPtr, nLen) {
       return withUtf8(module, strVal, function (vPtr, vLen) {
-        return module._mochi_set_ivar_string(instance, nPtr, nLen, vPtr, vLen) === 1;
+        return module._mochi_set_ivar_string(instance, nPtr, nLen, vPtr, vLen) === 0;
       });
     });
   }
@@ -710,6 +717,15 @@
   // transaction created and rethrows the original error.
   async function mountInstance(component, manifest, manifestUrl, element, mountToken) {
     var module = await loadComponentClass(component, manifest, manifestUrl);
+
+    // A final removal during the class download must not create a VM component
+    // that only gets torn down later. A same-turn move has already reconnected
+    // (and cancelled disposal) by the time the download settles.
+    if (mountToken !== element._mochiMountToken || element._mochiDisconnected ||
+        !element.isConnected) {
+      return { cancelled: true, mountToken: mountToken };
+    }
+
     var instance;
 
     withUtf8(module, component.class_name, function (pointer, length) {
@@ -1348,7 +1364,7 @@
 
   function applyPatches(target, module) {
     var element = target && target.bindingTargets ? target : state.elements.get(String(target));
-    if (!element || element._mochiUnmounted) return;
+    if (!element || element._mochiDisconnected || element._mochiUnmounted) return;
     var activeModule = module || element._mochiModule;
     var instance = element._mochiInstance;
     if (!activeModule || instance === null || instance === undefined) return;
@@ -1401,16 +1417,31 @@
         this._mochiInstance = null;
         this._mochiAttrObserver = null;
         this._mochiDisconnected = false;
+        this._mochiDisposalScheduled = false;
         this._mochiUnmounted = false;
         this._mochiMountState = "idle";
         this._mochiMountToken = 0;
         this._mochiEventsAttached = false;
       }
 
+      // Lifecycle contract:
+      // - A DOM move runs disconnectedCallback then connectedCallback in the
+      //   same reaction turn. Disposal waits one microtask, so the reconnect
+      //   cancels it and the VM instance, bindings, timers, attribute observer,
+      //   and event listeners survive unchanged. Ruby state is not recreated.
+      // - A removal that remains disconnected through that microtask disposes
+      //   once, running unmounted. Reinserting the element afterwards builds a
+      //   new shadow tree and mounts a fresh VM instance from initial Ruby
+      //   state, reusing only the static template and stylesheet.
+      // - Removing the element during the asynchronous class download cancels
+      //   the pending mount before any VM instance exists, so a detached tree
+      //   never receives patches or leaves a ghost registration behind.
       connectedCallback() {
         ensureActionRouter();
+        this._mochiDisposalScheduled = false;
+        this._mochiDisconnected = false;
         if (this._mochiMountState === "mounting" || this._mochiMountState === "mounted") return;
-        if (this.shadowRoot && this._mochiMountState !== "failed") return;
+        if (this.shadowRoot && this._mochiMountState === "idle") return;
         this._beginMount();
       }
 
@@ -1421,9 +1452,14 @@
         } else {
           while (root.firstChild) root.removeChild(root.firstChild);
         }
+        if (this._mochiAttrObserver) {
+          this._mochiAttrObserver.disconnect();
+          this._mochiAttrObserver = null;
+        }
 
         this._mochiMountState = "mounting";
         this._mochiDisconnected = false;
+        this._mochiDisposalScheduled = false;
         this._mochiUnmounted = false;
         this._mochiModule = null;
         this._mochiInstance = null;
@@ -1444,6 +1480,8 @@
         var fragment = template.content.cloneNode(true);
         this._resolveBindings(fragment);
         root.appendChild(fragment);
+        // The retained shadow root outlives every mount, so one delegated
+        // listener per event serves all lifecycles of this element.
         if (!this._mochiEventsAttached) {
           this._attachEvents(root);
           this._mochiEventsAttached = true;
@@ -1452,6 +1490,10 @@
         var element = this;
         this._mochiReady = mountInstance(component, state.manifest, manifestUrl, element, mountToken)
           .then(function (mounted) {
+            if (mounted.cancelled) {
+              element._settleCancelledMount(mountToken);
+              return mounted;
+            }
             if (mounted.mountToken !== element._mochiMountToken) {
               var staleError = disposeVmInstance(mounted.module, mounted.instance);
               if (staleError) {
@@ -1468,13 +1510,21 @@
               return mounted;
             }
 
-            element._mochiMountState = "mounted";
-            state.elements.set(String(mounted.instance), element);
-            state.unmountedInstances.delete(String(mounted.instance));
-            element._observeAttributes(mounted.module, mounted.instance);
-            applyPatches(element, mounted.module);
-            drainEmits(mounted.module);
-            drainFetches(mounted.module);
+            try {
+              // The first binding flush is part of the mount transaction. A
+              // failing getter (unknown method, arity) disposes the instance
+              // and runs unmounted instead of leaving a ghost registration.
+              element._mochiMountState = "mounted";
+              state.elements.set(String(mounted.instance), element);
+              state.unmountedInstances.delete(String(mounted.instance));
+              element._observeAttributes(mounted.module, mounted.instance);
+              applyPatches(element, mounted.module);
+              drainEmits(mounted.module);
+              drainFetches(mounted.module);
+            } catch (error) {
+              element._unmount(mounted.module, mounted.instance, mounted.mountToken);
+              throw error;
+            }
             return mounted;
           }).catch(function (error) {
             if (mountToken === element._mochiMountToken) {
@@ -1488,6 +1538,12 @@
 
       _observeAttributes(module, instance) {
         if (typeof global.MutationObserver !== "function") return;
+        // One observer per active lifecycle. A fresh mount replaces the
+        // previous observer even if an earlier teardown failed.
+        if (this._mochiAttrObserver) {
+          this._mochiAttrObserver.disconnect();
+          this._mochiAttrObserver = null;
+        }
         var element = this;
         this._mochiAttrObserver = new global.MutationObserver(function (mutations) {
           if (element._mochiDisconnected || element._mochiUnmounted) return;
@@ -1510,18 +1566,94 @@
 
       disconnectedCallback() {
         this._mochiDisconnected = true;
+        this._scheduleDisposal();
+      }
 
+      _scheduleDisposal() {
+        if (this._mochiDisposalScheduled || this._mochiUnmounted) return;
+        this._mochiDisposalScheduled = true;
+        var element = this;
+        deferDisposal(function () {
+          element._flushScheduledDisposal();
+        });
+      }
+
+      _flushScheduledDisposal() {
+        if (!this._mochiDisposalScheduled) return;
+        if (!this._mochiDisconnected || this.isConnected) {
+          this._mochiDisposalScheduled = false;
+          if (this.isConnected) this._mochiDisconnected = false;
+          return;
+        }
+        if (this._mochiMountState === "unmounted") {
+          this._mochiDisposalScheduled = false;
+          return;
+        }
+        if (this._mochiMountState === "failed") {
+          this._mochiDisposalScheduled = false;
+          if (this._mochiModule && this._mochiInstance !== null && this._mochiInstance !== undefined) {
+            this._unmount(this._mochiModule, this._mochiInstance, this._mochiMountToken);
+            this._mochiMountState = "failed";
+          }
+          return;
+        }
+        var element = this;
+        var ready = this._mochiReady;
+        if (!ready) {
+          this._finishScheduledDisposal();
+          return;
+        }
+        ready.then(function () {
+          element._finishScheduledDisposal();
+        }, function () {
+          // The failed mount already rolled back its VM registrations. Keep the
+          // failed state so a later reconnect retries a complete mount.
+          element._mochiDisposalScheduled = false;
+        });
+      }
+
+      _finishScheduledDisposal() {
+        if (!this._mochiDisposalScheduled) return;
+        if (!this._mochiDisconnected || this.isConnected) {
+          this._mochiDisposalScheduled = false;
+          if (this.isConnected) this._mochiDisconnected = false;
+          return;
+        }
+        this._mochiDisposalScheduled = false;
+        if (this._mochiUnmounted) return;
         if (this._mochiModule && this._mochiInstance !== null && this._mochiInstance !== undefined) {
           this._unmount(this._mochiModule, this._mochiInstance, this._mochiMountToken);
           return;
         }
+        this._markUnmountedWithoutInstance();
+      }
 
-        var element = this;
-        if (this._mochiReady) {
-          this._mochiReady.then(function (mounted) {
-            element._unmount(mounted.module, mounted.instance, mounted.mountToken);
-          }).catch(function () {});
+      // A mount cancelled before instance creation still has to leave the
+      // element ready for a later fresh mount. If it reconnected while the
+      // download was settling, start the mount again with the current token.
+      _settleCancelledMount(mountToken) {
+        if (mountToken !== this._mochiMountToken) return;
+        if (this.isConnected && !this._mochiDisconnected) {
+          this._beginMount();
+          return;
         }
+        this._markUnmountedWithoutInstance();
+      }
+
+      _markUnmountedWithoutInstance() {
+        if (this._mochiUnmounted) return;
+        this._mochiUnmounted = true;
+        this._mochiMountState = "unmounted";
+        this._mochiDisposalScheduled = false;
+        if (this._mochiAttrObserver) {
+          this._mochiAttrObserver.disconnect();
+          this._mochiAttrObserver = null;
+        }
+        this._mochiModule = null;
+        this._mochiInstance = null;
+        this.bindingTargets = {};
+        this.bindingValues = {};
+        this.refs = this.bindingTargets;
       }
 
       // Disposal order: stop routing, cancel the instance's pending host work,
@@ -1531,6 +1663,7 @@
       _unmount(module, instance, mountToken) {
         if (this._mochiUnmounted) return;
         if (mountToken !== undefined && mountToken !== this._mochiMountToken) return;
+        this._mochiDisposalScheduled = false;
         this._mochiUnmounted = true;
         this._mochiMountState = "unmounted";
 
@@ -1629,7 +1762,8 @@
 
         var mountToken = this._mochiMountToken;
         this._mochiReady.then(function (mounted) {
-          if (element._mochiUnmounted || mounted.mountToken !== element._mochiMountToken ||
+          if (element._mochiDisconnected || element._mochiUnmounted ||
+              mounted.mountToken !== element._mochiMountToken ||
               mountToken !== element._mochiMountToken) {
             return;
           }

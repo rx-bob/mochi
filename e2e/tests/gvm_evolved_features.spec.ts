@@ -309,6 +309,7 @@ test("VM registrations return to the active-screen baseline across 200 round tri
         return element;
       };
 
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
       let current = await mount("screen-a");
       const baseline = stats();
       const samples: Array<Record<string, number>> = [];
@@ -325,6 +326,7 @@ test("VM registrations return to the active-screen baseline across 200 round tri
         current = first;
       }
       current.remove();
+      await settle();
       const finalStats = stats();
       const bad = samples.filter((sample) =>
         sample.components !== baseline.components ||
@@ -344,6 +346,425 @@ test("VM registrations return to the active-screen baseline across 200 round tri
     expect(result.finalStats.timers).toBe(0);
     expect(result.finalStats.pendingFetches).toBe(0);
     expect(result.mountCount).toBe(401);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("moving a component preserves state and reinsertion after disposal rebuilds it", async ({ page }) => {
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-reconnect-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "lib", "LifecycleChild.rb"), `
+class LifecycleChild
+  @tag_name = "lifecycle-child"
+  @label
+  @draft
+  @clicks
+
+  def initialize
+    @label = "unset"
+    @draft = "ready"
+    @clicks = 0
+  end
+
+  def html
+    %Q{
+      <div class="lifecycle-child">
+        <p class="label">{@label}</p>
+        <input class="draft" type="text" bind:value="@draft">
+        <p class="draft-out">{@draft}</p>
+        <button class="bump" onclick="{bump}">Bump</button>
+        <p class="clicks">{@clicks}</p>
+      </div>
+    }
+  end
+
+  def bump
+    @clicks += 1
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "LifecycleHost.rb"), `
+class LifecycleHost
+  @tag_name = "lifecycle-host"
+
+  def html
+    %Q{
+      <div class="lifecycle-host">
+        <div class="children">
+          <lifecycle-child label="alpha"></lifecycle-child>
+          <lifecycle-child label="beta"></lifecycle-child>
+        </div>
+      </div>
+    }
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <lifecycle-host></lifecycle-host>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await page.waitForFunction(() => {
+      const host = document.querySelector("lifecycle-host") as any;
+      const children = host && host.shadowRoot
+        ? Array.from(host.shadowRoot.querySelectorAll("lifecycle-child")) as any[]
+        : [];
+      return host && host._mochiMountState === "mounted" && children.length === 2 &&
+        children.every((child) => child._mochiMountState === "mounted");
+    });
+
+    const host = page.locator("lifecycle-host");
+    const children = host.locator(".children lifecycle-child");
+    await expect(children).toHaveCount(2);
+    const alpha = children.nth(0);
+    await expect(alpha.locator("p.label")).toHaveText("alpha");
+
+    await alpha.locator("input.draft").fill("edited");
+    await expect(alpha.locator("p.draft-out")).toHaveText("edited");
+    await alpha.locator("button.bump").click();
+    await expect(alpha.locator("p.clicks")).toHaveText("1");
+
+    const before = await page.evaluate(() => {
+      const root = document.querySelector("lifecycle-host") as any;
+      const boxes = Array.from(root.shadowRoot.querySelectorAll("lifecycle-child")) as any[];
+      const first = boxes[0];
+      return {
+        token: first._mochiMountToken as number,
+        instance: String(first._mochiInstance),
+        stats: (window as any).MochiLoader.debugStats(),
+      };
+    });
+
+    // A renderer move removes and reinserts the node in the same turn. The
+    // instance, edited draft, and click count must survive without remounting.
+    const moved = await page.evaluate(async () => {
+      const root = document.querySelector("lifecycle-host") as any;
+      const box = root.shadowRoot.querySelector(".children") as Element;
+      const kids = Array.from(box.querySelectorAll("lifecycle-child")) as any[];
+      box.appendChild(kids[0]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const alpha = (Array.from(box.querySelectorAll("lifecycle-child")) as any[])[1];
+      return {
+        token: alpha._mochiMountToken as number,
+        instance: String(alpha._mochiInstance),
+        label: alpha.shadowRoot.querySelector(".label").textContent,
+        draft: alpha.shadowRoot.querySelector("input.draft").value,
+        clicks: alpha.shadowRoot.querySelector(".clicks").textContent,
+        stats: (window as any).MochiLoader.debugStats(),
+      };
+    });
+
+    expect(moved.token).toBe(before.token);
+    expect(moved.instance).toBe(before.instance);
+    expect(moved.label).toBe("alpha");
+    expect(moved.draft).toBe("edited");
+    expect(moved.clicks).toBe("1");
+    expect(moved.stats.components).toBe(before.stats.components);
+    expect(moved.stats.bindings).toBe(before.stats.bindings);
+    expect(moved.stats.elements).toBe(before.stats.elements);
+
+    // Repeated moves must not stack hooks, listeners, or VM registrations.
+    const repeated = await page.evaluate(async () => {
+      const root = document.querySelector("lifecycle-host") as any;
+      const box = root.shadowRoot.querySelector(".children") as Element;
+      const alpha = (Array.from(box.querySelectorAll("lifecycle-child")) as any[])
+        .find((child) => child.shadowRoot.querySelector(".label").textContent === "alpha");
+      for (let index = 0; index < 12; index += 1) {
+        box.insertBefore(alpha, box.firstElementChild);
+        box.appendChild(alpha);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return {
+        token: alpha._mochiMountToken as number,
+        instance: String(alpha._mochiInstance),
+        draft: alpha.shadowRoot.querySelector("input.draft").value,
+        clicks: alpha.shadowRoot.querySelector(".clicks").textContent,
+        stats: (window as any).MochiLoader.debugStats(),
+      };
+    });
+
+    expect(repeated.token).toBe(before.token);
+    expect(repeated.instance).toBe(before.instance);
+    expect(repeated.draft).toBe("edited");
+    expect(repeated.clicks).toBe("1");
+    expect(repeated.stats.components).toBe(before.stats.components);
+    expect(repeated.stats.bindings).toBe(before.stats.bindings);
+    expect(repeated.stats.elements).toBe(before.stats.elements);
+
+    await children.nth(1).locator("button.bump").click();
+    await expect(children.nth(1).locator("p.clicks")).toHaveText("2");
+
+    // Removal through the deferred disposal boundary, then reinsertion, must
+    // produce a fresh instance with rebuilt props and working handlers.
+    const rebuilt = await page.evaluate(async () => {
+      const root = document.querySelector("lifecycle-host") as any;
+      const box = root.shadowRoot.querySelector(".children") as Element;
+      const alpha = (Array.from(box.querySelectorAll("lifecycle-child")) as any[])
+        .find((child) => child.shadowRoot.querySelector(".label").textContent === "alpha");
+      const beforeRemoval = (window as any).MochiLoader.debugStats();
+      const token = alpha._mochiMountToken as number;
+      const instance = String(alpha._mochiInstance);
+      alpha.remove();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const removed = (window as any).MochiLoader.debugStats();
+      box.appendChild(alpha);
+      await alpha._mochiReady;
+      return {
+        token,
+        instance,
+        beforeRemoval,
+        removed,
+        after: {
+          token: alpha._mochiMountToken as number,
+          instance: String(alpha._mochiInstance),
+          state: alpha._mochiMountState,
+          label: alpha.shadowRoot.querySelector(".label").textContent,
+          draft: alpha.shadowRoot.querySelector("input.draft").value,
+          draftOut: alpha.shadowRoot.querySelector(".draft-out").textContent,
+          clicks: alpha.shadowRoot.querySelector(".clicks").textContent,
+          stats: (window as any).MochiLoader.debugStats(),
+        },
+      };
+    });
+
+    expect(rebuilt.removed.components).toBe(rebuilt.beforeRemoval.components - 1);
+    expect(rebuilt.removed.elements).toBe(rebuilt.beforeRemoval.elements - 1);
+    expect(rebuilt.after.token).toBeGreaterThan(rebuilt.token);
+    expect(rebuilt.after.instance).not.toBe(rebuilt.instance);
+    expect(rebuilt.after.state).toBe("mounted");
+    expect(rebuilt.after.label).toBe("alpha");
+    expect(rebuilt.after.draft).toBe("ready");
+    expect(rebuilt.after.draftOut).toBe("ready");
+    expect(rebuilt.after.clicks).toBe("0");
+    expect(rebuilt.after.stats.components).toBe(rebuilt.beforeRemoval.components);
+    expect(rebuilt.after.stats.bindings).toBe(rebuilt.beforeRemoval.bindings);
+    expect(rebuilt.after.stats.elements).toBe(rebuilt.beforeRemoval.elements);
+
+    await children.nth(1).locator("input.draft").fill("fresh");
+    await expect(children.nth(1).locator("p.draft-out")).toHaveText("fresh");
+    await children.nth(1).locator("button.bump").click();
+    await expect(children.nth(1).locator("p.clicks")).toHaveText("1");
+    await children.nth(1).evaluate((element) => element.setAttribute("label", "gamma"));
+    await expect(children.nth(1).locator("p.label")).toHaveText("gamma");
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("helper calls keep arguments and later definitions work from every path", async ({ page }) => {
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-helpers-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "lib", "MathHelper.rb"), `
+class MathHelper
+  def self.scaled(value, factor)
+    (value * factor).to_s
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "HelperProbe.rb"), `
+class HelperProbe
+  @tag_name = "helper-probe"
+  @total
+  @status
+  @initial
+  @count
+
+  def initialize
+    @total = 1234
+    @count = 0
+    @status = "idle"
+    @initial = rebuild
+  end
+
+  def rebuild
+    wrap(number(@total), " init")
+  end
+
+  def number(value)
+    value.to_s
+  end
+
+  def wrap(value, suffix)
+    value + suffix
+  end
+
+  def total_label
+    compact(@total)
+  end
+
+  def compact(value)
+    value.to_s + " total"
+  end
+
+  def html
+    %Q{
+      <div class="helper-probe">
+        <p class="direct">{number(@total)}</p>
+        <p class="later">{total_label}</p>
+        <p class="later-direct">{compact(@total)}</p>
+        <p class="nested">{wrap(number(@total), " nested")}</p>
+        <p class="class-helper">{MathHelper.scaled(@total, 2)}</p>
+        <p class="initial">{@initial}</p>
+        <p class="status">{@status}</p>
+        <p class="count">{@count}</p>
+        <button class="bump" onclick="{bump}">Bump</button>
+        <button class="apply" onclick="{apply(5)}">Apply</button>
+      </div>
+    }
+  end
+
+  def bump
+    @total += 1
+  end
+
+  def apply(value)
+    @count += value
+    @status = "count=#{@count} label=#{total_label} direct=#{number(@total)} class=#{MathHelper.scaled(@total, 3)}"
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "BrokenHelper.rb"), `
+class BrokenHelper
+  @tag_name = "broken-helper"
+  @value
+
+  def initialize
+    @value = 1
+  end
+
+  def html
+    %Q{<span class="broken">{missing_helper(@value)}</span>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "WrongArityHelper.rb"), `
+class WrongArityHelper
+  @tag_name = "wrong-arity-helper"
+  @value
+
+  def initialize
+    @value = 1
+  end
+
+  def number(value)
+    value.to_s
+  end
+
+  def html
+    %Q{<span class="arity">{number(@value, 2)}</span>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <helper-probe></helper-probe>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const probe = page.locator("helper-probe");
+    await expect(probe.locator("p.direct")).toHaveText("1234");
+    await expect(probe.locator("p.later")).toHaveText("1234 total");
+    await expect(probe.locator("p.later-direct")).toHaveText("1234 total");
+    await expect(probe.locator("p.nested")).toHaveText("1234 nested");
+    await expect(probe.locator("p.class-helper")).toHaveText("2468");
+    await expect(probe.locator("p.initial")).toHaveText("1234 init");
+
+    await probe.locator("button.bump").click();
+    await expect(probe.locator("p.direct")).toHaveText("1235");
+    await expect(probe.locator("p.later")).toHaveText("1235 total");
+    await expect(probe.locator("p.later-direct")).toHaveText("1235 total");
+    await expect(probe.locator("p.nested")).toHaveText("1235 nested");
+    await expect(probe.locator("p.class-helper")).toHaveText("2470");
+
+    await probe.locator("button.apply").click();
+    await expect(probe.locator("p.count")).toHaveText("5");
+    await expect(probe.locator("p.status")).toHaveText(
+      "count=5 label=1235 total direct=1235 class=3705",
+    );
+
+    const failures = await page.evaluate(async () => {
+      const wait = () => new Promise((resolve) => setTimeout(resolve, 0));
+      const mountFailure = async (tag: string) => {
+        const element = document.createElement(tag) as any;
+        document.body.appendChild(element);
+        let message = "";
+        try {
+          await element._mochiReady;
+        } catch (error) {
+          message = String((error as Error).message ?? error);
+        }
+        const state = element._mochiMountState;
+        const instance = element._mochiInstance;
+        element.remove();
+        await wait();
+        return { message, state, instance, stats: (window as any).MochiLoader.debugStats() };
+      };
+      return {
+        missing: await mountFailure("broken-helper"),
+        arity: await mountFailure("wrong-arity-helper"),
+      };
+    });
+
+    expect(failures.missing.message).toContain("BrokenHelper");
+    expect(failures.missing.message).toContain("__mochi_bind_0");
+    expect(failures.missing.message).toContain("unknown method");
+    expect(failures.arity.message).toContain("WrongArityHelper");
+    expect(failures.arity.message).toContain("__mochi_bind_0");
+    expect(failures.arity.message).toContain("wrong number of arguments");
+    expect(failures.missing.state).toBe("failed");
+    expect(failures.arity.state).toBe("failed");
+    expect(failures.missing.instance).toBeNull();
+    expect(failures.arity.instance).toBeNull();
+    expect(failures.missing.stats.components).toBe(1);
+    expect(failures.arity.stats.components).toBe(1);
     expect(errors).toEqual([]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
