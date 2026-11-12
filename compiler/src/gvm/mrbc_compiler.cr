@@ -616,6 +616,13 @@ class MrbcCompiler
             json.field "event", event.event
             json.field "method_sym", event.method_sym
             json.field "component", true if event.component
+            unless event.modifiers.empty?
+              json.field "modifiers" do
+                json.array do
+                  event.modifiers.each { |modifier| json.string(modifier) }
+                end
+              end
+            end
             json.field "args" do
               json.array do
                 event.args.each do |arg|

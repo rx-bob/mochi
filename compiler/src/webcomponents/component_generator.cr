@@ -21,6 +21,7 @@ class ComponentGenerator
   @next_each_id : Int32 = 0
   @mochi_cmp_name : String = ""
   @event_expressions : Array(String) = [] of String
+  @ref_names : Array(String) = [] of String
   @expression_parser : TemplateExpressionParser
 
   # Includes top-level and branch-discovered each blocks so callers can inject
@@ -64,6 +65,7 @@ class ComponentGenerator
     @next_binding_id = 0
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
     @event_expressions.clear
+    @ref_names.clear
     @expression_parser = TemplateExpressionParser.new(source_locator)
 
     validate_conditional_expressions(conditionals)
@@ -214,7 +216,8 @@ class ComponentGenerator
           event.event,
           event.handler,
           event.args,
-          component: event.component
+          component: event.component,
+          modifiers: event.modifiers
         )
       end
 
@@ -279,15 +282,19 @@ class ComponentGenerator
         else
           add_attribute_binding(path, attr_name, normalized_value, bindings)
         end
+      elsif name == "ref"
+        add_named_ref(value, name, additions, removals)
       elsif name.starts_with?("data-mochi-")
         next
       elsif name.starts_with?("on:")
-        event_name = name[3..]
+        call = event_call(name, value)
+        event_name = call.event
         next if event_name.empty?
 
         if expression = @expression_parser.scan(value, "event").first?
           method_name = expression.source.split("(").first.strip
           additions << {"data-mochi-#{event_name}", method_name}
+          additions << {"data-mochi-modifiers-#{event_name}", call.modifiers.join(",")} unless call.modifiers.empty?
           removals << name
           args = event_args(attrs, event_name)
           events << EventDescriptor.new(
@@ -295,20 +302,23 @@ class ComponentGenerator
             event_name,
             method_name,
             args,
-            component: true
+            component: true,
+            modifiers: call.modifiers
           )
           args.each { |arg| add_event_expression_binding(path, arg, bindings) }
         end
       elsif name.starts_with?("on")
-        event_name = name[2..]
+        call = event_call(name, value)
+        event_name = call.event
         next if event_name.empty?
 
         if expression = @expression_parser.scan(value, "event").first?
           method_name = expression.source.split("(").first.strip
           additions << {"data-mochi-#{event_name}", method_name}
+          additions << {"data-mochi-modifiers-#{event_name}", call.modifiers.join(",")} unless call.modifiers.empty?
           removals << name
           args = event_args(attrs, event_name)
-          events << EventDescriptor.new(path, event_name, method_name, args)
+          events << EventDescriptor.new(path, event_name, method_name, args, modifiers: call.modifiers)
           args.each { |arg| add_event_expression_binding(path, arg, bindings) }
         end
       elsif value.includes?("{")
@@ -318,6 +328,46 @@ class ComponentGenerator
 
     removals.each { |name| node.attribute_remove(name) }
     additions.each { |name, value| node.attribute_add(name, value) }
+  end
+
+  private def add_named_ref(
+    value : String,
+    attribute : String,
+    additions : Array(Tuple(String, String)),
+    removals : Array(String),
+  )
+    ref_name = value.strip
+    if ref_name.empty? || ref_name.includes?("{")
+      raise TemplateExpressionError.new("ref must be a static name, got #{value.inspect}")
+    end
+    unless ref_name.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*\z/)
+      raise TemplateExpressionError.new(
+        "ref name must start with a letter or underscore and contain only letters, digits, and underscores, got #{ref_name.inspect}"
+      )
+    end
+    if @ref_names.includes?(ref_name)
+      raise TemplateExpressionError.new("duplicate ref #{ref_name.inspect} in one component")
+    end
+    @ref_names << ref_name
+    additions << {"data-mochi-ref", ref_name}
+    removals << attribute
+  end
+
+  private def event_call(raw_name : String, value : String) : EventCall
+    call = EventCall.new(raw_name, "", [] of String)
+    unknown = call.modifiers.reject { |modifier| EventCall::MODIFIERS.includes?(modifier) }
+    span = @expression_parser.scan(value, "event").first?.try(&.span)
+    unless unknown.empty?
+      raise TemplateExpressionError.new(
+        "unknown event modifier #{unknown.first.inspect} on #{raw_name.inspect}; " \
+        "expected #{EventCall::MODIFIERS.join(", ")}",
+        span
+      )
+    end
+    if call.modifiers.uniq.size != call.modifiers.size
+      raise TemplateExpressionError.new("duplicate event modifier on #{raw_name.inspect}", span)
+    end
+    call
   end
 
   private def add_attribute_binding(

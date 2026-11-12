@@ -262,6 +262,63 @@ the child reads, give it a default when absence should have one, then remove the
 child's `to_i`, boolean checks, and manual `JSON.parse`. Leave attributes that
 are deliberately string-only undeclared.
 
+### Synchronous event modifiers and focus
+
+Native event attributes can carry synchronous modifiers after dots:
+
+```html
+<a href="/save" onclick.prevent.stop.self="{save}">Save</a>
+```
+
+- `prevent` calls `preventDefault()` during the browser dispatch.
+- `stop` calls `stopPropagation()` during the browser dispatch.
+- `self` runs the handler only when the event target is the element carrying the attribute.
+
+The loader applies these before it queues Ruby work, so a cancelable link or
+submit default is already prevented when Ruby observes the event. A
+non-cancelable event ignores `prevent` without an error. Modifiers also work on
+`on:<event>` connections; `self` is meaningful there, while `prevent` and `stop`
+only affect native events.
+
+Handler payloads stay plain Ruby hashes. A native event adds normalized target
+metadata without exposing a DOM node:
+
+```ruby
+def on_key(event)
+  event[:key]                       # "Escape"
+  event[:target][:tag]              # "button"
+  event[:target_ref]                # "modal_close"
+  event[:current_target][:id]       # handler element id
+  event[:composed_path].map { |node| node[:tag] }
+end
+```
+
+The payload includes `target`, `current_target`, `target_ref`, `target_tag`,
+`current_target_ref`, `current_target_tag`, `current_target_id`, and
+`composed_path`. Path entries contain only `tag`, `id`, `ref`, and `component`
+labels.
+
+Static elements can declare a component-local name with `ref`:
+
+```html
+<div class="panel" data-mochi-focus-trap>
+  <button ref="first">First</button>
+  <button ref="last">Last</button>
+</div>
+```
+
+```ruby
+Mochi.focus(:first)       # remembers the current focus, then focuses "first"
+Mochi.restore_focus       # returns to the last remembered focus
+```
+
+Ref names are static, unique within one component, and not supported inside
+`each` rows. A missing or detached target reports `mochi:error` with
+`phase: "focus"` and `reference`. `data-mochi-focus-trap` keeps Tab and
+Shift-Tab inside the marked element and is evaluated by the loader, so no
+application JavaScript is required. Focus capture walks into open shadow roots
+and restores the actual focused element, not only its host.
+
 ### Scoped child events
 
 A reusable child declares the events it can emit in the class body:

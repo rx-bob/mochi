@@ -3685,33 +3685,40 @@ test("zero-argument handlers receive the normalized event when Ruby requires one
 
   const input = element.shadowRoot.querySelector(".search");
   input.value = "mochi";
-  input.dispatchEvent(new global.Event("input", { bubbles: true }));
+  input.dispatchEvent(new global.Event("input", { bubbles: true, composed: true }));
   await new Promise((resolve) => setImmediate(resolve));
 
   const searchSymbol = log.symbols.get("on_search");
   assert.ok(searchSymbol);
-  assert.deepEqual(log.dispatchedArgs.at(-1), {
-    instance: "1",
-    methodSymbol: searchSymbol,
-    args: [{
-      type: "input",
-      value: "mochi",
-      checked: false,
-      key: "",
-      code: "",
-      shift_key: false,
-      ctrl_key: false,
-      meta_key: false,
-      alt_key: false,
-      client_x: 0,
-      client_y: 0,
-      offset_x: 0,
-      offset_y: 0,
-      button: 0,
-      target_id: "",
-      dataset: {},
-    }],
+  const payload = log.dispatchedArgs.at(-1).args[0];
+  assert.deepEqual(payload, {
+    type: "input",
+    value: "mochi",
+    checked: false,
+    key: "",
+    code: "",
+    shift_key: false,
+    ctrl_key: false,
+    meta_key: false,
+    alt_key: false,
+    client_x: 0,
+    client_y: 0,
+    offset_x: 0,
+    offset_y: 0,
+    button: 0,
+    target_id: "",
+    target_ref: "",
+    target_tag: "input",
+    current_target_id: "",
+    current_target_ref: "",
+    current_target_tag: "input",
+    target: { tag: "input", id: "", ref: "", component: "" },
+    current_target: { tag: "input", id: "", ref: "", component: "" },
+    composed_path: payload.composed_path,
+    dataset: {},
   });
+  assert.equal(payload.composed_path[0].tag, "input");
+  assert.ok(payload.composed_path.some((node) => node.tag === "event-auto-check"));
 });
 
 test("pointer and keyboard handlers receive coordinates, modifiers, and dataset", async () => {
@@ -3772,6 +3779,190 @@ test("pointer and keyboard handlers receive coordinates, modifiers, and dataset"
   assert.equal(keyboard.ctrl_key, true);
   assert.equal(keyboard.meta_key, false);
   assert.equal(keyboard.alt_key, false);
+});
+
+test("synchronous modifiers prevent defaults and stop propagation before Ruby work", async () => {
+  const modifierComponent = {
+    tag_name: "event-modifier-check",
+    class_name: "EventModifierCheck",
+    chi_file: "event-modifier-check.chi",
+    html_template:
+      '<a class="link" href="#blocked" data-mochi-click="link" data-mochi-modifiers-click="prevent,stop">' +
+      '<span class="inner">Link</span></a>' +
+      '<button class="self" data-mochi-click="self_click" data-mochi-modifiers-click="self">' +
+      '<span class="self-inner">Self</span></button>' +
+      '<button class="plain" data-mochi-click="plain">Plain</button>',
+    css: "",
+    bindings: [],
+    events: [
+      { path: [0], event: "click", method_sym: "link", args: [], modifiers: ["prevent", "stop"] },
+      { path: [1], event: "click", method_sym: "self_click", args: [], modifiers: ["self"] },
+      { path: [2], event: "click", method_sym: "plain", args: [] },
+    ],
+  };
+
+  const { dom, log } = await setup([modifierComponent]);
+  log.methods.add("link");
+  log.methods.add("self_click");
+  log.methods.add("plain");
+  const element = document.createElement("event-modifier-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  let documentClicks = 0;
+  document.addEventListener("click", () => { documentClicks += 1; });
+
+  const link = element.shadowRoot.querySelector(".link");
+  const linkEvent = new dom.window.MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  link.dispatchEvent(linkEvent);
+
+  assert.equal(linkEvent.defaultPrevented, true);
+  assert.equal(documentClicks, 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(log.dispatched.filter((entry) => entry.methodSymbol === log.symbols.get("link")).length, 1);
+
+  const nonCancelable = new dom.window.Event("click", {
+    bubbles: true,
+    cancelable: false,
+    composed: true,
+  });
+  link.dispatchEvent(nonCancelable);
+  assert.equal(nonCancelable.defaultPrevented, false);
+  assert.equal(documentClicks, 0);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const selfButton = element.shadowRoot.querySelector(".self");
+  selfButton.querySelector(".self-inner").dispatchEvent(new dom.window.MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(log.dispatched.filter(
+    (entry) => entry.methodSymbol === log.symbols.get("self_click")).length, 0);
+  assert.equal(documentClicks, 1);
+
+  element.shadowRoot.querySelector(".plain").dispatchEvent(new dom.window.MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  }));
+  assert.equal(documentClicks, 2);
+});
+
+test("named refs move and restore focus with keyboard containment", async () => {
+  const focusComponent = {
+    tag_name: "focus-check",
+    class_name: "FocusCheck",
+    chi_file: "focus-check.chi",
+    html_template:
+      '<button class="opener" data-mochi-click="open">Open</button>' +
+      '<div class="panel" data-mochi-focus-trap>' +
+      '<button ref="first" class="first" data-mochi-click="close">First</button>' +
+      '<button ref="last" class="last" data-mochi-click="close">Last</button>' +
+      "</div>",
+    css: "",
+    bindings: [],
+    events: [
+      { path: [0], event: "click", method_sym: "open", args: [] },
+      { path: [1, 0], event: "click", method_sym: "close", args: [] },
+      { path: [1, 1], event: "click", method_sym: "close", args: [] },
+    ],
+  };
+
+  const { dom, module, log } = await setup([focusComponent]);
+  log.methods.add("open");
+  log.methods.add("close");
+  const element = document.createElement("focus-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const deepActive = () => {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
+  };
+  const opener = element.shadowRoot.querySelector(".opener");
+  const first = element.shadowRoot.querySelector(".first");
+  const last = element.shadowRoot.querySelector(".last");
+
+  log.onDispatch = (name, instance) => {
+    if (name === "open") {
+      module.queueEmit(JSON.stringify({ __host: "focus", name: "first", instance }) + "\n");
+    } else if (name === "close") {
+      module.queueEmit(JSON.stringify({ __host: "restore_focus", instance }) + "\n");
+    }
+  };
+
+  opener.focus();
+  opener.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(deepActive(), first);
+
+  const shiftTab = new dom.window.KeyboardEvent("keydown", {
+    key: "Tab",
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  first.dispatchEvent(shiftTab);
+  assert.equal(shiftTab.defaultPrevented, true);
+  assert.equal(deepActive(), last);
+
+  const tab = new dom.window.KeyboardEvent("keydown", {
+    key: "Tab",
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  last.dispatchEvent(tab);
+  assert.equal(tab.defaultPrevented, true);
+  assert.equal(deepActive(), first);
+
+  last.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(deepActive(), opener);
+});
+
+test("an unknown named ref reports a focus error", async () => {
+  const focusErrorComponent = {
+    tag_name: "focus-error-check",
+    class_name: "FocusErrorCheck",
+    chi_file: "focus-error-check.chi",
+    html_template: '<button class="open" data-mochi-click="open">Open</button>',
+    css: "",
+    bindings: [],
+    events: [{ path: [0], event: "click", method_sym: "open", args: [] }],
+  };
+
+  const { module, log } = await setup([focusErrorComponent]);
+  log.methods.add("open");
+  const element = document.createElement("focus-error-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const errors = [];
+  document.addEventListener("mochi:error", (event) => errors.push(event.detail));
+  log.onDispatch = (name, instance) => {
+    if (name === "open") {
+      module.queueEmit(JSON.stringify({ __host: "focus", name: "missing", instance }) + "\n");
+    }
+  };
+
+  element.shadowRoot.querySelector(".open").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const error = errors.find((candidate) => candidate.phase === "focus");
+  assert.ok(error);
+  assert.equal(error.reference, "missing");
+  assert.match(error.message, /no element with ref "missing"/);
 });
 
 test("bind:value dispatches the event payload and reflects programmatic updates", async () => {
@@ -3844,6 +4035,14 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
       offset_y: 0,
       button: 0,
       target_id: "",
+      target_ref: "",
+      target_tag: "input",
+      current_target_id: "",
+      current_target_ref: "",
+      current_target_tag: "input",
+      target: { tag: "input", id: "", ref: "", component: "" },
+      current_target: { tag: "input", id: "", ref: "", component: "" },
+      composed_path: [{ tag: "input", id: "", ref: "", component: "" }],
       dataset: {},
     }],
   });

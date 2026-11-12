@@ -158,6 +158,61 @@ RUBY
       component.manifest.html_template.should_not contain("on:select")
     end
 
+    it "compiles synchronous modifiers and named refs" do
+      source = <<-RUBY
+class ModalSlice
+  @tag_name = "modal-slice"
+
+  def html
+    %Q{
+      <div ref="dialog" data-mochi-focus-trap>
+        <a href="#save" onclick.prevent.stop.self="{save}">Save</a>
+      </div>
+    }
+  end
+
+  def save
+  end
+end
+RUBY
+
+      component = transpile_source(source, "ModalSlice")
+      event = component.manifest.events.find! { |candidate| candidate.event == "click" }
+      event.modifiers.should eq(["prevent", "stop", "self"])
+
+      component.manifest.html_template.should contain(%Q(data-mochi-click="save"))
+      component.manifest.html_template.should contain(%Q(data-mochi-modifiers-click="prevent,stop,self"))
+      component.manifest.html_template.should contain(%Q(data-mochi-ref="dialog"))
+      component.manifest.html_template.should_not contain(%Q( ref="dialog"))
+    end
+
+    it "keeps modifiers on each-row events" do
+      source = <<-RUBY
+class RowModifierSlice
+  @tag_name = "row-modifier-slice"
+  @items = []
+
+  def pick(value)
+  end
+
+  def html
+    %Q{
+      <ul>
+        {each @items as item}
+          <li><button onclick.stop="{pick(item)}">Pick</button></li>
+        {end}
+      </ul>
+    }
+  end
+end
+RUBY
+
+      component = transpile_source(source, "RowModifierSlice")
+      each_binding = component.manifest.bindings.find! { |binding| binding.kind == "each" }
+      each_binding.template_text.not_nil!.should contain(%Q(data-mochi-modifiers-click="stop"))
+      each_binding.each_rows.not_nil!.events.first.modifiers.should eq(["stop"])
+    end
+
     it "rejects a user emit method when child events are declared" do
       source = <<-RUBY
 class BadEmitter

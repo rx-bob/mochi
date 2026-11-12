@@ -5,10 +5,13 @@ require "./template_expression"
 # `rewrite` decides whether the DOM receives a plain handler name or a compiled
 # row wrapper symbol.
 struct EventCall
+  MODIFIERS = ["prevent", "stop", "self"]
+
   getter event_name : String
   getter method_name : String
   getter arguments : Array(String)
   getter span : TemplateSourceSpan?
+  getter modifiers : Array(String)
 
   def initialize(
     @event_name : String,
@@ -16,16 +19,19 @@ struct EventCall
     @arguments : Array(String),
     @span : TemplateSourceSpan? = nil,
   )
+    suffix = @event_name.split('.', 2)[1]?
+    @modifiers = suffix ? suffix.split('.') : [] of String
   end
 
   def event : String
-    if event_name.starts_with?("on:")
-      event_name[3..]
-    elsif event_name.starts_with?("on")
-      event_name[2..]
-    else
-      event_name
-    end
+    raw = if event_name.starts_with?("on:")
+            event_name[3..]
+          elsif event_name.starts_with?("on")
+            event_name[2..]
+          else
+            event_name
+          end
+    raw.split('.', 2).first
   end
 
   # `on:<event>` is a compiled parent/child connection. `on<event>` retains
@@ -36,7 +42,7 @@ struct EventCall
 end
 
 class EventArgumentExtractor
-  EVENT_START = /(on:?[a-z][a-z0-9_-]*)\s*=\s*(["'])?\{/
+  EVENT_START = /(on:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*)\s*=\s*(["'])?\{/
 
   # Rewrites event attributes with call arguments into a plain method name plus
   # a JSON descriptor list. Keeping the descriptors on the element lets the
@@ -85,6 +91,7 @@ class EventArgumentExtractor
         method_name, arguments = parser.parse_call(content)
         validate_arguments(parser, arguments)
         call = EventCall.new(event_name, method_name, arguments, locator.try(&.locate(content)))
+        validate_modifiers(call)
         calls << call
         io << replacement.call(call)
         cursor = attribute_end
@@ -93,6 +100,13 @@ class EventArgumentExtractor
       io << html.byte_slice(cursor, html.bytesize - cursor)
     end
     {result, calls}
+  end
+
+  # The loader reads modifiers from the same element as the event handler so
+  # list rows and conditional branches keep their exact synchronous behavior.
+  def self.render_modifiers(call : EventCall) : String
+    return "" if call.modifiers.empty?
+    %( data-mochi-modifiers-#{call.event}="#{call.modifiers.join(",")}")
   end
 
   private def self.render_event_attribute(call : EventCall) : String
@@ -106,6 +120,24 @@ class EventArgumentExtractor
         io << escape_attribute(EventArgumentDescriptor.array_json(descriptors))
         io << "\""
       end
+      io << render_modifiers(call)
+    end
+  end
+
+  private def self.validate_modifiers(call : EventCall)
+    unknown = call.modifiers.reject { |modifier| EventCall::MODIFIERS.includes?(modifier) }
+    unless unknown.empty?
+      raise TemplateExpressionError.new(
+        "unknown event modifier #{unknown.first.inspect} on #{call.event_name.inspect}; " \
+        "expected #{EventCall::MODIFIERS.join(", ")}",
+        call.span
+      )
+    end
+    if call.modifiers.uniq.size != call.modifiers.size
+      raise TemplateExpressionError.new(
+        "duplicate event modifier on #{call.event_name.inspect}",
+        call.span
+      )
     end
   end
 

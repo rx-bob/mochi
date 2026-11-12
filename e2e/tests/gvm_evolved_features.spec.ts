@@ -1428,6 +1428,75 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
   }
 });
 
+test("modal keeps backdrop-only close, focus containment, and opener restore", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const { server, baseURL } = await startStaticServer(senchaDistDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  const focusedLabel = () => page.evaluate(() => {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    if (!active) return "";
+    return active.getAttribute("aria-label") || (active.textContent || "").trim();
+  });
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await page.evaluate(() => {
+      (window as unknown as { __mochiErrors: unknown[] }).__mochiErrors = [];
+      document.addEventListener("mochi:error", (event) => {
+        (window as unknown as { __mochiErrors: unknown[] }).__mochiErrors.push(
+          (event as CustomEvent).detail
+        );
+      });
+    });
+
+    const root = page.locator("z-root");
+    const topbar = root.locator("top-bar");
+    const modal = root.locator("modal-container");
+    const opener = topbar.locator('button[data-action="profile"]');
+
+    await opener.click();
+    const dialog = modal.locator(".modal");
+    await expect(dialog).toBeVisible();
+    await expect.poll(focusedLabel).toBe("Close dialog");
+
+    // A click inside the dialog body must not reach the backdrop-only close.
+    await dialog.locator(".modal-body").click();
+    await expect(dialog).toBeVisible();
+
+    // A true backdrop click closes and restores the opener.
+    await modal.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(focusedLabel).toBe("Profile");
+
+    // Reopen, then prove Tab/Shift-Tab wrap inside the dialog.
+    await opener.click();
+    await expect(dialog).toBeVisible();
+    await expect.poll(focusedLabel).toBe("Close dialog");
+    await page.keyboard.press("Shift+Tab");
+    await expect.poll(focusedLabel).toBe("Done");
+    await page.keyboard.press("Tab");
+    await expect.poll(focusedLabel).toBe("Close dialog");
+
+    // Escape closes and returns focus to the opener.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(focusedLabel).toBe("Profile");
+
+    const mochiErrors = await page.evaluate(() =>
+      (window as unknown as { __mochiErrors: unknown[] }).__mochiErrors);
+    expect(mochiErrors).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("shared values survive unmount while replaced storage stays bounded", async ({ page }) => {
   test.setTimeout(180_000);
   setupConsoleLogging(page);

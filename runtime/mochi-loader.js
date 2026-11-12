@@ -29,8 +29,12 @@
     unmountedInstances: new Set(),
     nextMountToken: 0,
     actionRouterInstalled: false,
-    actionSupportCache: new Map()
+    actionSupportCache: new Map(),
+    focusTrapDocument: null,
+    lastEventTarget: null
   };
+
+  var focusStacks = new WeakMap();
 
   function absoluteUrl(path, base) {
     return new URL(path, base).href;
@@ -535,6 +539,12 @@
     state.timers.delete(id);
   }
 
+  function reportFocusError(element, reference, detail, module) {
+    var error = new Error("mochi-loader: " + detail);
+    error.mochiContext = { reference: reference || "" };
+    reportError(element, "focus", reference || "focus", error, module);
+  }
+
   function handleHostCommand(module, entry) {
     var hostKind = entry.__host;
     if (hostKind === "storage_set") {
@@ -568,6 +578,41 @@
         reportError(null, "route", "set_route", error);
       }
       notifyRouteChange(path);
+      return;
+    }
+    if (hostKind === "focus") {
+      var focusHost = state.elements.get(String(entry.instance || ""));
+      var refName = typeof entry.name === "string" ? entry.name : "";
+      if (!focusHost || focusHost._mochiDisconnected || focusHost._mochiUnmounted ||
+          !focusHost.isConnected) {
+        reportFocusError(focusHost, refName, "focus target component is not mounted", module);
+        return;
+      }
+      if (!refName) {
+        reportFocusError(focusHost, refName, "focus requires a named ref", module);
+        return;
+      }
+      var focusTarget = findNamedRef(focusHost, refName);
+      if (!focusTarget || !focusTarget.isConnected) {
+        reportFocusError(focusHost, refName, "no element with ref \"" + refName + "\"", module);
+        return;
+      }
+      rememberFocus(focusHost, focusTarget);
+      if (!focusNode(focusTarget)) {
+        reportFocusError(focusHost, refName, "element with ref \"" + refName + "\" is not focusable", module);
+      }
+      return;
+    }
+    if (hostKind === "restore_focus") {
+      var restoreHost = state.elements.get(String(entry.instance || ""));
+      if (!restoreHost || restoreHost._mochiDisconnected || restoreHost._mochiUnmounted ||
+          !restoreHost.isConnected) {
+        reportFocusError(restoreHost, "restore_focus", "focus target component is not mounted", module);
+        return;
+      }
+      if (!restoreRememberedFocus(restoreHost)) {
+        reportFocusError(restoreHost, "restore_focus", "no connected focus target to restore", module);
+      }
       return;
     }
     if (hostKind === "timer") {
@@ -1400,6 +1445,182 @@
     return null;
   }
 
+  function eventModifiers(target, eventName) {
+    var raw = target.getAttribute("data-mochi-modifiers-" + eventName);
+    if (!raw) return [];
+    return raw.split(",").filter(function (modifier) { return modifier.length > 0; });
+  }
+
+  // `document.activeElement` retargets to a shadow host. Walk into each open
+  // shadow root so focus capture and restore keep the real focused element.
+  function deepActiveElement(root) {
+    var scope = root || global.document;
+    var active = scope && scope.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active || null;
+  }
+
+  function focusNode(node) {
+    if (!node || typeof node.focus !== "function") return false;
+    try {
+      node.focus({ preventScroll: true });
+    } catch (error) {
+      try {
+        node.focus();
+      } catch (fallbackError) {
+        return false;
+      }
+    }
+    var active = deepActiveElement();
+    return active === node || node === global.document.body;
+  }
+
+  function nodeContainsFocus(host, node) {
+    if (!node) return true;
+    if (host.contains && host.contains(node)) return true;
+    var root = host.shadowRoot;
+    return !!(root && root.contains && root.contains(node));
+  }
+
+  function focusCandidate(node) {
+    while (node) {
+      if (node.nodeType === 1 && typeof node.focus === "function") return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function rememberFocus(host, target) {
+    var active = deepActiveElement();
+    if (!active || active === host) return;
+
+    // A trap can contain several focus targets. Moving between them must not
+    // grow the restore stack; only focus that came from outside is remembered.
+    var trap = focusTrapFor(target);
+    if (trap && (trap === active || nodeContainsFocus(trap, active))) return;
+    if (!trap && nodeContainsFocus(host, active)) return;
+
+    if (active === global.document.body) {
+      // Firefox does not focus a button on mouse click. Fall back to the
+      // element whose handler opened the dialog.
+      active = focusCandidate(state.lastEventTarget) || active;
+    }
+    var stack = focusStacks.get(host);
+    if (!stack) {
+      stack = [];
+      focusStacks.set(host, stack);
+    }
+    stack.push(active);
+  }
+
+  function restoreRememberedFocus(host) {
+    var stack = focusStacks.get(host);
+    while (stack && stack.length > 0) {
+      var target = stack.pop();
+      if (target && target.isConnected !== false && focusNode(target)) return true;
+    }
+    return false;
+  }
+
+  function findNamedRef(host, name) {
+    var root = host && host.shadowRoot;
+    if (!root) return null;
+    var escaped = global.CSS && typeof global.CSS.escape === "function"
+      ? global.CSS.escape(name)
+      : String(name).replace(/["\\]/g, "\\$&");
+    return root.querySelector('[data-mochi-ref="' + escaped + '"]') ||
+      root.querySelector('[ref="' + escaped + '"]');
+  }
+
+  var FOCUSABLE_SELECTOR = [
+    "a[href]",
+    "area[href]",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "iframe",
+    "object",
+    "embed",
+    "[contenteditable]",
+    "[tabindex]"
+  ].join(",");
+
+  function focusableNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.disabled || node.hidden || node.hasAttribute("inert")) return false;
+    if (node.getAttribute("aria-hidden") === "true") return false;
+    if (node.getAttribute("tabindex") === "-1") return false;
+    return node.matches(FOCUSABLE_SELECTOR);
+  }
+
+  function collectFocusables(container) {
+    var result = [];
+    function visitChildren(parent) {
+      for (var child = parent.firstElementChild; child; child = child.nextElementSibling) {
+        visit(child);
+      }
+    }
+    function visit(node) {
+      if (!node || node.nodeType !== 1) return;
+      if (focusableNode(node)) result.push(node);
+      if (node.shadowRoot) visitChildren(node.shadowRoot);
+      else visitChildren(node);
+    }
+    if (container.shadowRoot) visitChildren(container.shadowRoot);
+    else visitChildren(container);
+    return result;
+  }
+
+  function focusTrapFor(node) {
+    while (node) {
+      if (node.nodeType === 1 &&
+          (node.hasAttribute("data-mochi-focus-trap") || node.hasAttribute("focus-trap"))) {
+        return node;
+      }
+      if (node.parentNode) {
+        node = node.parentNode;
+      } else if (node.host) {
+        node = node.host;
+      } else {
+        break;
+      }
+    }
+    return null;
+  }
+
+  function handleFocusTrapKeydown(event) {
+    if (!event || event.key !== "Tab" || event.defaultPrevented) return;
+    var active = deepActiveElement();
+    var trap = focusTrapFor(active);
+    if (!trap) return;
+
+    var items = collectFocusables(trap);
+    if (items.length === 0) {
+      event.preventDefault();
+      focusNode(trap);
+      return;
+    }
+
+    var index = items.indexOf(active);
+    var edge = event.shiftKey
+      ? (index === -1 || index === 0)
+      : (index === -1 || index === items.length - 1);
+    if (!edge) return;
+
+    event.preventDefault();
+    focusNode(event.shiftKey ? items[items.length - 1] : items[0]);
+  }
+
+  function installFocusTrap() {
+    if (!global.document || typeof global.document.addEventListener !== "function") return;
+    if (state.focusTrapDocument === global.document) return;
+    global.document.addEventListener("keydown", handleFocusTrapKeydown, true);
+    state.focusTrapDocument = global.document;
+  }
+
   function findEachContexts(target, root) {
     var nearest = null;
     var node = target;
@@ -1421,6 +1642,39 @@
     return contexts;
   }
 
+  // Ruby gets labels and attributes, never a live DOM node. The same shape is
+  // used for target, the bound current target, and each composed-path entry.
+  function eventNodeInfo(node) {
+    if (!node || node.nodeType !== 1) return null;
+    var tag = String(node.tagName || "").toLowerCase();
+    return {
+      tag: tag,
+      id: node.id || "",
+      ref: node.getAttribute("data-mochi-ref") || node.getAttribute("ref") || "",
+      component: node.localName && node.localName.indexOf("-") !== -1 ? node.localName : ""
+    };
+  }
+
+  function composedPathInfo(event, source) {
+    var path = [];
+    if (event && typeof event.composedPath === "function") {
+      path = event.composedPath();
+    }
+    if ((!path || path.length === 0) && source) {
+      var node = source;
+      while (node && path.length < 32) {
+        path.push(node);
+        node = node.parentNode || (node.host || null);
+      }
+    }
+    var result = [];
+    for (var i = 0; i < path.length && result.length < 32; i++) {
+      var info = eventNodeInfo(path[i]);
+      if (info) result.push(info);
+    }
+    return result;
+  }
+
   function eventPayload(target, event) {
     if (event && event.__mochiChildEvent) {
       return event.detail === undefined || event.detail === null ? {} : event.detail;
@@ -1438,6 +1692,8 @@
       return event && typeof event[name] === "number" ? event[name] : 0;
     }
 
+    var targetInfo = eventNodeInfo(source);
+    var currentTargetInfo = eventNodeInfo(target);
     return {
       type: event ? event.type : "",
       value: source && "value" in source ? source.value : null,
@@ -1454,6 +1710,14 @@
       offset_y: axis("offsetY"),
       button: event && typeof event.button === "number" ? event.button : 0,
       target_id: source && source.id ? source.id : "",
+      target_ref: targetInfo ? targetInfo.ref : "",
+      target_tag: targetInfo ? targetInfo.tag : "",
+      current_target_id: currentTargetInfo ? currentTargetInfo.id : "",
+      current_target_ref: currentTargetInfo ? currentTargetInfo.ref : "",
+      current_target_tag: currentTargetInfo ? currentTargetInfo.tag : "",
+      target: targetInfo,
+      current_target: currentTargetInfo,
+      composed_path: composedPathInfo(event, source),
       dataset: dataset
     };
   }
@@ -2504,6 +2768,7 @@
         this.bindingTargets = {};
         this.bindingValues = {};
         this.bindingData = {};
+        focusStacks.delete(this);
         allBindings.forEach(function (binding) {
           this.bindingData[binding.id] = binding;
         }, this);
@@ -2729,6 +2994,7 @@
         this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
+        focusStacks.delete(this);
         this.refs = this.bindingTargets;
       }
 
@@ -2793,6 +3059,7 @@
         this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
+        focusStacks.delete(this);
         this.refs = this.bindingTargets;
       }
 
@@ -2815,7 +3082,20 @@
       _dispatch(target, event) {
         var element = this;
         var method = target.getAttribute("data-mochi-" + event.type);
-        if (!method || !this._mochiReady) return;
+        if (!method) return;
+
+        // Native modifiers must run during this listener, before browser
+        // dispatch ends and before any Ruby work is queued.
+        var modifiers = eventModifiers(target, event.type);
+        if (modifiers.indexOf("self") !== -1 && event.target !== target) return;
+        if (modifiers.indexOf("prevent") !== -1 && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (modifiers.indexOf("stop") !== -1 && typeof event.stopPropagation === "function") {
+          event.stopPropagation();
+        }
+        state.lastEventTarget = event.target;
+        if (!this._mochiReady) return;
 
         var payload = eventPayload(target, event);
         var eachContexts = findEachContexts(target, this.shadowRoot);
@@ -2932,6 +3212,7 @@
   }
 
   async function boot(url, options) {
+    installFocusTrap();
     options = options || {};
     if (options.moduleFactory) loader.moduleFactory = options.moduleFactory;
 

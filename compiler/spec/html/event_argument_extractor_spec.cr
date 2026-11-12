@@ -98,6 +98,39 @@ describe EventArgumentExtractor do
     args.map { |arg| arg["kind"].as_s }.should eq(["event", "literal"])
   end
 
+  it "parses synchronous event modifiers into a loader-readable attribute" do
+    html = %Q(<a href="#save" onclick.prevent.stop.self="{save(item.id)}">Save</a>)
+    result = EventArgumentExtractor.process(html)
+
+    result.should contain(%Q(onclick.prevent.stop.self="{save}"))
+    result.should contain(%Q(data-mochi-modifiers-click="prevent,stop,self"))
+    args = event_arguments(result, "click")
+    args[0]["kind"].as_s.should eq("expr")
+    args[0]["value"].as_s.should eq("item.id")
+  end
+
+  it "keeps modifiers on component event bindings" do
+    _result, calls = EventArgumentExtractor.rewrite(
+      %Q(<event-row on:select.self="{row_selected}"></event-row>)
+    ) do |call|
+      %(on:#{call.event}="#{call.method_name}")
+    end
+
+    calls.size.should eq 1
+    calls[0].event.should eq "select"
+    calls[0].component?.should be_true
+    calls[0].modifiers.should eq(["self"])
+  end
+
+  it "rejects unknown or repeated event modifiers" do
+    expect_raises(TemplateExpressionError, /unknown event modifier/) do
+      EventArgumentExtractor.process(%Q(<button onclick.fire="{save}">Save</button>))
+    end
+    expect_raises(TemplateExpressionError, /duplicate event modifier/) do
+      EventArgumentExtractor.process(%Q(<button onclick.stop.stop="{save}">Save</button>))
+    end
+  end
+
   it "finds event attributes after multibyte text" do
     html = %Q[<p>café</p><button onclick="{delete_item(item.id, "}")}">Delete</button>]
     result = EventArgumentExtractor.process(html)

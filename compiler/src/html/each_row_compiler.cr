@@ -14,7 +14,7 @@ class EachRowCompiler
   SENTINEL_START   = "\u{E002}"
   SENTINEL_END     = "\u{E003}"
   SENTINEL_PATTERN = Regex.new(SENTINEL_START + "([0-9]+)" + SENTINEL_END)
-  EVENT_WITH_ARGS  = /(on:?[a-z][a-z0-9_-]*)="\{([a-zA-Z0-9_!?]+)\}"\s+data-mochi-args-[a-zA-Z0-9_-]+="([^"]*)"/m
+  EVENT_WITH_ARGS  = /(on:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*)="\{([a-zA-Z0-9_!?]+)\}"\s+data-mochi-args-[a-zA-Z0-9_-]+="([^"]*)"/m
   ARG_MARKER       = /\A__mochi_row_args_(\d+)__(.*)\z/m
   CONTROL_PREFIXES = ["if ", "unless ", "elsif ", "each "]
   CONTROL_KEYWORDS = ["else", "end"]
@@ -52,6 +52,12 @@ class EachRowCompiler
     scope = parent_scope + [entry]
     scope_names = scope_names_for(scope)
     template = replace_nested_blocks(block)
+    if template.matches?(/\sref\s*=/)
+      raise TemplateExpressionError.new(
+        "ref is not supported inside each rows; place named refs in the static component template",
+        row_span
+      )
+    end
     template, preprocessed_args = extract_event_arguments(template)
     event_index = 0
     row_events = [] of EachRowEventDescriptor
@@ -83,11 +89,12 @@ class EachRowCompiler
           arguments,
           scope.dup,
           call.span,
-          call.component?
+          call.component?,
+          call.modifiers
         )
-        %(data-mochi-#{call.event}="#{wrapper}")
+        %(data-mochi-#{call.event}="#{wrapper}"#{EventArgumentExtractor.render_modifiers(call)})
       else
-        %(data-mochi-#{call.event}="#{handler}")
+        %(data-mochi-#{call.event}="#{handler}"#{EventArgumentExtractor.render_modifiers(call)})
       end
     end
 

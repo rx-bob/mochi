@@ -68,6 +68,10 @@ struct EventDescriptor
   # connection targets a child component event instead of a native browser
   # event.
   property component : Bool
+  # Synchronous native-event modifiers declared on the template attribute.
+  # The loader reads the same list from `data-mochi-modifiers-<event>` so
+  # branch and list-row nodes behave exactly like top-level nodes.
+  property modifiers : Array(String)
 
   def initialize(
     @path : Array(Int32),
@@ -75,6 +79,7 @@ struct EventDescriptor
     @method_sym : String,
     @args : Array(EventArgumentDescriptor) = [] of EventArgumentDescriptor,
     @component : Bool = false,
+    @modifiers : Array(String) = [] of String,
   )
   end
 

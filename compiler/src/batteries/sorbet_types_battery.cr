@@ -1,8 +1,6 @@
 require "file_utils"
 
 class SorbetTypesBat
-
-
   def self.generate(ruby_src_dir : String)
     output_dir = "#{ruby_src_dir}/lib/sorbet-types"
     if !Dir.exists?(output_dir)
@@ -136,8 +134,13 @@ class SorbetTypesBat
       module Mochi
         def self.emit_child(name, payload = {})
         end
+
+        def self.focus(name)
+        end
+
+        def self.restore_focus
+        end
       end
     RUBY
   end
-
 end
