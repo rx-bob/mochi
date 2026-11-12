@@ -4434,6 +4434,7 @@
       elements: state.elements.size,
       timers: state.timers.size,
       pendingFetches: state.pendingFetches.length,
+      activeFetches: state.activeFetches.size,
       pendingHostRequests: state.pendingHostRequests.size,
       unmountedInstances: state.unmountedInstances.size,
       stateObjects: module && typeof module._mochi_state_object_count === "function"

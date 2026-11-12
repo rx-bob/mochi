@@ -24,6 +24,7 @@ require "./entrypoints/typechecker"
 require "./batteries/core_battery"
 require "./sorbet/sorbet"
 require "./tooling/dev_server"
+require "./tooling/ruby_test_runner"
 
 def self.get_attr(component, name) : String
   return `#{component}.element.getAttribute(#{name})`
@@ -72,6 +73,7 @@ is_dev_server = false
 dev_server_root = ""
 dev_server_config_path = ""
 is_standalone_typecheck = false
+is_ruby_test = false
 keep_granular_build_artifacts = false
 
 desc_dev_server = "Launch dev server"
@@ -98,6 +100,10 @@ OptionParser.parse do |p|
 
   p.on("typecheck", "typecheck the current directory") do
     is_standalone_typecheck = true
+  end
+
+  p.on("test", "Run Ruby-authored component behavior tests in GVM") do
+    is_ruby_test = true
   end
 
   p.on("--keep_granular_build_artifacts", "Preserves all granular build artifacts (meant for developers working on Mochi)") do
@@ -146,7 +152,9 @@ OptionParser.parse do |p|
   parser = p
 end
 
-if is_dev_server
+if is_ruby_test
+  exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir)
+elsif is_dev_server
   if dev_server_config_path.size < 1 || dev_server_root.size < 1
     puts "No arguments provided, intended usage:".colorize(:red)
     puts "  mochi dev --config=</path/to/dev_server_config.json> --root=</path/to/ruby/src>"

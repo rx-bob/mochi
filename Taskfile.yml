@@ -31,6 +31,8 @@ tasks:
     desc: Build the Crystal compiler binary
     sources:
       - compiler/src/**/*.cr
+      - runtime/test/mochi_test_recorder.rb
+      - e2e/mochi_test_runner.cjs
       - compiler/shard.yml
       - compiler/shard.lock
       - fragments/**/*

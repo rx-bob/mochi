@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -87,6 +87,123 @@ function readComponentDescriptor(bundleDir: string, manifest: any, tag: string):
   if (!entry) throw new Error(`missing component index entry ${tag}`);
   return JSON.parse(fs.readFileSync(path.join(bundleDir, entry.descriptor), "utf8"));
 }
+
+test("mochi test runs Ruby behavior tests against GVM bytecode and reports Ruby locations", async () => {
+  test.setTimeout(180_000);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-ruby-tests-"));
+  const bundleDir = path.join(projectDir, "production");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(projectDir, "test"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "lib", "ChildBadge.rb"), `
+class ChildBadge
+  @tag_name = "child-badge"
+  prop :label, String, default: "before"
+
+  def html
+    %Q{<span class="label">{@label}</span>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "TestParent.rb"), `
+class TestParent
+  @tag_name = "test-parent"
+  @label
+
+  def initialize
+    @label = "before"
+  end
+
+  def html
+    %Q{
+      <button class="change" onclick="{change}">Change</button>
+      <child-badge label="{@label}"></child-badge>
+    }
+  end
+
+  def change
+    @label = "after"
+  end
+
+  def fail_at_runtime
+    missing_runtime_method
+  end
+end
+`);
+
+  const testFile = path.join(projectDir, "test", "parent_test.rb");
+  const writeTest = (body: string) => fs.writeFileSync(testFile, body);
+  const runMochiTest = () => spawnSync(compilerBinary, ["test", "-i", projectDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, MOCHI_TEST_CHANNEL: "chrome" },
+  });
+
+  try {
+    writeTest(`
+Mochi::Test.test("parent value reaches child") do
+  mount "test-parent"
+  click ".change"
+  wait_for_settled
+  assert_text "child-badge >>> .label", "after"
+end
+`);
+    const passing = runMochiTest();
+    expect(passing.status, passing.stderr).toBe(0);
+    expect(passing.stdout).toContain("PASS parent value reaches child");
+
+    writeTest(`
+Mochi::Test.test("wrong output assertion") do
+  mount "test-parent"
+  click ".change"
+  wait_for_settled
+  assert_text "child-badge >>> .label", "wrong"
+end
+`);
+    const wrongAssertion = runMochiTest();
+    expect(wrongAssertion.status).not.toBe(0);
+    expect(wrongAssertion.stderr + wrongAssertion.stdout).toContain("parent_test.rb:");
+    expect(wrongAssertion.stderr + wrongAssertion.stdout).toContain("expected 'wrong'");
+
+    writeTest(`
+Mochi::Test.test("caught runtime errors fail the test") do
+  mount "test-parent"
+  click ".explode"
+  wait_for_settled
+end
+`);
+    fs.writeFileSync(path.join(projectDir, "lib", "TestParent.rb"), `
+class TestParent
+  @tag_name = "test-parent"
+
+  def html
+    %Q{<button class="explode" onclick="{fail_at_runtime}">Explode</button>}
+  end
+
+  def fail_at_runtime
+    missing_runtime_method
+  end
+end
+`);
+    const runtimeFailure = runMochiTest();
+    expect(runtimeFailure.status).not.toBe(0);
+    expect(runtimeFailure.stderr + runtimeFailure.stdout).toContain("TestParent.rb:");
+
+    execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    const productionManifest = readManifest(bundleDir);
+    expect(productionManifest.components.map((entry: any) => entry.tag_name)).toEqual([
+      "child-badge",
+      "test-parent",
+    ]);
+    expect(fs.existsSync(path.join(bundleDir, "test"))).toBe(false);
+    expect(fs.readdirSync(bundleDir).some((entry) => entry.includes("test-runner"))).toBe(false);
+  } finally {
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
 
 test("GVM evolved features: prelude helpers, each events/helpers, props, timers, storage, routing, and class toggle", async ({ page }) => {
   setupConsoleLogging(page);

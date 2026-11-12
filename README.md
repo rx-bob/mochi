@@ -801,7 +801,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task build` | Build the `compiler/mochi` binary |
 | `task specs` | Run the Crystal compiler specs |
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
-| `task e2e` | Run the GVM Playwright end-to-end test |
+| `task e2e` | Run the GVM Playwright end-to-end tests |
 | `task dev` | Build motestproj and serve `build_gvm` on port 27490 |
 | `task gvm:test` | Run the `mochi-gvm` Goose test suite |
 | `task gvm:fmt` | Check `mochi-gvm` Goose formatting |
@@ -822,6 +822,9 @@ mochi --initialize="my_fancy_project"
 ```
 mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --typecheck
 ```
+
+#### Testing component behavior
+Put Ruby tests in `test/**/*_test.rb` and run `mochi test -i "."`. Tests use `Mochi::Test.test` with `mount`, `click`, `fill`, `wait_for_settled`, and `assert_text`; the framework builds temporary `.chi` artifacts and runs them in a browser. Assertion output includes the Ruby test file and line. Test plans and runner files do not enter production bundles. The framework test runner requires Node.js and Mochi's Playwright browser dependencies; app-authored tests and configuration remain Ruby.
 
 * -i: input directory
 * -o: output directory

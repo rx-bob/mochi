@@ -2,7 +2,6 @@ require "file_utils"
 require "./generated/builtins/my_counter_rb"
 
 class Initializer
-
   def initialize(project_name : String)
     puts "Init '#{project_name}'"
 
@@ -14,6 +13,8 @@ class Initializer
       Dir.mkdir_p(proj_path)
       src_path = "#{proj_path}/lib"
       Dir.mkdir_p(src_path)
+      test_path = "#{proj_path}/test"
+      Dir.mkdir_p(test_path)
 
       File.write("#{proj_path}/Taskfile.yml", generate_taskfile)
       File.write("#{proj_path}/Gemfile", generate_gemfile)
@@ -21,6 +22,7 @@ class Initializer
       File.write("#{proj_path}/dev_server_config.json", generate_dev_server_config)
       File.write("#{proj_path}/README.md", generate_readme)
       File.write("#{src_path}/MyCounter.rb", generate_my_first_mochi_component)
+      File.write("#{test_path}/counter_test.rb", generate_counter_test)
     end
   end
 
@@ -32,6 +34,10 @@ class Initializer
       build:
         cmds:
           - mochi -i "./" -o "./build"
+      test:
+        desc: Run Ruby component behavior tests in the browser
+        cmds:
+          - mochi test -i "./"
     YML
   end
 
@@ -39,12 +45,8 @@ class Initializer
     <<-'TEXT'
     source "https://rubygems.org"
 
-    gem "opal", "~> 1.8"
-    gem "opal-browser", "~> 0.3.5"
-
     gem 'sorbet', :group => :development
     gem 'sorbet-runtime'
-    gem 'tapioca', require: false, :group => [:development, :test]
     TEXT
   end
 
@@ -52,16 +54,30 @@ class Initializer
     <<-'TEXT'
     # Mochi Starter
 
-    The Official Documentation for Mochi can be found under: https://mochirb.com/docs
+    Mochi lets you build browser applications in Ruby. Application components live in `lib/`.
 
     ## Getting Started
 
     ### Building the project
-    In order to build the project you can run `mochi -i "./" -o "./build"` alternatively `task build` has already been preconfigured.
+    Run `mochi -i "./" -o "./build"` to build, or use `task build`.
 
-    This will produce the 2 build artifacts:
-    * `./build/bundle.js` - contains your components
-    * `./build/runtime.js` - the opal runtime
+    The build contains the Mochi loader, GVM runtime, component descriptors, and `.chi` bytecode.
+
+    ### Testing components
+    Add Ruby behavior tests under `test/` with filenames ending in `_test.rb`. Run them with `mochi test` or `task test`.
+
+    Tests use a small Ruby recorder DSL. The framework compiles the app through the normal GVM path, mounts components in a browser, performs actions, waits for a settled render, and checks visible text. Tests run in an isolated temporary bundle and never enter production output.
+
+    ```ruby
+    Mochi::Test.test("counter increments") do
+      mount "my-counter"
+      click "button"
+      wait_for_settled
+      assert_text "h1", "Count: 1"
+    end
+    ```
+
+    `assert_text` selectors start in the mounted component's shadow root. Use `>>>` to cross into a child component, for example `"child-counter >>> .value"`.
 
     ### Starting the Dev Server
     Mochi ships with a built-in dev server which can be started with
@@ -88,13 +104,7 @@ class Initializer
     <html>
         <head>
             <title>Mochi Starter</title>
-            <script
-              src="./build/runtime.js"
-              onload='Opal.require("native"); Opal.require("promise"); Opal.require("browser/setup/full");'></script>
-            <script src="./build/bundle.js"></script>
-            <link rel="preconnect" href="https://fonts.googleapis.com">
-            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-            <link href="https://fonts.googleapis.com/css2?family=Caprasimo&display=swap" rel="stylesheet">
+            <script src="./build/mochi-loader.js"></script>
             <style>
                 body {
                     background: #24262c;
@@ -103,12 +113,10 @@ class Initializer
                     display: flex;
                     justify-content: center;
                     gap: 22px;
-                    align-items: anchor-center;
+                    align-items: center;
                     color: white;
                     width: 100%;
-                    font-family: "Caprasimo", serif;
-                    font-weight: 400;
-                    font-style: normal;
+                    font-family: sans-serif;
                 }
                 .logo { height: 64px; }
             </style>
@@ -130,4 +138,14 @@ class Initializer
     return MyCounterRbFragment.get_ruby_code
   end
 
+  def generate_counter_test : String
+    <<-'RUBY'
+    Mochi::Test.test("counter increments") do
+      mount "my-counter"
+      click "button"
+      wait_for_settled
+      assert_text "h1", "Count: 1"
+    end
+    RUBY
+  end
 end
