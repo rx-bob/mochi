@@ -158,9 +158,13 @@
     };
   }
 
-  function reportError(element, phase, method, error, module) {
+  function reportError(element, phase, method, error, module, context) {
     var component = element && element._mochiComponent;
     var info = describeError(component, phase, method, error, module, element);
+    if (context) {
+      if (context.attribute !== undefined) info.attribute = context.attribute;
+      if (context.property !== undefined) info.property = context.property;
+    }
     var reported = error instanceof Error ? error : new Error(info.message);
     reported.message = info.message;
     reported.mochi = info;
@@ -762,24 +766,52 @@
     return loadIrepUrl(url, component.class_name || component.tag_name, manifest, manifestUrl);
   }
 
-  function syncElementAttribute(module, instance, name, value) {
-    if (!module || typeof module._mochi_set_ivar_string !== "function") return false;
-    if (!name || name.indexOf("data-mochi-") === 0 || name.indexOf("on") === 0) return false;
-    var ivarName = name.replace(/-/g, "_");
-    var strVal = value === null || value === undefined ? "" : String(value);
-    return withUtf8(module, ivarName, function (nPtr, nLen) {
-      return withUtf8(module, strVal, function (vPtr, vLen) {
-        return module._mochi_set_ivar_string(instance, nPtr, nLen, vPtr, vLen) === 0;
-      });
-    });
+  function attributeValueIsCurrent(element, name, value) {
+    return !!(element && element._mochiAttributeValues) &&
+      Object.prototype.hasOwnProperty.call(element._mochiAttributeValues, name) &&
+      element._mochiAttributeValues[name] === value;
   }
 
+  function rememberAttributeValue(element, name, value) {
+    if (!element) return;
+    if (!element._mochiAttributeValues) element._mochiAttributeValues = Object.create(null);
+    element._mochiAttributeValues[name] = value;
+  }
+
+  // Host attribute -> component prop ABI. `_mochi_set_ivar_string` returns 0 on
+  // success and -1 on failure with the VM message read through lastError.
+  // Removal arrives as a missing attribute and is written as the empty string,
+  // the historical string default; it does not re-run `initialize`. An
+  // unchanged value is skipped here, and the VM also marks no dirty ivar for an
+  // equal value, so echoing the current attribute cannot create an update loop.
+  function syncElementAttribute(module, instance, name, value, element) {
+    if (!module || typeof module._mochi_set_ivar_string !== "function") return false;
+    if (!name || name.indexOf("data-mochi-") === 0 || name.indexOf("on") === 0) return false;
+    var strVal = value === null || value === undefined ? "" : String(value);
+    if (attributeValueIsCurrent(element, name, strVal)) return false;
+    var result = withUtf8(module, name.replace(/-/g, "_"), function (nPtr, nLen) {
+      return withUtf8(module, strVal, function (vPtr, vLen) {
+        return module._mochi_set_ivar_string(instance, nPtr, nLen, vPtr, vLen);
+      });
+    });
+    if (result !== 0) {
+      throw new Error("mochi-loader: attribute setter failed for \"" + name + "\": " +
+        lastError(module));
+    }
+    rememberAttributeValue(element, name, strVal);
+    return true;
+  }
+
+  // Re-reads every current host attribute. Returns true when any value changed;
+  // mount ignores the flag because the first binding flush follows immediately.
   function syncAllElementAttributes(module, instance, element) {
-    if (!element || !element.attributes) return;
+    if (!element || !element.attributes) return false;
+    var changed = false;
     for (var i = 0; i < element.attributes.length; i++) {
       var attr = element.attributes[i];
-      syncElementAttribute(module, instance, attr.name, attr.value);
+      if (syncElementAttribute(module, instance, attr.name, attr.value, element)) changed = true;
     }
+    return changed;
   }
 
   // Drops host work produced by a mount attempt that is being rolled back. The
@@ -1972,6 +2004,7 @@
         this._mochiModule = null;
         this._mochiInstance = null;
         this._mochiAttrObserver = null;
+        this._mochiAttributeValues = null;
         this._mochiDisconnected = false;
         this._mochiDisposalScheduled = false;
         this._mochiUnmounted = false;
@@ -2020,6 +2053,7 @@
         this._mochiUnmounted = false;
         this._mochiModule = null;
         this._mochiInstance = null;
+        this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
         this.bindingData = {};
@@ -2112,24 +2146,39 @@
           this._mochiAttrObserver = null;
         }
         var element = this;
+        // A value set while the element was detached, or between instance
+        // creation and observer installation, must not be lost.
+        syncAllElementAttributes(module, instance, element);
         this._mochiAttrObserver = new global.MutationObserver(function (mutations) {
           if (element._mochiDisconnected || element._mochiUnmounted) return;
-          try {
-            var changed = false;
-            for (var i = 0; i < mutations.length; i++) {
-              var attrName = mutations[i].attributeName;
-              if (!attrName) continue;
-              if (syncElementAttribute(module, instance, attrName, element.getAttribute(attrName))) {
+          // One callback may carry several records for the same attribute.
+          // Coalesce them to the current value and write each prop once.
+          var names = Object.create(null);
+          for (var i = 0; i < mutations.length; i++) {
+            var recordName = mutations[i].attributeName;
+            if (recordName) names[recordName] = true;
+          }
+          var changed = false;
+          Object.keys(names).forEach(function (attrName) {
+            try {
+              if (syncElementAttribute(module, instance, attrName,
+                element.getAttribute(attrName), element)) {
                 changed = true;
               }
+            } catch (error) {
+              reportError(element, "attribute", attrName, error, module, {
+                attribute: attrName,
+                property: attrName.replace(/-/g, "_")
+              });
             }
-            if (changed) {
-              applyPatches(element, module);
-              drainEmits(module);
-              drainFetches(module);
-            }
+          });
+          if (!changed) return;
+          try {
+            applyPatches(element, module);
+            drainEmits(module);
+            drainFetches(module);
           } catch (error) {
-            reportError(element, "attribute", "attribute_changed", error, module);
+            reportError(element, "attribute", "", error, module);
           }
         });
         this._mochiAttrObserver.observe(this, { attributes: true });
@@ -2222,6 +2271,7 @@
         }
         this._mochiModule = null;
         this._mochiInstance = null;
+        this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
         this.refs = this.bindingTargets;
@@ -2285,6 +2335,7 @@
 
         this._mochiModule = null;
         this._mochiInstance = null;
+        this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
         this.refs = this.bindingTargets;

@@ -166,6 +166,28 @@ no characters. `bind:value` writes `nil` and the empty string as an empty value
 without replacing the input; `bind:checked` checks only for `true`, `"true"`,
 `"checked"`, or `"1"`.
 
+### Live component attributes
+
+Attributes on a child component element are its props. The loader writes every
+current attribute into the child instance through the set-ivar ABI; a later
+change to the attribute, including one produced by a parent binding, updates
+the mounted child in place. The child keeps its Ruby instance, bindings, and
+DOM nodes.
+
+```ruby
+def html
+  %Q{<child-badge label="{@label}"></child-badge>}
+end
+```
+
+The setter reports `0` for success and `-1` for failure. A failure is reported
+as a `mochi:error` with `phase: "attribute"` plus the failing `attribute` and
+`property`, instead of being treated as a successful no-op. Re-writing the
+current value is a successful no-op and produces no patch, so an observer that
+echoes the attribute cannot start an update loop. Removing the attribute writes
+an empty string; it does not re-run the child's `initialize`, so an explicit
+Ruby default applies only to a fresh mount.
+
 ### Component lifecycle
 
 Moving a connected component between positions in the same turn preserves its Ruby instance, state, timers, and event handlers; `unmounted` and `mounted` do not run again. If the element stays disconnected through that turn, the loader disposes it once and runs `unmounted`. Reinserting it afterwards performs a fresh mount from `initialize`, rebuilding props, bindings, and handlers.

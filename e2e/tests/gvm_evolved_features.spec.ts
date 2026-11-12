@@ -100,6 +100,7 @@ class FeatureHost
   @timer_done
   @last_key
   @pct_val
+  @badge_label
 
   def initialize
     @items = [
@@ -112,6 +113,7 @@ class FeatureHost
     @timer_done = false
     @last_key = "none"
     @pct_val = MathHelper.pct(16, 20)
+    @badge_label = "synced-prop"
   end
 
   def label_for(item)
@@ -129,7 +131,8 @@ class FeatureHost
         <button class="pill {{ on: @active }}" onclick="{flip}">Flip</button>
         <input class="draft" type="text" bind:value="@draft">
         <p class="draft-out">{@draft}</p>
-        <child-badge label="synced-prop"></child-badge>
+        <button class="badge-update" onclick="{bump_badge}">Badge</button>
+        <child-badge label="{@badge_label}"></child-badge>
         <div class="list">
           {each @items as it}
             <button class="item-btn" onclick="{pick}">{label_for(it)}</button>
@@ -154,6 +157,10 @@ class FeatureHost
 
   def mark_timer
     @timer_done = true
+  end
+
+  def bump_badge
+    @badge_label = @badge_label == "synced-prop" ? "live-prop" : "live-prop-2"
   end
 
   def on_key(ev)
@@ -190,7 +197,28 @@ end
 
     await expect(host.locator("p.literal")).toHaveText("{hello}");
     await expect(host.locator("p.pct")).toHaveText("80%");
-    await expect(host.locator("child-badge").locator("span.badge-text")).toHaveText("synced-prop");
+
+    // The badge prop arrives through a live parent attribute. Updating it
+    // after both components are mounted must keep the same child instance
+    // and node while the child text follows the new value.
+    const badge = host.locator("child-badge");
+    await expect(badge.locator("span.badge-text")).toHaveText("synced-prop");
+    const badgeInstance = await badge.evaluate((element: any) => {
+      element.__badgeIdentity = true;
+      return element._mochiInstance;
+    });
+    expect(badgeInstance).toBeTruthy();
+
+    await host.locator("button.badge-update").click();
+    await expect(badge.locator("span.badge-text")).toHaveText("live-prop");
+    await expect(badge).toHaveAttribute("label", "live-prop");
+    expect(await badge.evaluate((element: any) => element._mochiInstance)).toBe(badgeInstance);
+    expect(await badge.evaluate((element: any) => element.__badgeIdentity)).toBe(true);
+
+    await host.locator("button.badge-update").click();
+    await expect(badge.locator("span.badge-text")).toHaveText("live-prop-2");
+    expect(await badge.evaluate((element: any) => element._mochiInstance)).toBe(badgeInstance);
+    expect(await badge.evaluate((element: any) => element.__badgeIdentity)).toBe(true);
 
     const itemBtns = host.locator("button.item-btn");
     await expect(itemBtns.nth(0)).toHaveText("Resume");

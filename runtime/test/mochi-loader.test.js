@@ -92,6 +92,7 @@ function fakeModule(log) {
   log.failDispatch = new Set();
   log.errorText = "";
   log.requiredArgs = new Map();
+  log.failIvar = false;
   log.methods = new Set(["mounted", "increment", "reset"]);
   let nextSymbol = 100;
   let nextPointer = 1024;
@@ -158,7 +159,7 @@ function fakeModule(log) {
       const name = decoder.decode(module.HEAPU8.slice(namePointer, namePointer + nameLength));
       const value = decoder.decode(module.HEAPU8.slice(valuePointer, valuePointer + valueLength));
       log.ivarSets.push({ instance, name, value });
-      return 0;
+      return log.failIvar ? -1 : 0;
     },
     _mochi_dispatch_event(instance, methodSymbol) {
       const name = log.symbolNames.get(methodSymbol);
@@ -690,11 +691,56 @@ test("attribute changes update the instance and flush bindings once", async () =
     const setsAfterMount = log.ivarSets.length;
     const flushesAfterMount = log.flushes.length;
 
+    // Two records for one attribute coalesce to the final value and one flush.
     element.setAttribute("label", "two");
+    element.setAttribute("label", "three");
     await flushLifecycle();
 
     assert.equal(log.ivarSets.length, setsAfterMount + 1);
-    assert.deepEqual(log.ivarSets.at(-1), { instance: "1", name: "label", value: "two" });
+    assert.deepEqual(log.ivarSets.at(-1), { instance: "1", name: "label", value: "three" });
+    assert.equal(log.flushes.length, flushesAfterMount + 1);
+
+    // Echoing the current value writes nothing and does not flush.
+    element.setAttribute("label", "three");
+    await flushLifecycle();
+    assert.equal(log.ivarSets.length, setsAfterMount + 1);
+    assert.equal(log.flushes.length, flushesAfterMount + 1);
+
+    // Removal follows the documented string default: the prop becomes "".
+    element.removeAttribute("label");
+    await flushLifecycle();
+    assert.deepEqual(log.ivarSets.at(-1), { instance: "1", name: "label", value: "" });
+    assert.equal(log.flushes.length, flushesAfterMount + 2);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("one observer batch writes each changed attribute once and flushes once", async () => {
+  const { dom, log } = await setup([COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+
+  try {
+    const element = document.createElement("my-counter");
+    document.body.appendChild(element);
+    await element._mochiReady;
+    const setsAfterMount = log.ivarSets.length;
+    const flushesAfterMount = log.flushes.length;
+
+    element.setAttribute("alpha", "1");
+    element.setAttribute("beta", "2");
+    element.setAttribute("alpha", "3");
+    await flushLifecycle();
+
+    assert.deepEqual(log.ivarSets.slice(setsAfterMount), [
+      { instance: "1", name: "alpha", value: "3" },
+      { instance: "1", name: "beta", value: "2" },
+    ]);
     assert.equal(log.flushes.length, flushesAfterMount + 1);
   } finally {
     if (previousObserver === undefined) {
@@ -705,8 +751,152 @@ test("attribute changes update the instance and flush bindings once", async () =
   }
 });
 
+test("attribute setter failure reports component and prop context without flushing", async () => {
+  const { dom, log } = await setup([COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+
+  try {
+    const element = document.createElement("my-counter");
+    document.body.appendChild(element);
+    await element._mochiReady;
+    const flushesAfterMount = log.flushes.length;
+
+    log.errorText = "state string capacity exceeded";
+    log.failIvar = true;
+    element.setAttribute("bad-prop", "boom");
+    await flushLifecycle();
+
+    assert.equal(details.length, 1);
+    assert.equal(details[0].phase, "attribute");
+    assert.equal(details[0].tagName, "my-counter");
+    assert.equal(details[0].className, "MyCounter");
+    assert.equal(details[0].attribute, "bad-prop");
+    assert.equal(details[0].property, "bad_prop");
+    assert.match(details[0].message, /attribute setter failed for "bad-prop"/);
+    assert.match(details[0].vmText, /state string capacity exceeded/);
+    assert.equal(element.mochiError.mochi.attribute, "bad-prop");
+    assert.equal(log.flushes.length, flushesAfterMount);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("a parent attribute patch updates the mounted child instance without remounting", async () => {
+  const childComponent = {
+    tag_name: "live-child",
+    class_name: "LiveChild",
+    chi_file: "live-child.chi",
+    html_template: '<span class="child-label">{@label}</span>',
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0, 0],
+        kind: "text",
+        attr_name: null,
+        template_text: "{@label}",
+        getter_sym: "__mochi_bind_0",
+      },
+    ],
+    events: [],
+  };
+  const parentComponent = {
+    tag_name: "live-parent",
+    class_name: "LiveParent",
+    chi_file: "live-parent.chi",
+    html_template:
+      '<span class="parent-label">{@label}</span><live-child label="boot"></live-child>',
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0, 0],
+        kind: "text",
+        attr_name: null,
+        template_text: "{@label}",
+        getter_sym: "__mochi_bind_0",
+      },
+      {
+        id: 1,
+        path: [1],
+        kind: "attr",
+        attr_name: "label",
+        attr_kind: "text",
+        template_text: "{@label}",
+        getter_sym: "__mochi_bind_1",
+      },
+    ],
+    events: [],
+  };
+
+  const { dom, log, module, loader } = await setup([parentComponent, childComponent]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+
+  try {
+    const parent = document.createElement("live-parent");
+    document.body.appendChild(parent);
+    await parent._mochiReady;
+    const child = parent.shadowRoot.querySelector("live-child");
+    assert.ok(child);
+    await child._mochiReady;
+
+    const childInstance = child._mochiInstance;
+    const childText = child.shadowRoot.querySelector(".child-label");
+    const flushesBefore = log.flushes.length;
+    const dispatchedBefore = log.dispatched.length;
+
+    module.patchQueue.push({ patches: [{ id: 1, value: "alpha" }] });
+    module.patchQueue.push({ patches: [{ id: 0, value: "alpha" }] });
+    loader.applyPatches(parent, module);
+    await flushLifecycle();
+
+    assert.equal(child.getAttribute("label"), "alpha");
+    assert.deepEqual(log.ivarSets.at(-1), { instance: childInstance, name: "label", value: "alpha" });
+    assert.equal(childText.textContent, "alpha");
+    assert.equal(child.shadowRoot.querySelector(".child-label"), childText);
+    assert.equal(child._mochiInstance, childInstance);
+    assert.equal(log.flushes.length, flushesBefore + 2);
+
+    module.patchQueue.push({ patches: [{ id: 1, value: "beta" }] });
+    module.patchQueue.push({ patches: [{ id: 0, value: "beta" }] });
+    loader.applyPatches(parent, module);
+    await flushLifecycle();
+
+    assert.equal(childText.textContent, "beta");
+    assert.equal(child.shadowRoot.querySelector(".child-label"), childText);
+    assert.equal(child._mochiInstance, childInstance);
+
+    // Removing the attribute writes the documented empty-string prop and
+    // leaves the mounted instance and its node in place.
+    module.patchQueue.push({ patches: [{ id: 1, value: NIL }] });
+    module.patchQueue.push({ patches: [{ id: 0, value: "" }] });
+    loader.applyPatches(parent, module);
+    await flushLifecycle();
+
+    assert.equal(child.hasAttribute("label"), false);
+    assert.deepEqual(log.ivarSets.at(-1), { instance: childInstance, name: "label", value: "" });
+    assert.equal(childText.textContent, "");
+    assert.equal(child._mochiInstance, childInstance);
+    assert.equal(log.dispatched.length, dispatchedBefore);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
 test("a fresh mount replaces its attribute observer without stacking", async () => {
-  const { dom } = await setup([COMPONENT]);
+  const { dom, log } = await setup([COMPONENT]);
   const observers = [];
   const previousObserver = global.MutationObserver;
   global.MutationObserver = class {
@@ -745,6 +935,13 @@ test("a fresh mount replaces its attribute observer without stacking", async () 
     element.remove();
     await flushLifecycle();
     assert.equal(observers[1].disconnects, 1);
+
+    // A disposed instance is no longer observed: later attribute writes are
+    // not forwarded to the VM.
+    const setsAfterDispose = log.ivarSets.length;
+    element.setAttribute("label", "ignored");
+    await flushLifecycle();
+    assert.equal(log.ivarSets.length, setsAfterDispose);
   } finally {
     if (previousObserver === undefined) {
       delete global.MutationObserver;
