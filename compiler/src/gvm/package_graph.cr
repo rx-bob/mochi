@@ -411,7 +411,11 @@ module MochiPackaging
       component = node.component.not_nil!
       tag_index = @packages.values.select(&.component?).to_h { |candidate| {candidate.component.not_nil!.manifest.tag_name, candidate} }
       tags = [] of String
-      component_template_text(component).each do |text|
+      # Only child tags in the always-rendered template are eager package
+      # dependencies. Tags inside conditionals or list rows mount later, so
+      # their bytecode belongs to the child's own first-use load. This is what
+      # keeps a route-owned screen out of the shell's initial request closure.
+      [component.manifest.html_template].each do |text|
         text.scan(/<([A-Za-z][A-Za-z0-9-]*)\b/) do |match|
           tag = match[1]
           tags << tag unless tags.includes?(tag)

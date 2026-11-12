@@ -195,6 +195,8 @@ function fakeModule(log) {
   log.requiredArgs = new Map();
   log.failIvar = false;
   log.methods = new Set(["mounted", "increment", "reset"]);
+  log.routeStates = [];
+  log.routeInfos = [];
   let nextSymbol = 100;
   let nextPointer = 1024;
   let nextInstance = 1;
@@ -214,6 +216,13 @@ function fakeModule(log) {
     _mochi_init_runtime() {
       log.calls.push("init_runtime");
       return 0;
+    },
+    _mochi_set_route_state(pointer, length) {
+      log.routeStates.push(decoder.decode(module.HEAPU8.slice(pointer, pointer + length)));
+    },
+    _mochi_set_route_info(pointer, length) {
+      log.routeInfos.push(JSON.parse(decoder.decode(
+        module.HEAPU8.slice(pointer, pointer + length))));
     },
     _mochi_load_irep(pointer, length) {
       log.loads.push(module.HEAPU8.slice(pointer, pointer + length));
@@ -377,12 +386,17 @@ function fakeModule(log) {
 
 async function setup(components, options) {
   options = options || {};
-  const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
-    url: "http://localhost/",
-  });
+  const dom = new JSDOM(
+    "<!doctype html><html><head><base href=\"http://localhost/\"></head><body></body></html>",
+    { url: options.url || "http://localhost/" }
+  );
 
   global.window = dom.window;
   global.document = dom.window.document;
+  global.location = dom.window.location;
+  global.history = dom.window.history;
+  global.addEventListener = dom.window.addEventListener.bind(dom.window);
+  global.removeEventListener = dom.window.removeEventListener.bind(dom.window);
   global.HTMLElement = dom.window.HTMLElement;
   global.customElements = dom.window.customElements;
   global.Event = dom.window.Event;
@@ -493,6 +507,137 @@ test("boot registers component identities without fetching templates or bytecode
   assert.ok(global.customElements.get("my-counter"));
   assert.ok(global.customElements.get("my-logs"));
   assert.equal(loader.components[0].html_template, undefined);
+});
+
+test("route subscribers receive decoded params and query values once", async () => {
+  const { module, log, dom } = await setup([COMPONENT], {
+    url: "http://localhost/logs/a%20b?level=warn&q=hello+world",
+  });
+
+  log.methods.add("on_route");
+  log.requiredArgs.set("on_route", 1);
+  const element = document.createElement("my-counter");
+  const observer = document.createElement("my-counter");
+  document.body.appendChild(element);
+  document.body.appendChild(observer);
+  await element._mochiReady;
+  await observer._mochiReady;
+
+  assert.equal(log.routeStates[0], "/logs/a b?level=warn&q=hello+world");
+  assert.deepEqual(log.routeInfos[0], {
+    path: "/logs/a b",
+    segments: ["logs", "a b"],
+    query: { level: "warn", q: "hello world" },
+    search: "level=warn&q=hello+world",
+    hash: false,
+    href: "http://localhost/logs/a%20b?level=warn&q=hello+world",
+  });
+
+  module.queueEmit(JSON.stringify({
+    __host: "route_subscribe",
+    instance: String(element._mochiInstance),
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(log.dispatchedArgs.length, 1);
+  assert.equal(log.dispatchedArgs[0].instance, element._mochiInstance);
+  assert.deepEqual(log.dispatchedArgs[0].args, [log.routeInfos[0]]);
+
+  module.queueEmit('{"__host":"set_route","path":"/costs?range=30d"}\n');
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(dom.window.location.pathname, "/costs");
+  assert.equal(dom.window.location.search, "?range=30d");
+  assert.equal(log.routeStates[log.routeStates.length - 1], "/costs?range=30d");
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.equal(log.dispatchedArgs[1].instance, element._mochiInstance);
+  assert.deepEqual(log.dispatchedArgs[1].args, [{
+    path: "/costs",
+    segments: ["costs"],
+    query: { range: "30d" },
+    search: "range=30d",
+    hash: false,
+    href: "http://localhost/costs?range=30d",
+  }]);
+});
+
+test("replace navigation rewrites history while push navigation appends", async () => {
+  const { module, log, dom } = await setup([COMPONENT]);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit('{"__host":"set_route","path":"/costs"}\n');
+  element._dispatchAction({ action: "increment" });
+  assert.equal(dom.window.location.pathname, "/costs");
+  const pushedLength = dom.window.history.length;
+
+  module.queueEmit('{"__host":"replace_route","path":"/logs?level=warn"}\n');
+  element._dispatchAction({ action: "increment" });
+  assert.equal(dom.window.location.pathname, "/logs");
+  assert.equal(dom.window.location.search, "?level=warn");
+  assert.equal(dom.window.history.length, pushedLength);
+  assert.equal(log.routeStates[log.routeStates.length - 1], "/logs?level=warn");
+});
+
+test("hash routes keep the hash as the single URL owner", async () => {
+  const { module, log, dom } = await setup([COMPONENT], {
+    url: "http://localhost/#/logs/42?level=warn",
+  });
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(log.routeInfos[0].path, "/logs/42");
+  assert.deepEqual(log.routeInfos[0].query, { level: "warn" });
+  assert.equal(log.routeInfos[0].hash, true);
+
+  module.queueEmit('{"__host":"set_route","path":"/costs"}\n');
+  element._dispatchAction({ action: "increment" });
+  assert.equal(dom.window.location.pathname, "/");
+  assert.equal(dom.window.location.hash, "#/costs");
+  assert.equal(log.routeStates[log.routeStates.length - 1], "/costs");
+});
+
+test("the static entry file resolves as the root route", async () => {
+  const { log } = await setup([COMPONENT], { url: "http://localhost/index.html" });
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(log.routeInfos[0].path, "/");
+  assert.deepEqual(log.routeInfos[0].segments, []);
+  assert.equal(log.routeStates[0], "/");
+});
+
+test("popstate resynchronizes the route and notifies subscribers", async () => {
+  const { module, log, dom } = await setup([COMPONENT]);
+  log.methods.add("on_route");
+  log.requiredArgs.set("on_route", 1);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit(JSON.stringify({
+    __host: "route_subscribe",
+    instance: String(element._mochiInstance),
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+  assert.equal(log.dispatchedArgs.length, 1);
+
+  dom.window.history.pushState({}, "", "/logs?level=warn");
+  dom.window.dispatchEvent(new dom.window.Event("popstate"));
+
+  assert.equal(log.routeStates[log.routeStates.length - 1], "/logs?level=warn");
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.deepEqual(log.dispatchedArgs[1].args, [{
+    path: "/logs",
+    segments: ["logs"],
+    query: { level: "warn" },
+    search: "level=warn",
+    hash: false,
+    href: "http://localhost/logs?level=warn",
+  }]);
 });
 
 test("a component descriptor with a mismatched schema fails with its identity", async () => {

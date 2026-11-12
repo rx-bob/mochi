@@ -86,6 +86,41 @@ RUBY
     end
   end
 
+  it "keeps conditional child components out of the eager dependency set" do
+    root = File.join(Dir.tempdir, "mochi_package_lazy_children_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      chrome = dependency_component(root, "child-chrome", "ChildChrome", <<-RUBY)
+class ChildChrome
+end
+RUBY
+      screen = dependency_component(root, "child-screen", "ChildScreen", <<-RUBY)
+class ChildScreen
+end
+RUBY
+      host = dependency_component(root, "child-host", "ChildHost", <<-RUBY, "<child-chrome></child-chrome><!--if-anchor-0-->")
+class ChildHost
+end
+RUBY
+      host.manifest.bindings = [
+        BindingDescriptor.new(
+          0,
+          [2],
+          "cond",
+          "__mochi_bind_0",
+          branches: [
+            ConditionalBranchDescriptor.new("<child-screen></child-screen>"),
+          ],
+        ),
+      ]
+
+      graph = dependency_graph(root, [host, chrome, screen])
+      host.manifest.dependencies.should eq(["component:child-chrome"])
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "shares one helper package between every component that references it" do
     root = File.join(Dir.tempdir, "mochi_package_shared_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

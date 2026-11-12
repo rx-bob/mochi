@@ -11,24 +11,24 @@
   },
   "baselines": {
     "core": {
-      "raw": 400692,
-      "gzip": 135661
+      "raw": 406031,
+      "gzip": 137349
     },
     "minimal_initial": {
-      "raw": 403232,
-      "gzip": 136917
+      "raw": 408571,
+      "gzip": 138605
     },
     "feature_initial": {
-      "raw": 404039,
-      "gzip": 137102
+      "raw": 409378,
+      "gzip": 138790
     },
     "feature_later": {
       "raw": 13618,
       "gzip": 4475
     },
     "feature_total": {
-      "raw": 417657,
-      "gzip": 141577
+      "raw": 422996,
+      "gzip": 143265
     }
   }
 }

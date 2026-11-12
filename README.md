@@ -638,6 +638,79 @@ app-wide notifications, not for ordinary parent/child communication.
 
 Moving a connected component between positions in the same turn preserves its Ruby instance, state, timers, and event handlers; `unmounted` and `mounted` do not run again. If the element stays disconnected through that turn, the loader disposes it once and runs `unmounted`. Reinserting it afterwards performs a fresh mount from `initialize`, rebuilding props, bindings, and handlers.
 
+### Routing and history
+
+Routing is opt-in. An app that never mentions `AppRouter` does not ship route
+matching or parameter parsing bytecode, and its components do not subscribe to
+route changes.
+
+Declare the route table in the component that owns screen selection:
+
+```ruby
+@router = AppRouter.build
+AppRouter.on(@router, "/", "home")
+AppRouter.on(@router, "/logs", "logs")
+AppRouter.on(@router, "/logs/:log_id", "logs")
+AppRouter.not_found(@router, "not_found")
+
+apply_route(AppRouter.resolve(@router))
+Mochi.route_subscribe
+```
+
+`Mochi.route_subscribe` registers the current component for structured route
+updates. On navigation, back, forward, or direct entry, the component's
+`on_route(payload)` receives one Ruby Hash:
+
+```ruby
+{
+  "path" => "/logs/hello world",
+  "segments" => ["logs", "hello world"],
+  "query" => { "level" => "warn" },
+  "search" => "level=warn",
+  "hash" => false,
+  "href" => "http://localhost/logs/hello%20world?level=warn"
+}
+```
+
+Paths and query values are decoded before they reach Ruby. `AppRouter.resolve`
+adds the matched screen and named parameters:
+
+```ruby
+route = AppRouter.resolve(@router, payload)
+route["screen"]      # => "logs"
+route["params"]      # => { "log_id" => "hello world" }
+route["query"]       # => { "level" => "warn" }
+route["matched"]     # => true
+route["not_found"]   # => false
+```
+
+All values are Strings, or `nil` when absent. A route host can pass typed props
+to the screen it owns when a screen needs a declared input before `initialize`.
+
+`Mochi.navigate(path)` appends a history entry. `Mochi.replace_route(path)`
+rewrites the current entry; `AppRouter.push` and `AppRouter.replace` are
+convenience wrappers. The loader owns one URL model per page: a hash route owns
+the URL when it is present on entry, otherwise the pathname and query string
+do. `/index.html` is treated as `/`. Initial route state is installed before the
+entry component mounts, browser `popstate` and `hashchange` notify route
+subscribers, and navigation uses `history.pushState`/`replaceState`.
+
+Only components that call `Mochi.route_subscribe` receive route payloads. Other
+components are not asked to coordinate navigation, and an action such as
+`goto_screen` is not part of the routing path. Legacy apps with no route
+subscribers keep the old `on_route(path_string)` broadcast behavior.
+
+Conditional and list-row child tags load their descriptor and bytecode when the
+branch or row first mounts. A route host therefore does not eagerly download
+every screen: a direct `/costs` entry loads the shell, its always-rendered
+chrome, and the Costs dependency closure. If navigation changes before a
+screen's bytecode finishes loading, the loader's mount token drops the
+superseded mount.
+
+Static hosts must rewrite extensionless application paths to `index.html` and
+use a `<base href="/">` (or absolute asset URLs) so deep links resolve assets
+from the application root. Hash routes need no server rewrite.
+
 ### Compiling
 Prerequisites:
 * <img alt="Crystal Icon" style="height: 16px;" src="https://crystal-lang.org/favicon.ico"/> [Crystal](https://crystal-lang.org/)

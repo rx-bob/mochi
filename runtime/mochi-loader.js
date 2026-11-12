@@ -37,6 +37,7 @@
     pendingFetches: [],
     timers: new Map(),
     unmountedInstances: new Set(),
+    routeSubscribers: new Set(),
     nextMountToken: 0,
     actionRouterInstalled: false,
     actionSupportCache: new Map(),
@@ -240,20 +241,101 @@
     return supported;
   }
 
-  function currentRoutePath() {
-    if (!global.location) return "/";
-    if (global.location.hash && global.location.hash.length > 1) {
-      return global.location.hash.slice(1);
+  function decodeRoutePart(value) {
+    try {
+      return decodeURIComponent(value);
+    } catch (error) {
+      return value;
     }
-    return global.location.pathname || "/";
   }
 
-  function syncRouteToVm(module) {
+  function parseRouteQuery(search) {
+    var query = {};
+    if (!search) return query;
+    search.split("&").forEach(function (pair) {
+      if (!pair) return;
+      var at = pair.indexOf("=");
+      var rawKey = at < 0 ? pair : pair.slice(0, at);
+      var rawValue = at < 0 ? "" : pair.slice(at + 1);
+      var key = decodeRoutePart(rawKey.replace(/\+/g, " "));
+      if (!key) return;
+      query[key] = decodeRoutePart(rawValue.replace(/\+/g, " "));
+    });
+    return query;
+  }
+
+  function routeSegments(path) {
+    var segments = [];
+    String(path || "").split("/").forEach(function (part) {
+      if (part) segments.push(decodeRoutePart(part));
+    });
+    return segments;
+  }
+
+  // A hash route owns the URL when present. Otherwise the router owns the
+  // pathname and its query string. This keeps one navigation model per page
+  // and avoids interpreting a pathname and a hash as competing routes.
+  function currentRouteInfo() {
+    if (!global.location) {
+      return { path: "/", segments: [], query: {}, search: "", hash: false, href: "" };
+    }
+    var hash = global.location.hash || "";
+    var hashRoute = hash.length > 1;
+    var target = hashRoute ? hash.slice(1) : (global.location.pathname || "/");
+    var search = "";
+    var queryAt = target.indexOf("?");
+    if (queryAt >= 0) {
+      search = target.slice(queryAt + 1);
+      target = target.slice(0, queryAt);
+    } else if (!hashRoute && global.location.search && global.location.search.length > 1) {
+      search = global.location.search.slice(1);
+    }
+    if (target.charAt(0) !== "/") target = "/" + target;
+    // Opening the static entry file is the root route, not an unknown screen.
+    if (!hashRoute && target === "/index.html") target = "/";
+    var segments = routeSegments(target);
+    return {
+      path: "/" + segments.join("/"),
+      segments: segments,
+      query: parseRouteQuery(search),
+      search: search,
+      hash: hashRoute,
+      href: String(global.location.href || "")
+    };
+  }
+
+  function routeString(info) {
+    info = info || currentRouteInfo();
+    return info.path + (info.search ? "?" + info.search : "");
+  }
+
+  function currentRoutePath() {
+    return routeString(currentRouteInfo());
+  }
+
+  function normalizedRoutePath(path) {
+    var target = typeof path === "string" && path ? path : "/";
+    if (target.charAt(0) !== "/") target = "/" + target;
+    return target;
+  }
+
+  function hashRouteTarget(path) {
+    var target = typeof path === "string" && path ? path : "/";
+    if (target.charAt(0) === "#") target = target.slice(1);
+    return "#" + normalizedRoutePath(target);
+  }
+
+  function syncRouteToVm(module, info) {
     if (!module || typeof module._mochi_set_route_state !== "function") return;
-    var route = currentRoutePath();
-    withUtf8(module, route, function (ptr, len) {
+    info = info || currentRouteInfo();
+    withUtf8(module, routeString(info), function (ptr, len) {
       module._mochi_set_route_state(ptr, len);
     });
+    if (typeof module._mochi_set_route_info === "function") {
+      withUtf8(module, JSON.stringify(info), function (ptr, len) {
+        module._mochi_set_route_info(ptr, len);
+      });
+    }
   }
 
   function seedStorageToVm(module) {
@@ -277,10 +359,27 @@
     }
   }
 
-  function notifyRouteChange(route) {
-    if (state.activeModule) syncRouteToVm(state.activeModule);
+  function deliverRouteTo(info, instanceKey) {
+    var element = state.elements.get(String(instanceKey));
+    if (!element || element._mochiDisconnected || element._mochiUnmounted) return false;
+    element._dispatchAction({ action: "on_route", payload: info, hasPayload: true });
+    return true;
+  }
+
+  function notifyRouteChange(info) {
+    info = info || currentRouteInfo();
+    if (state.activeModule) syncRouteToVm(state.activeModule, info);
+    if (state.routeSubscribers.size > 0) {
+      Array.from(state.routeSubscribers).forEach(function (instanceKey) {
+        deliverRouteTo(info, instanceKey);
+      });
+      return;
+    }
+    // Compatibility for apps that still implement `on_route` without the
+    // explicit subscription API. New route hosts receive one structured
+    // payload and do not depend on document-wide action fan-out.
     state.elements.forEach(function (element) {
-      element._dispatchAction({ action: "on_route", payload: route, hasPayload: true });
+      element._dispatchAction({ action: "on_route", payload: routeString(info), hasPayload: true });
     });
   }
 
@@ -299,10 +398,10 @@
 
     if (typeof global.addEventListener === "function") {
       global.addEventListener("popstate", function () {
-        notifyRouteChange(currentRoutePath());
+        notifyRouteChange(currentRouteInfo());
       });
       global.addEventListener("hashchange", function () {
-        notifyRouteChange(currentRoutePath());
+        notifyRouteChange(currentRouteInfo());
       });
     }
 
@@ -699,17 +798,31 @@
       }
       return;
     }
-    if (hostKind === "set_route") {
+    if (hostKind === "set_route" || hostKind === "replace_route") {
       var path = typeof entry.path === "string" ? entry.path : "/";
+      var replace = hostKind === "replace_route";
+      var hashMode = currentRouteInfo().hash || path.charAt(0) === "#";
+      var targetUrl = hashMode ? hashRouteTarget(path) : normalizedRoutePath(path);
       try {
-        if (global.history && typeof global.history.pushState === "function") {
-          var targetUrl = path.charAt(0) === "#" || path.charAt(0) === "/" ? path : "#" + path;
-          global.history.pushState(null, "", targetUrl);
+        if (global.history) {
+          var method = replace ? "replaceState" : "pushState";
+          if (typeof global.history[method] === "function") {
+            global.history[method]({ __mochiRoute: true }, "", targetUrl);
+          }
         }
       } catch (error) {
-        reportError(null, "route", "set_route", error);
+        reportError(null, "route", hostKind, error);
       }
-      notifyRouteChange(path);
+      notifyRouteChange(currentRouteInfo());
+      return;
+    }
+    if (hostKind === "route_subscribe") {
+      var subscriber = entry.instance === undefined || entry.instance === null
+        ? ""
+        : String(entry.instance);
+      if (!subscriber) return;
+      state.routeSubscribers.add(subscriber);
+      deliverRouteTo(currentRouteInfo(), subscriber);
       return;
     }
     if (hostKind === "focus") {
@@ -3789,6 +3902,7 @@
           if (String(request.instance) === key) state.pendingHostRequests.delete(requestKey);
         });
         if (state.elements.get(key) === this) state.elements.delete(key);
+        state.routeSubscribers.delete(key);
 
         try {
           if (hasMethod(module, instance, "unmounted")) {

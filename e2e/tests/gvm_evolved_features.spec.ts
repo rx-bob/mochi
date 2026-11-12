@@ -25,7 +25,10 @@ const CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-function startStaticServer(rootDir: string): Promise<{ server: http.Server; baseURL: string }> {
+function startStaticServer(
+  rootDir: string,
+  options: { spaFallback?: boolean } = {}
+): Promise<{ server: http.Server; baseURL: string }> {
   const server = http.createServer((request, response) => {
     const requestPath = decodeURIComponent((request.url || "/").split("?")[0]);
     if (requestPath === "/favicon.ico") {
@@ -41,6 +44,18 @@ function startStaticServer(rootDir: string): Promise<{ server: http.Server; base
       return;
     }
     fs.readFile(filePath, (error, data) => {
+      if (error && options.spaFallback && path.extname(relative) === "") {
+        fs.readFile(path.join(rootDir, "index.html"), (indexError, indexData) => {
+          if (indexError) {
+            response.writeHead(404);
+            response.end();
+            return;
+          }
+          response.writeHead(200, { "content-type": CONTENT_TYPES[".html"] });
+          response.end(indexData);
+        });
+        return;
+      }
       if (error) {
         response.writeHead(404);
         response.end();
@@ -1529,7 +1544,7 @@ end
 test("Sencha frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
   test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
-  const { server, baseURL } = await startStaticServer(senchaDistDir);
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
 
@@ -1600,6 +1615,137 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     await page.reload();
     await expect(root.locator(".shell")).toHaveClass(/dark/);
     await expect(root.locator("settings-screen h1")).toHaveText("Settings");
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GVM routing: a direct Costs URL loads only the Costs dependency closure", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(new URL(request.url()).pathname));
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/costs`);
+    const root = page.locator("z-root");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("183k");
+    await expect(root.locator("home-screen")).toHaveCount(0);
+    await expect(root.locator("top-bar").locator('button[data-screen="costs"]')).toHaveClass(/active/);
+
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.json"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.chi"))).toHaveLength(1);
+    const otherScreens = [
+      "home-screen", "events-screen", "queues-screen", "logs-screen",
+      "limits-screen", "settings-screen", "canvas-screen", "not-found-screen",
+    ];
+    otherScreens.forEach((tag) => {
+      expect(requested.filter((url) => url.endsWith(`/components/${tag}.json`))).toHaveLength(0);
+      expect(requested.filter((url) => url.endsWith(`/components/${tag}.chi`))).toHaveLength(0);
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GVM routing: back and forward render the route-owned screens", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/`);
+    const root = page.locator("z-root");
+    await expect(root.locator("home-screen h1")).toHaveText("Keep the herd moving.");
+
+    const topbar = root.locator("top-bar");
+    await topbar.locator('button[data-screen="costs"]').click();
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("183k");
+    expect(new URL(page.url()).pathname).toBe("/costs");
+
+    await topbar.locator('button[data-screen="logs"]').click();
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(8);
+    expect(new URL(page.url()).pathname).toBe("/logs");
+
+    await page.goBack();
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("183k");
+    expect(new URL(page.url()).pathname).toBe("/costs");
+    await expect(topbar.locator('button[data-screen="costs"]')).toHaveClass(/active/);
+
+    await page.goForward();
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(8);
+    expect(new URL(page.url()).pathname).toBe("/logs");
+    await expect(topbar.locator('button[data-screen="logs"]')).toHaveClass(/active/);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GVM routing: encoded params and query values arrive as Ruby strings", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/logs/hello%20world?level=warn`);
+    const root = page.locator("z-root");
+    await expect(root.locator(".shell")).toHaveAttribute("data-log-id", "hello world");
+    await expect(root.locator("logs-screen .route-context")).toHaveText("Focused: hello world");
+    await expect(root.locator('logs-screen button[data-level="warn"]')).toHaveClass(/active/);
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(1);
+    expect(new URL(page.url()).pathname).toBe("/logs/hello%20world");
+    expect(new URL(page.url()).search).toBe("?level=warn");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GVM routing: unknown paths render a deterministic not-found screen", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/missing/screen`);
+    const root = page.locator("z-root");
+    await expect(root.locator("not-found-screen h1")).toHaveText("Route not found");
+    await expect(root.locator("home-screen")).toHaveCount(0);
+    await root.locator("not-found-screen .home-button").click();
+    await expect(root.locator("home-screen h1")).toHaveText("Keep the herd moving.");
+    expect(new URL(page.url()).pathname).toBe("/");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GVM routing: rapid navigation never mounts an obsolete delayed screen", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  let delayed = false;
+  await page.route("**/components/costs-screen.chi", async (route) => {
+    if (!delayed) {
+      delayed = true;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    await route.continue();
+  });
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/`);
+    const root = page.locator("z-root");
+    const topbar = root.locator("top-bar");
+    const costsClass = page.waitForRequest((request) => request.url().endsWith("/components/costs-screen.chi"));
+    await topbar.locator('button[data-screen="costs"]').click();
+    await costsClass;
+    await topbar.locator('button[data-screen="logs"]').click();
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(8, { timeout: 15_000 });
+    await page.waitForTimeout(700);
+    await expect(root.locator("costs-screen")).toHaveCount(0);
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(8);
+    expect(new URL(page.url()).pathname).toBe("/logs");
     expect(errors).toEqual([]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
