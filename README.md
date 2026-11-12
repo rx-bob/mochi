@@ -342,8 +342,8 @@ are deliberately string-only undeclared.
 ### Money helpers
 
 Money is application data, not part of the numeric core. When a source mentions
-`MochiMoney`, the compiler emits a small exact-money Ruby helper into the
-prelude. Applications that never mention it do not receive the file.
+`MochiMoney`, the compiler emits a small exact-money Ruby dependency package.
+Applications that never mention it do not receive the file.
 
 A ledger is an ordinary Ruby `Hash` holding an exact `numerator / denominator`
 number of minor units. The helper never rounds during aggregation. Choose the
@@ -396,9 +396,8 @@ positive; an operation that would negate it reports overflow.
 
 The helper performs no currency symbols, grouping, decimal separators, or
 locale lookup. Format the integer returned by a `round_*` method in your
-component. Applications that do not use `MochiMoney` pay no prelude bytes for
-it; E6 will attach the helper to the components that depend on it instead of
-the shared prelude.
+component. Applications that do not use `MochiMoney` pay no bytes for it; the
+compiler attaches the helper package to the components that depend on it.
 
 ### Number and date formatting
 
@@ -459,15 +458,15 @@ silently returning an imprecise JavaScript number. Use the
 minor-unit total to `currency`.
 
 Formatting uses the browser's built-in `Intl` facilities through an optional
-host module. The compiler writes `mochi-format.js` and records `format_host` in
-`mochi-manifest.json` only when a source mentions `MochiFormat`. The loader
-requests that module before mounting a component that declares `formatting`;
-a component or application that does not use formatting neither ships nor
-requests it. The bundle contains no locale database. If the host module is
-missing or fails to load, the mount fails with a Ruby-facing `mochi:error`
-instead of an unknown-method failure. Formatter instances are cached by locale
-and options, with a bounded cache so a long-lived application cannot grow it
-without limit.
+host module. The compiler writes `mochi-format.js` and records the `formatting`
+capability in `mochi-manifest.json` only when a reachable Ruby package owns
+`MochiFormat`. The loader requests that module before mounting a component
+whose dependency closure includes the capability; a component or application
+that does not use formatting neither ships nor requests it. The bundle contains
+no locale database. If the host module is missing or fails to load, the mount
+fails with a Ruby-facing `mochi:error` instead of an unknown-method failure.
+Formatter instances are cached by locale and options, with a bounded cache so a
+long-lived application cannot grow it without limit.
 
 ### Synchronous event modifiers and focus
 
@@ -597,7 +596,9 @@ cd mochi
 task run
 ```
 
-The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file per component, and a shared `prelude.chi` when helper-only Ruby or an optional helper such as `MochiMoney` or `MochiFormat` is present. It also writes `mochi-format.js` only when a source uses `MochiFormat`. It does not generate component-specific JavaScript.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file per component, and one `.chi` file per Ruby dependency package. It also writes `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
+
+`mochi-manifest.json` records a `schema_version` for the bundle format. A loader that does not support that version fails before it runs Ruby bytecode. Each component names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
 
 ### Compiler Tasks
 
@@ -632,7 +633,7 @@ mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --t
 * --typecheck: Run Sorbet typechecks (optional)
 * --initialize: Creates a new preconfigured project directory
 
-The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader fetches the manifest, WASM, the shared prelude, and component `.chi` files.
+The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader reads the manifest, checks its schema version, and fetches the WASM, the dependency packages each component needs, and component `.chi` files.
 
 
 

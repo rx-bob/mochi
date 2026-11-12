@@ -2128,8 +2128,12 @@ end
   const numericManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
+  expect(numericManifest.schema_version).toBe(1);
   expect(numericManifest.prelude).toBeUndefined();
   expect(numericManifest.format_host).toBeUndefined();
+  expect(
+    Object.keys(numericManifest.packages).some((id) => id.startsWith("capability:")),
+  ).toBe(false);
 
   const { server, baseURL } = await startStaticServer(bundleDir);
   const errors: string[] = [];
@@ -2405,9 +2409,18 @@ end
   const moneyManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(moneyManifest.prelude).toBe("prelude.chi");
+  expect(moneyManifest.schema_version).toBe(1);
+  expect(moneyManifest.prelude).toBeUndefined();
   expect(moneyManifest.format_host).toBeUndefined();
   expect(moneyManifest.components[0].formatting).toBeUndefined();
+  const moneyPackages = Object.entries(moneyManifest.packages).map(([id, pkg]: [string, any]) => ({
+    id,
+    ...pkg,
+  }));
+  expect(
+    moneyPackages.some((pkg) => (pkg.exports || []).includes("MochiMoney")),
+  ).toBe(true);
+  expect(moneyPackages.some((pkg) => pkg.id.startsWith("capability:"))).toBe(false);
 
   const { server, baseURL } = await startStaticServer(bundleDir);
   const errors: string[] = [];
@@ -2560,9 +2573,15 @@ end
   const formatManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(formatManifest.prelude).toBe("prelude.chi");
+  expect(formatManifest.schema_version).toBe(1);
+  expect(formatManifest.prelude).toBeUndefined();
   expect(formatManifest.format_host).toBe("mochi-format.js");
+  expect(formatManifest.capabilities.formatting).toMatchObject({
+    version: 1,
+    host: "mochi-format.js",
+  });
   expect(formatManifest.components[0].formatting).toBe(true);
+  expect(formatManifest.components[0].capabilities).toContain("formatting");
   expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(true);
 
   const requested: string[] = [];
@@ -2660,7 +2679,9 @@ end
   const lazyManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
+  expect(lazyManifest.schema_version).toBe(1);
   expect(lazyManifest.format_host).toBe("mochi-format.js");
+  expect(lazyManifest.capabilities.formatting.host).toBe("mochi-format.js");
   const plain = lazyManifest.components.find((component: any) =>
     component.tag_name === "plain-panel");
   const lazy = lazyManifest.components.find((component: any) =>
@@ -2733,8 +2754,11 @@ end
   const helperManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
+  expect(helperManifest.schema_version).toBe(1);
   expect(helperManifest.format_host).toBe("mochi-format.js");
+  expect(helperManifest.capabilities.formatting.host).toBe("mochi-format.js");
   expect(helperManifest.components[0].formatting).toBe(true);
+  expect(helperManifest.components[0].capabilities).toContain("formatting");
   expect(helperManifest.components[0].helper_chi).toMatch(/^mochi-helpers-/);
 
   const requested: string[] = [];

@@ -121,6 +121,8 @@ const TYPED_COMPONENT = {
 
 function manifest(components, resources, formatHost) {
   return {
+    schema_version: 1,
+    packages: {},
     components,
     ...(resources ? { resources } : {}),
     ...(formatHost ? { format_host: formatHost } : {}),
@@ -365,7 +367,7 @@ async function setup(components, options) {
     calls: [], fetches: [], loads: [], interned: [], bindings: [],
     dispatched: [], flushes: [], hostUrls: [],
   };
-  const body = manifest(components, options.resources, options.formatHost);
+  const body = options.manifest || manifest(components, options.resources, options.formatHost);
   global.fetch = async (url, init) => {
     const target = String(url);
     log.fetches.push(target);
@@ -423,6 +425,94 @@ test("boot defines a custom element with a static shadow template and scoped sty
   assert.deepEqual(log.loads[0].slice(10), new Uint8Array([1, 2, 3, 4]));
   assert.equal(log.bindings.length, 2);
   assert.ok(log.interned.includes("mounted"));
+});
+
+test("boot rejects a manifest schema the loader does not understand", async () => {
+  const base = manifest([], undefined, undefined);
+  await assert.rejects(
+    setup([], { manifest: { ...base, schema_version: 2 } }),
+    /unsupported manifest schema 2 .*loader supports schema 1/,
+  );
+
+  const { schema_version, ...missingVersion } = base;
+  await assert.rejects(
+    setup([], { manifest: missingVersion }),
+    /unsupported manifest schema undefined/,
+  );
+});
+
+test("a component package must exist in the manifest", async () => {
+  const component = {
+    ...COMPONENT,
+    package: "component:missing-counter",
+  };
+  const { dom } = await setup([component]);
+
+  const element = dom.window.document.createElement("my-counter");
+  dom.window.document.body.appendChild(element);
+  await assert.rejects(
+    element._mochiReady,
+    /missing package 'component:missing-counter'/,
+  );
+});
+
+test("package dependency cycles fail before the component class runs", async () => {
+  const component = {
+    ...COMPONENT,
+    package: "component:cycle-a",
+  };
+  const base = manifest([component], undefined, undefined);
+  base.packages = {
+    "component:cycle-a": {
+      kind: "component",
+      file: "components/my-counter.chi",
+      dependencies: ["ruby:cycle-b"],
+    },
+    "ruby:cycle-b": {
+      kind: "ruby",
+      file: "components/cycle-b.chi",
+      dependencies: ["component:cycle-a"],
+    },
+  };
+  const { dom, log } = await setup([component], { manifest: base });
+
+  const element = dom.window.document.createElement("my-counter");
+  dom.window.document.body.appendChild(element);
+  await assert.rejects(element._mochiReady, /package cycle at component:cycle-a/);
+  assert.equal(log.loads.length, 0);
+});
+
+test("formatting capability host is read from the versioned capabilities map", async () => {
+  const component = { ...FORMAT_COMPONENT };
+  const base = manifest([component], undefined, undefined);
+  base.capabilities = {
+    formatting: { version: 1, host: "mochi-format.js", packages: [] },
+  };
+  base.packages = {
+    "component:format-panel": {
+      kind: "component",
+      file: "components/format-panel.chi",
+      dependencies: [],
+    },
+  };
+  component.package = "component:format-panel";
+
+  const hostModule = { format: () => "1" };
+  const { dom, log, module } = await setup([component], {
+    manifest: base,
+    hostModuleFactory: async (url) => {
+      log.hostUrls.push(url);
+      global.MochiFormatHost = hostModule;
+    },
+  });
+
+  const element = dom.window.document.createElement("format-panel");
+  dom.window.document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(log.hostUrls.length, 1);
+  assert.ok(log.hostUrls[0].endsWith("/mochi-format.js"));
+  assert.equal(module.__mochiFormatHost, hostModule);
 });
 
 test("shared style resources use one adopted sheet before the local override", async () => {

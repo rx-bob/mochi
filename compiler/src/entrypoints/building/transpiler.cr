@@ -46,7 +46,7 @@ class Compiler
 
     components = [] of MochiComponent
     helpers = [] of HelperUnit
-    prelude_files = [] of Tuple(String, String)
+    prelude_sources = [] of PreludeSource
     i = 1
 
     errors = [] of String
@@ -65,7 +65,11 @@ class Compiler
 
           i += 1
           if result.components.empty?
-            prelude_files << {absolute_path, rb_file} unless rb_file.strip.empty?
+            prelude_sources << PreludeSource.new(
+              absolute_path,
+              display_path,
+              rb_file
+            ) unless rb_file.strip.empty?
           else
             components.concat(result.components)
             helpers << result.helper.not_nil! if result.helper
@@ -83,7 +87,6 @@ class Compiler
     validate_component_inventory(components)
 
     puts "Done with preparing components for transpilation (#{Time.monotonic})"
-    prelude_code = prelude_files.sort_by(&.[0]).map(&.[1]).join("\n\n")
 
     resources = if root = project_dir
                   scan_paths = Dir.glob(Path[root, "**", "*.{rb,html,htm}"].to_s).select { |path| File.file?(path) }.sort
@@ -92,13 +95,18 @@ class Compiler
                   [] of PackageResource
                 end
 
-    uses_format = prelude_code.includes?("MochiFormat") ||
-                  components.any? { |component| component.ruby_code.includes?("MochiFormat") } ||
-                  helpers.any? { |helper| helper.source.includes?("MochiFormat") }
-
     trace_slice(trace, "EmitBytecode", sequence_id) do
       compiler = MrbcCompiler.new
-      compiler.compile(components, output_dir, prelude_code, helpers, resources, uses_format)
+      compiler.compile_graph(
+        components,
+        output_dir,
+        prelude_sources,
+        helpers,
+        resources,
+        false,
+        [input_dir, project_dir].compact,
+        project_dir
+      )
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
       puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
     end
@@ -341,8 +349,8 @@ class Compiler
   ) : HelperUnit?
     return nil if source.strip.empty?
 
-    digest = Digest::SHA1.hexdigest(absolute_path)[0, 12]
-    HelperUnit.new("mochi-helpers-#{digest}.chi", source, source_path)
+    digest = Digest::SHA1.hexdigest(source_path.gsub('\\', '/'))[0, 12]
+    HelperUnit.new("mochi-helpers-#{digest}.chi", source, source_path, absolute_path)
   end
 
   private def same_declaration?(left : TreeSitter::ClassDecl, right : TreeSitter::ClassDecl) : Bool
@@ -541,7 +549,7 @@ class Compiler
     )
 
     print_cmp_end_seperator(cls_name, i)
-    MochiComponent.new(
+    component = MochiComponent.new(
       absolute_path,
       cls_name,
       imports,
@@ -553,6 +561,8 @@ class Compiler
       source_path,
       source_line_offset
     )
+    component.original_source = component_source
+    component
   end
 
   private def validate_binding_methods(

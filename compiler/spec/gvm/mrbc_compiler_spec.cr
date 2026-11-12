@@ -218,6 +218,12 @@ describe MrbcCompiler do
       stripped_source.should contain("@count = 0")
 
       json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+      json["schema_version"].as_i.should eq(1)
+      json["entry_packages"].as_a.map(&.as_s).should eq(["component:my-counter"])
+      packages = json["packages"].as_h
+      packages.size.should eq(1)
+      packages["component:my-counter"].as_h["kind"].as_s.should eq("component")
+      packages["component:my-counter"].as_h["file"].as_s.should eq("components/my-counter.chi")
       json["wasm_file"].as_s.should eq("mochi-gvm.wasm")
       json["js_file"].as_s.should eq("mochi-gvm.js")
       json["loader_file"].as_s.should eq("mochi-loader.js")
@@ -228,6 +234,9 @@ describe MrbcCompiler do
       component_json["tag_name"].as_s.should eq("my-counter")
       component_json["class_name"].as_s.should eq("MyCounter")
       component_json["chi_file"].as_s.should eq("my-counter.chi")
+      component_json["package"].as_s.should eq("component:my-counter")
+      component_json.has_key?("dependencies").should be_false
+      component_json.has_key?("capabilities").should be_false
       component_json["html_template"].as_s.should contain("Count: {count}")
       component_json["css"].as_s.should eq("h1 { color: red; }")
       component_json["source"].as_h["file"].as_s.should eq("lib/my_counter.rb")
@@ -308,6 +317,55 @@ describe MrbcCompiler do
       args[1].as_h["literal_type"].as_s.should eq("number")
       args[1].as_h["value"].as_s.should eq("1")
       args[2].as_h["kind"].as_s.should eq("event")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  it "omits unused Ruby packages and optional capabilities from the manifest" do
+    dir = File.join(Dir.tempdir, "mochi_mrbc_package_spec_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(dir)
+
+    begin
+      mrbc = File.join(dir, "fake_mrbc")
+      wasm = File.join(dir, "source.wasm")
+      js = File.join(dir, "source.js")
+      loader = File.join(dir, "mochi-loader.js")
+      stripped_source_path = File.join(dir, "stripped.rb")
+      output = File.join(dir, "out")
+
+      write_fake_mrbc(mrbc, stripped_source_path)
+      File.write(wasm, "WASM")
+      File.write(js, "JS")
+      File.write(loader, "LOADER")
+
+      unused_path = File.join(dir, "lib", "mochi_router.rb")
+      Dir.mkdir_p(File.dirname(unused_path))
+      File.write(unused_path, "class MochiRouter\nend\n")
+      unused = PreludeSource.new(
+        unused_path,
+        "lib/mochi_router.rb",
+        "class MochiRouter\nend\n"
+      )
+      component = build_mrbc_fixture(dir)
+      compiler = MrbcCompiler.new(mrbc_path: mrbc, wasm_source: wasm, loader_source: loader)
+      compiler.compile_graph(
+        [component],
+        output,
+        [unused],
+        [] of HelperUnit,
+        [] of PackageResource,
+        false,
+        [dir],
+        dir
+      )
+
+      json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+      packages = json["packages"].as_h
+      packages.keys.should eq(["component:my-counter"])
+      json["capabilities"]?.should be_nil
+      json["format_host"]?.should be_nil
+      File.exists?(File.join(output, "components", "ruby-#{Digest::SHA1.hexdigest("ruby:lib/mochi_router.rb")[0, 12]}.chi")).should be_false
     ensure
       FileUtils.rm_rf(dir)
     end

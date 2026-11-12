@@ -3,6 +3,7 @@ require "file_utils"
 require "../mochi_cmp"
 require "../sorbet/type_stripper"
 require "../webcomponents/resource_manifest"
+require "./package_graph"
 require "./source_preparer"
 require "./rite_verifier"
 
@@ -13,11 +14,13 @@ class MrbcCompiler
   getter manifest_path : String?
   getter chi_paths : Array(String)
   getter helper_chi_paths : Array(String)
+  getter ruby_package_paths : Array(String)
   getter prelude_path : String?
   getter wasm_path : String?
   getter js_path : String?
   getter loader_path : String?
   getter format_host_path : String?
+  getter package_graph : MochiPackaging::PackageGraph?
   getter warnings : Array(String)
 
   def initialize(
@@ -30,11 +33,13 @@ class MrbcCompiler
     @manifest_path = nil
     @chi_paths = [] of String
     @helper_chi_paths = [] of String
+    @ruby_package_paths = [] of String
     @prelude_path = nil
     @wasm_path = nil
     @js_path = nil
     @loader_path = nil
     @format_host_path = nil
+    @package_graph = nil
     @warnings = [] of String
   end
 
@@ -46,10 +51,41 @@ class MrbcCompiler
     resources : Array(PackageResource) = [] of PackageResource,
     format_host : Bool = false,
   ) : Nil
+    prelude_sources = if prelude_code.strip.empty?
+                        [] of PreludeSource
+                      else
+                        [PreludeSource.new("", "prelude.rb", prelude_code)]
+                      end
+    compile_graph(
+      components,
+      output_dir,
+      prelude_sources,
+      helpers,
+      resources,
+      format_host,
+      [] of String,
+      nil,
+      legacy_prelude: !prelude_sources.empty?
+    )
+  end
+
+  def compile_graph(
+    components : Array(MochiComponent),
+    output_dir : String,
+    prelude_sources : Array(PreludeSource),
+    helpers : Array(HelperUnit) = [] of HelperUnit,
+    resources : Array(PackageResource) = [] of PackageResource,
+    format_host : Bool = false,
+    search_roots : Array(String) = [] of String,
+    project_root : String? = nil,
+    legacy_prelude : Bool = false,
+  ) : Nil
     @chi_paths.clear
     @helper_chi_paths.clear
+    @ruby_package_paths.clear
     @prelude_path = nil
     @format_host_path = nil
+    @package_graph = nil
     @warnings.clear
     validate_component_inventory(components)
     Dir.mkdir_p(output_dir)
@@ -58,17 +94,36 @@ class MrbcCompiler
 
     @mrbc_path ||= resolved_mrbc_path
 
-    unless prelude_code.strip.empty?
-      @prelude_path = compile_prelude(prelude_code, components_dir)
+    @package_graph = MochiPackaging::PackageGraph.build(
+      components,
+      prelude_sources,
+      helpers,
+      search_roots,
+      project_root
+    )
+    graph = @package_graph.not_nil!
+
+    if legacy_prelude && !prelude_sources.empty?
+      @prelude_path = compile_prelude(prelude_sources.first.source, components_dir)
     end
 
-    helpers_by_key = {} of String => HelperUnit
-    helpers.each { |helper| helpers_by_key[helper.key] = helper }
-    @helper_chi_paths = helpers_by_key.keys.sort.map do |key|
-      compile_helper(helpers_by_key[key], components_dir)
+    graph.ruby_order.each do |package|
+      path = compile_ruby_source(
+        package.source,
+        File.join(components_dir, package.file),
+        package.id,
+        package.source_path,
+        package.line_offset
+      )
+      @ruby_package_paths << path
+      @helper_chi_paths << path if package.helper
     end
 
-    sorted_components = sort_components_topologically(components)
+    if format_host
+      components.each { |component| component.manifest.formatting = true }
+    end
+
+    sorted_components = graph.component_order
     chi_paths_by_tag = {} of String => String
     errors = [] of String
 
@@ -89,7 +144,8 @@ class MrbcCompiler
     @wasm_path = copy_asset(resolved_wasm_source, output_dir, "mochi-gvm.wasm")
     @js_path = copy_asset(resolved_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
-    if format_host
+    uses_format_host = format_host || graph.has_capability?("formatting")
+    if uses_format_host
       @format_host_path = copy_asset(resolved_format_host_source, output_dir, "mochi-format.js")
       if @format_host_path.nil?
         @warnings << "mochi-format.js not found; set MOCHI_FORMAT_HOST or add runtime/mochi-format.js"
@@ -175,55 +231,9 @@ class MrbcCompiler
     "#{component.absolute_path}:#{component.class_line}"
   end
 
-  private def sort_components_topologically(components : Array(MochiComponent)) : Array(MochiComponent)
-    alphabetical = components.sort_by { |component| component.manifest.tag_name }
-    by_tag = {} of String => MochiComponent
-    alphabetical.each { |c| by_tag[c.manifest.tag_name] = c }
-
-    visited = Set(String).new
-    visiting = Set(String).new
-    ordered = [] of MochiComponent
-
-    visit = uninitialized Proc(MochiComponent, Nil)
-    visit = ->(comp : MochiComponent) do
-      tag = comp.manifest.tag_name
-      return if visited.includes?(tag)
-      return if visiting.includes?(tag)
-
-      visiting << tag
-      all_html = String.build do |io|
-        io << comp.manifest.html_template
-        comp.manifest.all_bindings.each do |b|
-          io << " " << b.template_text if b.template_text
-          b.branches.each { |br| io << " " << br.html_template }
-        end
-      end
-
-      alphabetical.each do |candidate|
-        ctag = candidate.manifest.tag_name
-        next if ctag == tag
-        if all_html.includes?("<#{ctag}")
-          visit.call(candidate)
-        end
-      end
-
-      visiting.delete(tag)
-      visited << tag
-      ordered << comp
-    end
-
-    alphabetical.each { |comp| visit.call(comp) }
-    ordered
-  end
-
   private def compile_prelude(prelude_code : String, components_dir : String) : String
     chi_path = File.join(components_dir, "prelude.chi")
     compile_ruby_source(prelude_code, chi_path, "prelude")
-  end
-
-  private def compile_helper(helper : HelperUnit, components_dir : String) : String
-    chi_path = File.join(components_dir, helper.key)
-    compile_ruby_source(helper.source, chi_path, helper.key, helper.origin)
   end
 
   private def compile_component(component : MochiComponent, components_dir : String) : String
@@ -459,13 +469,52 @@ class MrbcCompiler
     components : Array(MochiComponent),
     resources : Array(PackageResource),
   ) : String
+    graph = @package_graph
     JSON.build do |json|
       json.object do
+        json.field "schema_version", MochiPackaging::SCHEMA_VERSION
         if prelude = @prelude_path
           json.field "prelude", File.basename(prelude)
         end
         if format_host = @format_host_path
           json.field "format_host", File.basename(format_host)
+        end
+        if graph
+          unless graph.capabilities.empty?
+            json.field "capabilities" do
+              json.object do
+                graph.capabilities.keys.sort.each do |name|
+                  capability = graph.capabilities[name]
+                  json.field name do
+                    json.object do
+                      json.field "version", capability.version
+                      if host = capability.host
+                        json.field "host", host
+                      end
+                      json.field "packages" do
+                        json.array do
+                          capability.packages.sort.each { |id| json.string(id) }
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+            end
+          end
+          json.field "entry_packages" do
+            json.array do
+              graph.entry_packages.each { |id| json.string(id) }
+            end
+          end
+          json.field "packages" do
+            json.object do
+              graph.order.each do |id|
+                package = graph.packages[id]
+                write_package(json, package)
+              end
+            end
+          end
         end
         unless resources.empty?
           json.field "resources" do
@@ -484,6 +533,53 @@ class MrbcCompiler
         json.field "wasm_file", @wasm_path ? File.basename(@wasm_path.not_nil!) : nil
         json.field "js_file", @js_path ? File.basename(@js_path.not_nil!) : nil
         json.field "loader_file", @loader_path ? File.basename(@loader_path.not_nil!) : nil
+      end
+    end
+  end
+
+  private def write_package(json : JSON::Builder, package : MochiPackaging::PackageNode) : Nil
+    json.field package.id do
+      json.object do
+        json.field "kind", package.kind
+        json.field "file", File.join(COMPONENTS_DIR, package.file)
+        if component = package.component
+          json.field "tag_name", component.manifest.tag_name
+          json.field "class_name", component.manifest.class_name
+        end
+        json.field "source" do
+          json.object do
+            json.field "file", package.source_path
+            json.field "line", package.source_line
+          end
+        end
+        unless package.dependencies.empty?
+          json.field "dependencies" do
+            json.array do
+              package.dependencies.sort.each { |dependency| json.string(dependency) }
+            end
+          end
+        end
+        unless package.resources.empty?
+          json.field "resources" do
+            json.array do
+              package.resources.sort.each { |resource| json.string(resource) }
+            end
+          end
+        end
+        unless package.capabilities.empty?
+          json.field "capabilities" do
+            json.array do
+              package.capabilities.sort.each { |capability| json.string(capability) }
+            end
+          end
+        end
+        unless package.exports.empty?
+          json.field "exports" do
+            json.array do
+              package.exports.sort.each { |name| json.string(name) }
+            end
+          end
+        end
       end
     end
   end
@@ -507,8 +603,25 @@ class MrbcCompiler
       json.field "tag_name", manifest.tag_name
       json.field "class_name", manifest.class_name
       json.field "chi_file", manifest.chi_file
+      if package_id = manifest.package_id
+        json.field "package", package_id
+      end
       if helper_chi = manifest.helper_chi
         json.field "helper_chi", helper_chi
+      end
+      unless manifest.dependencies.empty?
+        json.field "dependencies" do
+          json.array do
+            manifest.dependencies.sort.each { |dependency| json.string(dependency) }
+          end
+        end
+      end
+      unless manifest.capabilities.empty?
+        json.field "capabilities" do
+          json.array do
+            manifest.capabilities.sort.each { |capability| json.string(capability) }
+          end
+        end
       end
       if manifest.formatting
         json.field "formatting", true

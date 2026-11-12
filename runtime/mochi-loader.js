@@ -5,6 +5,7 @@
   var RITE_HEADER = new Uint8Array([0x52, 0x49, 0x54, 0x45, 0x30, 0x34, 0x30, 0x30, 0x00, 0x00]);
   var COMPONENT_DIR = "components/";
   var DEFAULT_MANIFEST = "mochi-manifest.json";
+  var MANIFEST_SCHEMA_VERSION = 1;
   var MAX_PENDING_FETCHES = 256;
 
   // Custom element reactions for a same-task DOM move run before queued
@@ -1088,9 +1089,17 @@
   // Optional host adapters must be registered before a component can call them
   // from initialize or its first binding. The manifest names the adapter; the
   // promise map keeps concurrent mounts to one request.
+  function formatHostPath(manifest) {
+    if (!manifest) return null;
+    var capability = manifest.capabilities && manifest.capabilities.formatting;
+    if (capability && capability.host) return capability.host;
+    return manifest.format_host || null;
+  }
+
   function ensureFormatHost(manifest, manifestUrl) {
-    if (!manifest || !manifest.format_host) return Promise.resolve();
-    var url = absoluteUrl(manifest.format_host, manifestUrl);
+    var host = formatHostPath(manifest);
+    if (!host) return Promise.resolve();
+    var url = absoluteUrl(host, manifestUrl);
     var existing = state.hostModulePromises.get(url);
     if (existing) return existing;
 
@@ -1120,8 +1129,68 @@
     return promise;
   }
 
+  function componentNeedsFormatting(component) {
+    return component.formatting === true ||
+      (Array.isArray(component.capabilities) && component.capabilities.indexOf("formatting") !== -1);
+  }
+
+  function loadPackage(id, manifest, manifestUrl, trail) {
+    trail = trail || [];
+    if (trail.indexOf(id) !== -1) {
+      throw new Error("mochi-loader: package cycle at " + id);
+    }
+
+    var packages = manifest.packages || {};
+    var descriptor = packages[id];
+    if (!descriptor) {
+      throw new Error("mochi-loader: missing package '" + id + "' in " + manifestUrl);
+    }
+
+    var next = trail.concat([id]);
+    var dependencies = Array.isArray(descriptor.dependencies)
+      ? descriptor.dependencies.slice().sort()
+      : [];
+    var chain = Promise.resolve();
+    dependencies.forEach(function (dependency) {
+      chain = chain.then(function () {
+        return loadPackage(dependency, manifest, manifestUrl, next);
+      });
+    });
+
+    return chain.then(function () {
+      if (descriptor.kind === "capability") {
+        if (id === "capability:formatting") return ensureFormatHost(manifest, manifestUrl);
+        return null;
+      }
+      if (!descriptor.file) {
+        throw new Error("mochi-loader: package '" + id + "' has no bytecode file");
+      }
+      return loadIrepUrl(chiUrl(descriptor.file, manifestUrl), id, manifest, manifestUrl);
+    });
+  }
+
   async function loadComponentClass(component, manifest, manifestUrl) {
-    if (component.formatting) await ensureFormatHost(manifest, manifestUrl);
+    var needsFormatting = componentNeedsFormatting(component);
+    if (needsFormatting) {
+      if (!formatHostPath(manifest)) {
+        throw new Error("mochi-loader: formatting capability requested by " +
+          (component.tag_name || component.class_name) + " but the manifest has no host");
+      }
+      await ensureFormatHost(manifest, manifestUrl);
+    }
+
+    if (manifest && manifest.packages && (component.package || (Array.isArray(component.dependencies) && component.dependencies.length > 0))) {
+      var dependencies = Array.isArray(component.dependencies)
+        ? component.dependencies.slice().sort()
+        : [];
+      for (var i = 0; i < dependencies.length; i++) {
+        await loadPackage(dependencies[i], manifest, manifestUrl, []);
+      }
+      var packageId = component.package || ("component:" + (component.tag_name || ""));
+      await loadPackage(packageId, manifest, manifestUrl, []);
+      return state.activeModule;
+    }
+
     if (manifest && manifest.prelude) {
       var preludeUrl = chiUrl(manifest.prelude, manifestUrl);
       await loadIrepUrl(preludeUrl, "prelude", manifest, manifestUrl);
@@ -3425,6 +3494,24 @@
     global.customElements.define(tag, Element);
   }
 
+  function validateManifest(manifest, manifestUrl) {
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+      throw new Error("mochi-loader: manifest " + manifestUrl + " must be a versioned object");
+    }
+    if (manifest.schema_version !== MANIFEST_SCHEMA_VERSION) {
+      throw new Error("mochi-loader: unsupported manifest schema " +
+        JSON.stringify(manifest.schema_version) + " in " + manifestUrl +
+        "; this loader supports schema " + MANIFEST_SCHEMA_VERSION);
+    }
+    if (!Array.isArray(manifest.components)) {
+      throw new Error("mochi-loader: manifest " + manifestUrl + " has no components array");
+    }
+    if (!manifest.packages || typeof manifest.packages !== "object" || Array.isArray(manifest.packages)) {
+      throw new Error("mochi-loader: manifest " + manifestUrl + " has no package descriptors");
+    }
+    return manifest;
+  }
+
   async function boot(url, options) {
     installFocusTrap();
     options = options || {};
@@ -3437,9 +3524,7 @@
     var response = await global.fetch(manifestUrl);
     if (!response.ok) throw new Error("mochi-loader: failed to fetch " + manifestUrl);
 
-    var manifest = await response.json();
-    if (Array.isArray(manifest)) manifest = { components: manifest };
-    if (!manifest.components) manifest.components = [];
+    var manifest = validateManifest(await response.json(), manifestUrl);
 
     state.actionSupportCache.clear();
     state.manifest = manifest;

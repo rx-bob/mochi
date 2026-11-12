@@ -160,6 +160,14 @@ class ComponentManifest
   # Shared build-time style resources, applied before the component-local css.
   # The manifest serializes only their stable IDs.
   property style_resources : Array(PackageResource)
+  # Stable identity in the top-level package graph. The compiler sets this when
+  # it resolves dependencies; component manifests built directly in specs leave
+  # it empty.
+  property package_id : String?
+  # Ruby/component package IDs this component needs before its bytecode runs.
+  property dependencies : Array(String)
+  # Optional host capabilities owned by this component's dependency closure.
+  property capabilities : Array(String)
   # True when this component's Ruby mentions MochiFormat. The loader only
   # requests the optional formatting host for components that need it.
   property formatting : Bool
@@ -179,6 +187,9 @@ class ComponentManifest
     @props : Array(PropDescriptor) = [] of PropDescriptor,
     @emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
     @style_resources : Array(PackageResource) = [] of PackageResource,
+    @capabilities : Array(String) = [] of String,
+    @package_id : String? = nil,
+    @dependencies : Array(String) = [] of String,
     @formatting : Bool = false,
   )
   end

@@ -44,14 +44,15 @@ class BuildMain
     end
 
     # Exact money arithmetic is ordinary Ruby bytecode. Emit it only for
-    # applications that mention the helper; E6 will attach it as a component
-    # dependency instead of placing it in the shared prelude.
+    # applications that mention the helper; the package graph attaches it to
+    # the components that depend on it.
     if all_rb_sources.includes?("MochiMoney")
       File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_money.rb", MochiMoneyRbFragment.get_ruby_code)
     end
 
     # Browser-backed formatting is optional Ruby bytecode plus a host adapter.
-    # The adapter is copied and requested only when a source names MochiFormat.
+    # The package graph reports the capability and the loader requests the
+    # adapter only when a mounted component depends on it.
     if all_rb_sources.includes?("MochiFormat")
       File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_format.rb", MochiFormatRbFragment.get_ruby_code)
     end
