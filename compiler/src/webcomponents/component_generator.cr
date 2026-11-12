@@ -5,6 +5,7 @@ require "../html/conditional_processor"
 require "../html/each_processor"
 require "../html/each_row_compiler"
 require "../html/event_argument_extractor"
+require "../html/html_attributes"
 require "../html/template_expression"
 
 class ComponentGenerator
@@ -445,7 +446,8 @@ class ComponentGenerator
       expression.template_end,
       expression.scope,
       expression.span,
-      trusted_markup: trusted_markup
+      trusted_markup: trusted_markup,
+      attr_kind: kind == "attr" && attr_name ? HtmlAttributes.kind(attr_name) : nil
     )
   end
 

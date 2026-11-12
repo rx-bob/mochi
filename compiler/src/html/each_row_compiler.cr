@@ -3,6 +3,7 @@ require "lexbor"
 require "./each_processor"
 require "./each_row_template"
 require "./event_argument_extractor"
+require "./html_attributes"
 require "./template_expression"
 
 # Compiles one each block into a static row template plus evaluated value
@@ -132,7 +133,8 @@ class EachRowCompiler
         attr_name,
         trusted_source || expression.source,
         expression.span,
-        !trusted_source.nil?
+        !trusted_source.nil?,
+        kind == "attr" && attr_name ? HtmlAttributes.kind(attr_name) : nil
       )
     end
 

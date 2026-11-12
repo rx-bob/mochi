@@ -91,6 +91,23 @@ describe EachRowCompiler do
     row.bindings.map(&.kind).should eq(["attr", "text", "text"])
   end
 
+  it "classifies row attribute slots as boolean or textual" do
+    row = compile_row_template(%Q{
+      {each @items as item}
+        <li class="box {item[:kind]}" hidden="{item[:hidden]}" aria-expanded="{item[:expanded]}" data-count="{item[:count]}">{item[:label]}</li>
+      {end}
+    })
+
+    kind_for = ->(name : String) do
+      row.bindings.find! { |binding| binding.attr_name == name }.attr_kind
+    end
+
+    kind_for.call("class").should eq("text")
+    kind_for.call("hidden").should eq("boolean")
+    kind_for.call("aria-expanded").should eq("text")
+    kind_for.call("data-count").should eq("text")
+  end
+
   it "compiles explicit key expressions and list source spans" do
     source = %Q{
       {each @groups as group, key: group["id"]}

@@ -4,6 +4,8 @@ const path = require("node:path");
 const { JSDOM } = require("jsdom");
 
 const LOADER_PATH = path.join(__dirname, "..", "mochi-loader.js");
+// Must match the VM's nil binding marker. Nil and empty string stay distinct.
+const NIL = "\uE004";
 
 const HTML_TEMPLATE = [
   '<span class="count">Count: {@count}</span>',
@@ -1860,6 +1862,83 @@ test("strict @ivar, method, and attribute conditional placeholders patch in plac
   assert.equal(box.classList.contains("active"), false);
 });
 
+test("boolean attributes toggle presence while textual attributes keep false, zero, and empty", async () => {
+  const attrSemantics = {
+    tag_name: "attr-semantics-check",
+    class_name: "AttrSemanticsCheck",
+    chi_file: "attr-semantics-check.chi",
+    html_template:
+      '<button class="action" disabled="{@disabled}" aria-expanded="{@expanded}">Go</button>' +
+      '<span class="count" data-count="{@count}"></span>' +
+      '<span class="note" title="{@note}"></span>' +
+      '<p data-role="classes" class="box {first} {second}">x</p>',
+    css: "",
+    bindings: [
+      { id: 0, path: [0], kind: "attr", attr_name: "disabled", attr_kind: "boolean", template_text: "{@disabled}", getter_sym: "__mochi_bind_0" },
+      { id: 1, path: [0], kind: "attr", attr_name: "aria-expanded", attr_kind: "text", template_text: "{@expanded}", getter_sym: "__mochi_bind_1" },
+      { id: 2, path: [1], kind: "attr", attr_name: "data-count", attr_kind: "text", template_text: "{@count}", getter_sym: "__mochi_bind_2" },
+      { id: 3, path: [2], kind: "attr", attr_name: "title", attr_kind: "text", template_text: "{@note}", getter_sym: "__mochi_bind_3" },
+      { id: 4, path: [3], kind: "attr", attr_name: "class", attr_kind: "text", template_text: "box {first} {second}", getter_sym: "__mochi_bind_4" },
+      { id: 5, path: [3], kind: "attr", attr_name: "class", attr_kind: "text", template_text: "box {first} {second}", getter_sym: "__mochi_bind_5" },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([attrSemantics]);
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: "false" },
+      { id: 1, value: "false" },
+      { id: 2, value: "0" },
+      { id: 3, value: "" },
+      { id: 4, value: "one" },
+      { id: 5, value: "two" },
+    ],
+  });
+
+  const element = document.createElement("attr-semantics-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const button = element.shadowRoot.querySelector("button.action");
+  const count = element.shadowRoot.querySelector(".count");
+  const note = element.shadowRoot.querySelector(".note");
+  const classes = element.shadowRoot.querySelector("[data-role='classes']");
+
+  assert.equal(button.hasAttribute("disabled"), false);
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(count.getAttribute("data-count"), "0");
+  assert.equal(note.getAttribute("title"), "");
+  assert.equal(classes.getAttribute("class"), "box one two");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "true" }, { id: 1, value: "true" }] });
+  loader.applyPatches(element);
+  assert.equal(button.getAttribute("disabled"), "true");
+  assert.equal(button.getAttribute("aria-expanded"), "true");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "" }, { id: 1, value: "" }] });
+  loader.applyPatches(element);
+  assert.equal(button.hasAttribute("disabled"), false);
+  assert.equal(button.getAttribute("aria-expanded"), "");
+
+  // Each fragment updates from its own cached value; the static `box` prefix
+  // and the other fragment survive.
+  module.patchQueue.push({ patches: [{ id: 4, value: "" }] });
+  loader.applyPatches(element);
+  assert.equal(classes.getAttribute("class"), "box  two");
+  assert.equal(classes.classList.contains("box"), true);
+  assert.equal(classes.classList.contains("one"), false);
+
+  module.patchQueue.push({ patches: [{ id: 5, value: "TWO" }] });
+  loader.applyPatches(element);
+  assert.equal(classes.getAttribute("class"), "box  TWO");
+  assert.equal(classes.classList.contains("two"), false);
+
+  module.patchQueue.push({ patches: [{ id: 3, value: NIL }] });
+  loader.applyPatches(element);
+  assert.equal(note.hasAttribute("title"), false);
+});
+
 test("compiler placeholder ranges preserve nested and literal braces", async () => {
   const mixedText = 'Literal \uE000braces\uE001 and {format(@h["key"], {a: 1})}';
   const mixedStart = Buffer.byteLength(mixedText.slice(0, mixedText.indexOf("{format")), "utf8");
@@ -1908,6 +1987,11 @@ test("compiler placeholder ranges preserve nested and literal braces", async () 
 
   module.patchQueue.push({ patches: [{ id: 1, value: "" }] });
   loader.applyPatches(element);
+  // An intentional empty textual value stays present and empty.
+  assert.equal(element.shadowRoot.querySelector(".nested").getAttribute("title"), "");
+
+  module.patchQueue.push({ patches: [{ id: 1, value: NIL }] });
+  loader.applyPatches(element);
   assert.equal(element.shadowRoot.querySelector(".nested").hasAttribute("title"), false);
 });
 
@@ -1953,6 +2037,11 @@ test("html and attribute patches update their cached targets", async () => {
   assert.equal(link.getAttribute("href"), "https://example.test/path");
 
   module.patchQueue.push({ patches: [{ id: 0, value: "" }] });
+  loader.applyPatches(attrElement);
+  assert.equal(link.getAttribute("href"), "");
+  assert.equal(attrElement.bindingTargets[0], link);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: NIL }] });
   loader.applyPatches(attrElement);
   assert.equal(link.hasAttribute("href"), false);
   assert.equal(attrElement.bindingTargets[0], link);
@@ -2397,6 +2486,79 @@ test("compiled row text and attributes escape interpolated values", async () => 
   assert.equal(item.getAttribute("title"), "<attr>&\"'");
   assert.equal(item.getAttribute("data-literal"), "{literal}");
   assert.equal(item.textContent.indexOf("{"), -1);
+});
+
+test("row attributes distinguish boolean presence from textual false, zero, empty, and nil", async () => {
+  const rowAttrComponent = {
+    tag_name: "row-attr-check",
+    class_name: "RowAttrCheck",
+    chi_file: "row-attr-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<li hidden="\uE0021\uE003" aria-expanded="\uE0022\uE003" data-count="\uE0023\uE003" title="\uE0024\uE003"></li>',
+          bindings: [
+            { slot: 1, kind: "attr", attr_name: "hidden", attr_kind: "boolean" },
+            { slot: 2, kind: "attr", attr_name: "aria-expanded", attr_kind: "text" },
+            { slot: 3, kind: "attr", attr_name: "data-count", attr_kind: "text" },
+            { slot: 4, kind: "attr", attr_name: "title", attr_kind: "text" },
+          ],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { module, loader } = await setup([rowAttrComponent]);
+  const item = { id: "a" };
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[item, [null, false, "false", 0, ""]]]),
+    }],
+  });
+
+  const element = document.createElement("row-attr-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const row = element.shadowRoot.querySelector("li");
+  assert.equal(row.hasAttribute("hidden"), false);
+  assert.equal(row.getAttribute("aria-expanded"), "false");
+  assert.equal(row.getAttribute("data-count"), "0");
+  assert.equal(row.getAttribute("title"), "");
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[item, [null, true, "true", 0, null]]]),
+    }],
+  });
+  loader.applyPatches(element);
+  assert.equal(row.getAttribute("hidden"), "true");
+  assert.equal(row.getAttribute("aria-expanded"), "true");
+  assert.equal(row.hasAttribute("title"), false);
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[item, [null, "", "false", 0, ""]]]),
+    }],
+  });
+  loader.applyPatches(element);
+  assert.equal(row.hasAttribute("hidden"), false);
+  assert.equal(row.getAttribute("aria-expanded"), "false");
+  assert.equal(row.getAttribute("title"), "");
 });
 
 
@@ -2981,7 +3143,9 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
     tag_name: "bind-value-check",
     class_name: "BindValueCheck",
     chi_file: "bind-value-check.chi",
-    html_template: '<input class="query" data-mochi-input="__mochi_set_query" value="{@query}">',
+    html_template:
+      '<input class="query" data-mochi-input="__mochi_set_query" value="{@query}">' +
+      '<p class="label">{@label}</p>',
     css: "",
     bindings: [
       {
@@ -2993,6 +3157,15 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
         getter_sym: "__mochi_bind_0",
         getter_expr: "@query",
         setter_sym: "__mochi_set_query",
+      },
+      {
+        id: 1,
+        path: [1, 0],
+        kind: "text",
+        attr_name: null,
+        template_text: "{@label}",
+        getter_sym: "__mochi_bind_1",
+        getter_expr: "@label",
       },
     ],
     events: [{ path: [0], event: "input", method_sym: "__mochi_set_query", args: [] }],
@@ -3038,6 +3211,14 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
       dataset: {},
     }],
   });
+
+  input.setSelectionRange(1, 3);
+  module.patchQueue.push({ patches: [{ id: 1, value: "changed" }] });
+  loader.applyPatches(element);
+  assert.equal(element.bindingTargets[0], input);
+  assert.equal(input.value, "typed");
+  assert.equal(input.selectionStart, 1);
+  assert.equal(input.selectionEnd, 3);
 
   module.patchQueue.push({ patches: [{ id: 0, value: "remote" }] });
   loader.applyPatches(element);
@@ -3091,4 +3272,5 @@ test("bind:checked updates the checkbox property from Ruby and sends checked sta
   module.patchQueue.push({ patches: [{ id: 0, value: "false" }] });
   loader.applyPatches(element);
   assert.equal(input.checked, false);
+  assert.equal(element.bindingTargets[0], input);
 });

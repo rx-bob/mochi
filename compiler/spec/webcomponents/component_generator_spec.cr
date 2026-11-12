@@ -144,6 +144,27 @@ describe ComponentGenerator do
     manifest.events.map(&.method_sym).should eq(["__mochi_set_query", "__mochi_set_enabled"])
   end
 
+  it "classifies boolean and textual attribute bindings" do
+    html = %Q(<button class="box {box_class}" disabled="{@disabled}" aria-expanded="{@expanded}" data-count="{@count}" checked="{@checked}">Go</button>)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    kind_for = ->(name : String) do
+      manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == name }.attr_kind
+    end
+
+    kind_for.call("class").should eq("text")
+    kind_for.call("disabled").should eq("boolean")
+    kind_for.call("aria-expanded").should eq("text")
+    kind_for.call("data-count").should eq("text")
+    kind_for.call("checked").should eq("boolean")
+
+    value_binding = ComponentGenerator.new.generate(
+      "TestCmp", "test-cmp", "", %Q(<input bind:value="{@query}">)
+    ).bindings.first
+    value_binding.kind.should eq("prop")
+    value_binding.attr_kind.should be_nil
+  end
+
   it "rejects bind:value without an ivar placeholder" do
     expect_raises(Exception, "bind:value requires an instance variable") do
       ComponentGenerator.new.generate(

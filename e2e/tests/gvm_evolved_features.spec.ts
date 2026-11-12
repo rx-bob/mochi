@@ -1406,3 +1406,185 @@ end
     fs.rmSync(projectDir, { recursive: true, force: true });
   }
 });
+
+test("form attributes distinguish boolean presence, textual values, and live properties", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-attributes-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "FormProbe.rb"), `
+class FormProbe
+  @tag_name = "form-probe"
+  @query
+  @checked
+  @expanded
+  @mode
+  @count
+  @note
+  @note_step
+  @status
+
+  def initialize
+    @query = "seed"
+    @checked = false
+    @expanded = false
+    @mode = "idle"
+    @count = 0
+    @note = nil
+    @note_step = 0
+    @status = "idle"
+  end
+
+  def html
+    %Q{
+      <div class="probe">
+        <p class="status">{@status}</p>
+        <p data-role="classes" class="box {@mode} slot{@count}">classes</p>
+        <input class="field" type="text" bind:value="@query">
+        <input class="flag" type="checkbox" bind:checked="@checked">
+        <button class="toggle" onclick="{toggle}" aria-expanded="{@expanded}">Toggle</button>
+        <button class="busy" disabled="{@checked}">Busy</button>
+        <button class="touch" onclick="{touch}">Touch</button>
+        <button class="bump" onclick="{bump}">Bump</button>
+        <button class="note-step" onclick="{note_step}">Note</button>
+        <button class="rewrite" onclick="{rewrite}">Rewrite</button>
+        <span class="note" data-note="{@note}">note</span>
+        <span class="count" data-count="{@count}">count</span>
+      </div>
+    }
+  end
+
+  def toggle
+    @expanded = !@expanded
+  end
+
+  def touch
+    @status = "q=#{@query} checked=#{@checked}"
+    @mode = @mode == "idle" ? "busy" : "idle"
+  end
+
+  def bump
+    @count += 1
+  end
+
+  def note_step
+    if @note_step == 0
+      @note = ""
+      @note_step = 1
+    elsif @note_step == 1
+      @note = "saved"
+      @note_step = 2
+    else
+      @note = nil
+      @note_step = 0
+    end
+  end
+
+  def rewrite
+    @query = "rewritten"
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <form-probe></form-probe>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const probe = page.locator("form-probe");
+    const classes = probe.locator("p[data-role='classes']");
+    const toggle = probe.locator("button.toggle");
+    const busy = probe.locator("button.busy");
+    const field = probe.locator("input.field");
+    const flag = probe.locator("input.flag");
+    const note = probe.locator("span.note");
+
+    await expect(classes).toHaveAttribute("class", "box idle slot0");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(note).not.toHaveAttribute("data-note", /.*/);
+    await expect(probe.locator("span.count")).toHaveAttribute("data-count", "0");
+    await expect(field).toHaveValue("seed");
+    expect(await busy.evaluate((element) => element.hasAttribute("disabled"))).toBe(false);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await flag.click();
+    await expect(flag).toBeChecked();
+    expect(await busy.evaluate((element) => element.hasAttribute("disabled"))).toBe(true);
+    await flag.click();
+    await expect(flag).not.toBeChecked();
+    expect(await busy.evaluate((element) => element.hasAttribute("disabled"))).toBe(false);
+
+    await probe.locator("button.note-step").click();
+    await expect(note).toHaveAttribute("data-note", "");
+    await probe.locator("button.note-step").click();
+    await expect(note).toHaveAttribute("data-note", "saved");
+    await probe.locator("button.note-step").click();
+    await expect(note).not.toHaveAttribute("data-note", /.*/);
+
+    await probe.locator("button.bump").click();
+    await expect(probe.locator("span.count")).toHaveAttribute("data-count", "1");
+    await expect(classes).toHaveAttribute("class", "box idle slot1");
+
+    await probe.locator("button.touch").click();
+    await expect(classes).toHaveAttribute("class", "box busy slot1");
+    await expect(probe.locator("p.status")).toHaveText("q=seed checked=false");
+
+    await field.click();
+    await field.fill("hello");
+    await field.evaluate((input: HTMLInputElement) => input.setSelectionRange(1, 3));
+    await field.evaluate((input: HTMLInputElement) => { (input as any).__probeIdentity = "field"; });
+    await flag.evaluate((input: HTMLInputElement) => { (input as any).__probeIdentity = "flag"; });
+
+    // Programmatic click updates unrelated labels without moving focus from the
+    // draft input. The input node, value, and selection must all survive.
+    await probe.evaluate((element: any) => {
+      element.shadowRoot.querySelector("button.touch").click();
+    });
+    await expect(probe.locator("p.status")).toHaveText("q=hello checked=false");
+    await expect(classes).toHaveAttribute("class", "box idle slot1");
+    expect(await field.evaluate((input: HTMLInputElement) => {
+      const root = input.getRootNode() as ShadowRoot;
+      return {
+        identity: (input as any).__probeIdentity,
+        value: input.value,
+        focused: root.activeElement === input,
+        start: input.selectionStart,
+        end: input.selectionEnd,
+      };
+    })).toEqual({ identity: "field", value: "hello", focused: true, start: 1, end: 3 });
+    expect(await flag.evaluate((input: HTMLInputElement) => (input as any).__probeIdentity)).toBe("flag");
+
+    await probe.evaluate((element: any) => {
+      element.shadowRoot.querySelector("button.rewrite").click();
+    });
+    await expect(field).toHaveValue("rewritten");
+    expect(await field.evaluate((input: HTMLInputElement) => (input as any).__probeIdentity)).toBe("field");
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});

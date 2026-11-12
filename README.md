@@ -127,6 +127,45 @@ When no explicit key is given, the loader uses an item `key` field, then an
 `id` field, and otherwise uses the row position as identity. Duplicate keys
 fail with a source-located error before the list changes.
 
+### Attributes and form state
+
+Interpolated attributes evaluate their Ruby expression in the VM. Attribute
+values never create markup: `Mochi.raw` is rejected inside an attribute, and a
+string such as `<b>` or `onclick="..."` is stored as text.
+
+Mochi distinguishes three attribute categories:
+
+* **Textual attributes** keep the authored string, including `"false"`, `"0"`,
+  and the empty string. This includes `aria-*`, `data-*`, `class`, `title`,
+  `href`, and every attribute that is not an HTML boolean attribute.
+* **Boolean attributes** such as `disabled`, `checked`, `hidden`, `required`,
+  `readonly`, `selected`, and `open` are present or absent. The presence of
+  `true` keeps the attribute; `false`, `nil`, and the empty string remove it.
+* **Live form properties** are compiled from `bind:value` and `bind:checked`.
+  They update the DOM property without replacing the input, so an unrelated
+  update keeps the node, draft, focus, and selection.
+
+```ruby
+def html
+  %Q{
+    <input type="text" bind:value="@query">
+    <input type="checkbox" bind:checked="@enabled">
+    <button disabled="{@enabled}" aria-expanded="{@expanded}">Filter</button>
+    <span data-count="{@count}" title="{@note}">rows</span>
+  }
+end
+```
+
+`aria-expanded="false"` stays a textual `"false"` value, while
+`disabled="false"` removes `disabled`. A value of `0` renders as `"0"`, never
+as absence. A `nil` result removes an attribute whose value is exactly one
+placeholder; an empty string keeps that textual attribute present and empty.
+When the attribute also contains literal text, `nil` contributes nothing and
+the attribute remains. In text content, `nil` and the empty string both render
+no characters. `bind:value` writes `nil` and the empty string as an empty value
+without replacing the input; `bind:checked` checks only for `true`, `"true"`,
+`"checked"`, or `"1"`.
+
 ### Component lifecycle
 
 Moving a connected component between positions in the same turn preserves its Ruby instance, state, timers, and event handlers; `unmounted` and `mounted` do not run again. If the element stays disconnected through that turn, the loader disposes it once and runs `unmounted`. Reinserting it afterwards performs a fresh mount from `initialize`, rebuilding props, bindings, and handlers.

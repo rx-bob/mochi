@@ -45,7 +45,10 @@ RUBY
     "index",
     nil,
     "<span>{item[:name]}</span><!--mochi-each-1-->",
-    [EachRowBindingDescriptor.new(0, "text", nil, "item[:name]")],
+    [
+      EachRowBindingDescriptor.new(0, "text", nil, "item[:name]"),
+      EachRowBindingDescriptor.new(1, "attr", "hidden", "item[:hidden]", nil, false, "boolean"),
+    ],
     [] of EachRowEventDescriptor,
     [child_row],
     [EachRowScope.new("item", "index")],
@@ -102,6 +105,16 @@ RUBY
       [] of String,
       nil,
       each_row
+    ),
+    BindingDescriptor.new(
+      5,
+      [4],
+      "attr",
+      "__mochi_bind_5",
+      "disabled",
+      "{@disabled}",
+      "@disabled",
+      attr_kind: "boolean"
     ),
   ]
   events = [
@@ -232,6 +245,9 @@ describe MrbcCompiler do
 
       expr = bindings.find { |entry| entry.as_h["kind"].as_s == "expr" }.not_nil!
       expr.as_h["getter_expr"].as_s.should eq("@query")
+      attr = bindings.find { |entry| entry.as_h["kind"].as_s == "attr" }.not_nil!
+      attr.as_h["attr_name"].as_s.should eq("disabled")
+      attr.as_h["attr_kind"].as_s.should eq("boolean")
 
       each = bindings.find { |entry| entry.as_h["kind"].as_s == "each" }.not_nil!
       each.as_h["getter_sym"].as_s.should eq("__mochi_each_0_rows")
@@ -242,6 +258,8 @@ describe MrbcCompiler do
       row_source["file"].as_s.should eq("lib/my_counter.rb")
       row_source["line"].as_i.should eq(20)
       rows["bindings"].as_a.first.as_h["slot"].as_i.should eq(0)
+      row_attr = rows["bindings"].as_a.find { |entry| entry.as_h["attr_name"].as_s? == "hidden" }.not_nil!
+      row_attr.as_h["attr_kind"].as_s.should eq("boolean")
       rows["children"].as_a.size.should eq(1)
       child = rows["children"].as_a.first.as_h
       child["id"].as_i.should eq(1)

@@ -66,6 +66,19 @@
     return String(text || "").replace(/\uE000/g, "{").replace(/\uE001/g, "}");
   }
 
+  // The VM marks a nil binding result with a private-use code point. Nil and an
+  // empty string stay distinct: nil removes a single-placeholder attribute,
+  // while an empty string keeps a textual attribute present and empty.
+  var NIL_BINDING_TEXT = "\uE004";
+
+  function nilBinding(value) {
+    return value === NIL_BINDING_TEXT;
+  }
+
+  function displayBindingValue(value) {
+    return nilBinding(value) || value === null || value === undefined ? "" : String(value);
+  }
+
   // Flattens top-level and conditional-branch bindings so every getter can be
   // registered with the VM at mount time, even while its branch is unmounted.
   function collectBindings(bindings, result) {
@@ -1002,7 +1015,8 @@
       var binding = bindingData[ids[i]];
       if (binding && binding.getter_expr === expression &&
           Object.prototype.hasOwnProperty.call(bindingValues, binding.id)) {
-        return bindingValues[binding.id];
+        var value = bindingValues[binding.id];
+        return nilBinding(value) ? null : value;
       }
     }
     throw new Error("mochi-loader: unresolved event argument expression " + expression);
@@ -1133,7 +1147,7 @@
       if (id === undefined || !Object.prototype.hasOwnProperty.call(values, id)) {
         return literal(fallback);
       }
-      var value = values[id];
+      var value = displayBindingValue(values[id]);
       if (!escapeMarkup || (state.trusted && state.trusted[id])) return value;
       return escapeHtmlText(value);
     }
@@ -1191,12 +1205,14 @@
     if (!target.__mochiAttrs[name]) {
       target.__mochiAttrs[name] = {
         template: binding.template_text || "",
+        attrKind: attributeKind(binding),
         ids: [],
         entries: [],
         values: {}
       };
     }
     var state = target.__mochiAttrs[name];
+    if (attributeKind(binding) === "boolean") state.attrKind = "boolean";
     addBindingEntry(state, binding);
     return state;
   }
@@ -1224,7 +1240,72 @@
     }
     if (target.__mochiHtmlValue === value) return;
     target.__mochiHtmlValue = value;
-    target.innerHTML = value;
+    target.innerHTML = displayBindingValue(value);
+  }
+
+  var BOOLEAN_ATTRIBUTES = {
+    allowfullscreen: true,
+    async: true,
+    autofocus: true,
+    autoplay: true,
+    checked: true,
+    controls: true,
+    default: true,
+    defer: true,
+    disabled: true,
+    formnovalidate: true,
+    hidden: true,
+    inert: true,
+    ismap: true,
+    itemscope: true,
+    loop: true,
+    multiple: true,
+    muted: true,
+    nomodule: true,
+    novalidate: true,
+    open: true,
+    playsinline: true,
+    readonly: true,
+    required: true,
+    reversed: true,
+    selected: true
+  };
+  var TEXTUAL_ATTRIBUTE_PREFIXES = ["aria-", "data-"];
+
+  // The compiler records the distinction in the manifest. The name fallback
+  // keeps hand-written manifests and older bundles working.
+  function attributeKindForName(name) {
+    var normalized = String(name || "").toLowerCase();
+    for (var i = 0; i < TEXTUAL_ATTRIBUTE_PREFIXES.length; i++) {
+      if (normalized.indexOf(TEXTUAL_ATTRIBUTE_PREFIXES[i]) === 0) return "text";
+    }
+    return BOOLEAN_ATTRIBUTES[normalized] ? "boolean" : "text";
+  }
+
+  function attributeKind(binding) {
+    if (binding && (binding.attr_kind === "boolean" || binding.attr_kind === "text")) {
+      return binding.attr_kind;
+    }
+    return attributeKindForName(binding && binding.attr_name);
+  }
+
+  function singlePlaceholder(state, binding) {
+    if (state.entries.length === 1) {
+      if (state.entries[0].id !== binding.id) return false;
+      var entry = entryRange(state, state.entries[0]);
+      return state.template.slice(0, entry.start).trim() === "" &&
+        state.template.slice(entry.end).trim() === "";
+    }
+    return state.entries.length === 0 && state.ids.length === 1 &&
+      /^\s*\{[^}]+\}\s*$/.test(state.template);
+  }
+
+  function booleanAttributePresent(value) {
+    if (nilBinding(value) || value === null || value === undefined || value === false) {
+      return false;
+    }
+    var text = String(value).trim().toLowerCase();
+    return text !== "" && text !== "false";
   }
 
   function applyAttrPatch(target, binding, value) {
@@ -1232,15 +1313,14 @@
     if (state.values[binding.id] === value) return;
     state.values[binding.id] = value;
     var nextValue = substitute(state, state.values);
-    var isSinglePlaceholder = false;
-    if (state.entries.length === 1) {
-      var entry = entryRange(state, state.entries[0]);
-      isSinglePlaceholder = state.template.slice(0, entry.start).trim() === "" &&
-        state.template.slice(entry.end).trim() === "";
-    } else if (state.entries.length === 0) {
-      isSinglePlaceholder = state.ids.length === 1 && /^\s*\{[^}]+\}\s*$/.test(state.template);
+    var alone = singlePlaceholder(state, binding);
+    var remove;
+    if (state.attrKind === "boolean") {
+      remove = !booleanAttributePresent(alone ? value : nextValue);
+    } else {
+      remove = alone && (nilBinding(value) || value === null || value === undefined);
     }
-    if ((isSinglePlaceholder && (value === "" || value === "false")) || nextValue === "") {
+    if (remove) {
       target.removeAttribute(binding.attr_name);
     } else {
       target.setAttribute(binding.attr_name, nextValue);
@@ -1253,9 +1333,9 @@
 
     var next;
     if (property === "checked") {
-      next = value === "true" || value === "checked" || value === "1";
+      next = !nilBinding(value) && (value === "true" || value === "checked" || value === "1");
     } else {
-      next = value === null || value === undefined ? "" : String(value);
+      next = displayBindingValue(value);
     }
 
     if (target[property] === next) return;
@@ -1275,7 +1355,8 @@
 
   function branchIndexFor(value, branchCount) {
     if (value === "true") return branchCount > 0 ? 0 : -1;
-    if (value === "false" || value === "-1" || value === "" || value === null || value === undefined) return -1;
+    if (nilBinding(value) || value === "false" || value === "-1" || value === "" ||
+        value === null || value === undefined) return -1;
 
     var index = Number(value);
     if (!Number.isInteger(index) || index < 0 || index >= branchCount) return -1;
@@ -1483,7 +1564,18 @@
     return { textHosts: textHosts, htmlHosts: htmlHosts };
   }
 
-  function collectRowAttrHosts(fragment) {
+  function rowAttributeKind(descriptor, name) {
+    var kind = null;
+    (descriptor.bindings || []).forEach(function (binding) {
+      if (binding.kind !== "attr" || binding.attr_name !== name) return;
+      if (binding.attr_kind === "boolean" || binding.attr_kind === "text") {
+        kind = binding.attr_kind;
+      }
+    });
+    return kind || attributeKindForName(name);
+  }
+
+  function collectRowAttrHosts(fragment, descriptor) {
     var elements = [];
     if (fragment.nodeType === 1) elements.push(fragment);
     Array.prototype.push.apply(elements, Array.from(fragment.querySelectorAll("*")));
@@ -1499,6 +1591,7 @@
           element: element,
           name: attribute.name,
           template: value,
+          attrKind: rowAttributeKind(descriptor, attribute.name),
           value: undefined
         });
       });
@@ -1510,7 +1603,7 @@
     var fragment = fragmentFor(rowTemplateMarkup(descriptor));
     unescapeRowText(fragment);
     var slotHosts = collectRowSlotHosts(fragment, descriptor);
-    var attrHosts = collectRowAttrHosts(fragment);
+    var attrHosts = collectRowAttrHosts(fragment, descriptor);
     var context = {
       blockId: descriptor.id,
       item: row[0],
@@ -1574,12 +1667,29 @@
   }
 
   function assignRowAttribute(host, values) {
+    var slots = [];
     var next = host.template.replace(ROW_SENTINEL_PATTERN, function (match, rawSlot) {
+      slots.push(Number(rawSlot));
       return displayRowValue(values[Number(rawSlot)]);
     });
-    if (host.value === next) return;
+    var alone = slots.length === 1 &&
+      host.template.replace(ROW_SENTINEL_PATTERN, "").trim() === "";
+    var raw = alone ? values[slots[0]] : undefined;
+    var remove;
+    if (host.attrKind === "boolean") {
+      remove = !booleanAttributePresent(alone ? raw : next);
+    } else {
+      remove = alone && (raw === null || raw === undefined);
+    }
+
+    if (host.value === next && host.removed === remove) return;
     host.value = next;
-    host.element.setAttribute(host.name, next);
+    host.removed = remove;
+    if (remove) {
+      host.element.removeAttribute(host.name);
+    } else {
+      host.element.setAttribute(host.name, next);
+    }
   }
 
   function assignRowSlots(entry, row) {
@@ -1778,7 +1888,7 @@
   function applyEachPatch(element, target, binding, value) {
     var descriptor = eachRowDescriptor(binding);
     var rows;
-    if (!value) {
+    if (nilBinding(value) || !value) {
       rows = [];
     } else {
       try {

@@ -10,6 +10,8 @@ struct BindingDescriptor
   property path : Array(Int32)
   property kind : String
   property attr_name : String?
+  # `text` or `boolean` for attribute bindings; nil for every other kind.
+  property attr_kind : String?
   property template_text : String?
   property getter_sym : String
   property getter_expr : String?
@@ -38,6 +40,7 @@ struct BindingDescriptor
     @span : TemplateSourceSpan? = nil,
     @each_rows : EachRowTemplate? = nil,
     @trusted_markup : Bool = false,
+    @attr_kind : String? = nil,
   )
   end
 end
