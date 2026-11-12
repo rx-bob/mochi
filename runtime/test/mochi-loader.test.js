@@ -176,11 +176,14 @@ function fakeModule(log) {
   const fetchOutboxOffset = 16384;
   const fetchInboxOffset = 32768;
   const fetchInboxCapacity = 16384;
+  const hostInboxOffset = 49152;
+  const hostInboxCapacity = 16384;
   log.symbols = symbols;
   log.symbolNames = new Map();
   log.hasMethodCalls = [];
   log.dispatchedArgs = [];
   log.deliveredFetches = [];
+  log.deliveredHostResults = [];
   log.unmounts = [];
   log.ivarSets = [];
   log.mountProps = [];
@@ -345,6 +348,21 @@ function fakeModule(log) {
       if (log.onFetchDelivery) log.onFetchDelivery();
       return 0;
     },
+    _mochi_host_inbox_offset() {
+      return hostInboxOffset;
+    },
+    _mochi_host_inbox_capacity() {
+      return hostInboxCapacity;
+    },
+    _mochi_deliver_host_result(instance, callbackPointer, callbackLength, responseLength) {
+      const callback = decoder.decode(
+        module.HEAPU8.slice(callbackPointer, callbackPointer + callbackLength));
+      const envelope = JSON.parse(decoder.decode(
+        module.HEAPU8.slice(hostInboxOffset, hostInboxOffset + responseLength)));
+      log.deliveredHostResults.push({ instance, callback, envelope });
+      if (log.onHostDelivery) log.onHostDelivery();
+      return 0;
+    },
     queueFetch(text) {
       fetchText = text;
       module.HEAPU8.set(new TextEncoder().encode(text), fetchOutboxOffset);
@@ -372,7 +390,7 @@ async function setup(components, options) {
   global.CustomEvent = dom.window.CustomEvent;
   global.CSSStyleSheet = dom.window.CSSStyleSheet;
 
-  delete global.MochiFormatHost;
+  delete global.MochiHostAdapter;
   const log = {
     calls: [], fetches: [], loads: [], interned: [], bindings: [],
     dispatched: [], flushes: [], hostUrls: [],
@@ -776,7 +794,12 @@ test("formatting capability host is read from the versioned capabilities map", a
   const component = { ...FORMAT_COMPONENT };
   const base = manifest([component], undefined, undefined);
   base.capabilities = {
-    formatting: { version: 1, host: "mochi-format.js", packages: [] },
+    formatting: {
+      version: 1,
+      host: "mochi-format.js",
+      operations: { format: "sync" },
+      packages: [],
+    },
   };
   base.packages = {
     "component:format-panel": {
@@ -787,12 +810,12 @@ test("formatting capability host is read from the versioned capabilities map", a
   };
   component.package = "component:format-panel";
 
-  const hostModule = { format: () => "1" };
+  const adapter = formatAdapter();
   const { dom, log, module } = await setup([component], {
     manifest: base,
     hostModuleFactory: async (url) => {
       log.hostUrls.push(url);
-      global.MochiFormatHost = hostModule;
+      return adapter;
     },
   });
 
@@ -802,7 +825,7 @@ test("formatting capability host is read from the versioned capabilities map", a
 
   assert.equal(log.hostUrls.length, 1);
   assert.ok(log.hostUrls[0].endsWith("/mochi-format.js"));
-  assert.equal(module.__mochiFormatHost, hostModule);
+  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
 });
 
 test("shared style resources use one adopted sheet before the local override", async () => {
@@ -4615,15 +4638,24 @@ const FORMAT_COMPONENT = {
   bindings: [],
   events: [],
   formatting: true,
+  capabilities: ["formatting"],
 };
 
-test("formatting components load the optional host before mounting", async () => {
-  const hostModule = { format: () => "1" };
-  const { loader, module, log } = await setup([FORMAT_COMPONENT], {
+function formatAdapter(format) {
+  return {
+    name: "formatting",
+    version: 1,
+    sync: { format: format || (() => "1") },
+  };
+}
+
+test("formatting components register the optional adapter before mounting", async () => {
+  const adapter = formatAdapter();
+  const { module, log } = await setup([FORMAT_COMPONENT], {
     formatHost: "mochi-format.js",
     hostModuleFactory: async (url) => {
       log.hostUrls.push(url);
-      global.MochiFormatHost = hostModule;
+      return adapter;
     },
   });
 
@@ -4633,17 +4665,36 @@ test("formatting components load the optional host before mounting", async () =>
 
   assert.equal(log.hostUrls.length, 1);
   assert.ok(log.hostUrls[0].endsWith("/mochi-format.js"));
-  assert.equal(module.__mochiFormatHost, hostModule);
+  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
+  assert.equal(module.__mochiHostCapabilities.formatting.sync.format(), "1");
+});
+
+test("adapter scripts can register through the loader registrar", async () => {
+  const adapter = formatAdapter();
+  const { module } = await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => {
+      global.MochiHostAdapter.register(adapter);
+    },
+  });
+
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
+  assert.ok(Object.isFrozen(adapter));
+  assert.ok(Object.isFrozen(adapter.sync));
 });
 
 test("concurrent formatting components share one host request", async () => {
   let calls = 0;
-  const hostModule = { format: () => "1" };
+  const adapter = formatAdapter();
   const { module } = await setup([FORMAT_COMPONENT], {
     formatHost: "mochi-format.js",
     hostModuleFactory: async () => {
       calls += 1;
-      global.MochiFormatHost = hostModule;
+      return adapter;
     },
   });
 
@@ -4653,15 +4704,15 @@ test("concurrent formatting components share one host request", async () => {
   await Promise.all([first._mochiReady, second._mochiReady]);
 
   assert.equal(calls, 1);
-  assert.equal(module.__mochiFormatHost, hostModule);
+  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
 });
 
-test("components without formatting never request the optional host", async () => {
+test("components without formatting never request the optional adapter", async () => {
   const { module, log } = await setup([COMPONENT], {
     formatHost: "mochi-format.js",
     hostModuleFactory: async (url) => {
       log.hostUrls.push(url);
-      global.MochiFormatHost = { format: () => "1" };
+      return formatAdapter();
     },
   });
 
@@ -4670,10 +4721,10 @@ test("components without formatting never request the optional host", async () =
   await element._mochiReady;
 
   assert.equal(log.hostUrls.length, 0);
-  assert.equal(module.__mochiFormatHost, undefined);
+  assert.equal(module.__mochiHostCapabilities, undefined);
 });
 
-test("formatting host failure rejects the mount with an actionable error", async () => {
+test("host adapter failure names the capability and component", async () => {
   await setup([FORMAT_COMPONENT], {
     formatHost: "mochi-format.js",
     hostModuleFactory: async () => {
@@ -4686,27 +4737,28 @@ test("formatting host failure rejects the mount with an actionable error", async
   const element = document.createElement("format-panel");
   document.body.appendChild(element);
 
-  await assert.rejects(element._mochiReady, /failed to load formatting host .*network down/);
+  await assert.rejects(element._mochiReady,
+    /host capability 'formatting' .*mochi-format\.js.*format-panel.*network down/);
   assert.equal(failures.length, 1);
-  assert.equal(failures[0].phase, "mount");
+  assert.equal(failures[0].phase, "capability");
   assert.match(failures[0].message, /mochi-format\.js/);
 });
 
-test("a failed formatting host load is evicted and can be retried", async () => {
+test("a failed host adapter load is evicted and can be retried", async () => {
   let attempts = 0;
-  const hostModule = { format: () => "1" };
+  const adapter = formatAdapter();
   const { module } = await setup([FORMAT_COMPONENT], {
     formatHost: "mochi-format.js",
     hostModuleFactory: async () => {
       attempts += 1;
       if (attempts === 1) throw new Error("network down");
-      global.MochiFormatHost = hostModule;
+      return adapter;
     },
   });
 
   const element = document.createElement("format-panel");
   document.body.appendChild(element);
-  await assert.rejects(element._mochiReady, /failed to load formatting host .*network down/);
+  await assert.rejects(element._mochiReady, /host capability 'formatting'.*network down/);
 
   element.remove();
   await flushLifecycle();
@@ -4715,10 +4767,10 @@ test("a failed formatting host load is evicted and can be retried", async () => 
 
   assert.equal(attempts, 2);
   assert.equal(element._mochiMountState, "mounted");
-  assert.equal(module.__mochiFormatHost, hostModule);
+  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
 });
 
-test("formatting host must register before a component mounts", async () => {
+test("a host adapter must register the declared capability before mount", async () => {
   await setup([FORMAT_COMPONENT], {
     formatHost: "mochi-format.js",
     hostModuleFactory: async () => {},
@@ -4727,5 +4779,187 @@ test("formatting host must register before a component mounts", async () => {
   const element = document.createElement("format-panel");
   document.body.appendChild(element);
 
-  await assert.rejects(element._mochiReady, /formatting host did not register/);
+  await assert.rejects(element._mochiReady, /did not register a capability/);
+});
+
+test("a host adapter version mismatch rejects the mount", async () => {
+  await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => ({
+      name: "formatting",
+      version: 2,
+      sync: { format: () => "1" },
+    }),
+  });
+
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady,
+    /registers version 2 but the manifest requires version 1/);
+});
+
+test("a host adapter cannot register an undeclared operation", async () => {
+  await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => ({
+      name: "formatting",
+      version: 1,
+      sync: { format: () => "1", extra: () => "2" },
+    }),
+  });
+
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady, /undeclared operation 'extra'/);
+});
+
+test("manifest capability operations must be sync or async", async () => {
+  const base = manifest([COMPONENT]);
+  base.capabilities = {
+    formatting: { version: 1, host: "mochi-format.js", operations: { format: "later" } },
+  };
+  await assert.rejects(
+    setup([COMPONENT], { manifest: base }),
+    /capability 'formatting' operation 'format' must be sync or async/
+  );
+});
+
+test("manifest capability adapters must be local artifacts", async () => {
+  const base = manifest([COMPONENT]);
+  base.capabilities = {
+    formatting: {
+      version: 1,
+      host: "https://cdn.example/mochi-format.js",
+      operations: { format: "sync" },
+    },
+  };
+  await assert.rejects(
+    setup([COMPONENT], { manifest: base }),
+    /capability 'formatting' has an invalid adapter location/
+  );
+});
+
+const PROBE_COMPONENT = {
+  tag_name: "probe-panel",
+  class_name: "ProbePanel",
+  chi_file: "probe-panel.chi",
+  html_template: '<p class="value">{@result}</p>',
+  css: "",
+  bindings: [],
+  events: [],
+  capabilities: ["probe"],
+};
+
+function probeManifest() {
+  const base = manifest([PROBE_COMPONENT]);
+  base.capabilities = {
+    probe: {
+      version: 1,
+      host: "mochi-probe.js",
+      operations: { ping: "async" },
+      packages: [],
+    },
+  };
+  return base;
+}
+
+function probeLine(instance, args) {
+  return JSON.stringify({
+    __host: "capability_async",
+    id: 1,
+    instance: String(instance),
+    capability: "probe",
+    operation: "ping",
+    args: args,
+    callback: "on_ping",
+  }) + "\n";
+}
+
+test("async host capabilities deliver typed results before the next patch", async () => {
+  const seen = [];
+  const { loader, module, log } = await setup([PROBE_COMPONENT], {
+    manifest: probeManifest(),
+    hostModuleFactory: async () => ({
+      name: "probe",
+      version: 1,
+      async: {
+        ping: async (argsJson) => {
+          seen.push(JSON.parse(argsJson));
+          return { count: 42, ok: true };
+        },
+      },
+    }),
+  });
+
+  module.reuseInstance(7);
+  module.queueEmit(probeLine(7, [41]));
+  const element = document.createElement("probe-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await flushLifecycle();
+
+  assert.deepEqual(seen, [[41]]);
+  assert.deepEqual(log.deliveredHostResults, [{
+    instance: "7",
+    callback: "on_ping",
+    envelope: { ok: true, value: { count: 42, ok: true }, error: null },
+  }]);
+  assert.equal(loader.debugStats().pendingHostRequests, 0);
+});
+
+test("async host capability errors reach the Ruby callback", async () => {
+  const { module, log } = await setup([PROBE_COMPONENT], {
+    manifest: probeManifest(),
+    hostModuleFactory: async () => ({
+      name: "probe",
+      version: 1,
+      async: {
+        ping: async () => { throw new Error("probe unavailable"); },
+      },
+    }),
+  });
+
+  module.reuseInstance(8);
+  module.queueEmit(probeLine(8, []));
+  const element = document.createElement("probe-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await flushLifecycle();
+
+  assert.deepEqual(log.deliveredHostResults[0].envelope, {
+    ok: false,
+    value: null,
+    error: "probe unavailable",
+  });
+});
+
+test("a host result for a disposed component is dropped", async () => {
+  let resolvePing;
+  const pending = new Promise((resolve) => { resolvePing = resolve; });
+  const { loader, module, log } = await setup([PROBE_COMPONENT], {
+    manifest: probeManifest(),
+    hostModuleFactory: async () => ({
+      name: "probe",
+      version: 1,
+      async: { ping: () => pending },
+    }),
+  });
+
+  module.reuseInstance(9);
+  module.queueEmit(probeLine(9, []));
+  const element = document.createElement("probe-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await flushLifecycle();
+  assert.equal(log.deliveredHostResults.length, 0);
+
+  element.remove();
+  await flushLifecycle();
+  assert.equal(loader.debugStats().pendingHostRequests, 0);
+
+  resolvePing({ late: true });
+  await flushLifecycle();
+  assert.equal(log.deliveredHostResults.length, 0);
 });

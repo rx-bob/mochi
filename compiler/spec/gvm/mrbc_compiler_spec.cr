@@ -552,7 +552,7 @@ RUBY
       begin
         format_source = File.read(File.join(__DIR__, "../../../fragments/batteries/format.rb"))
         host_source = File.join(dir, "format-host.js")
-        File.write(host_source, "global.MochiFormatHost = { format: function () { return '1'; } };\n")
+        File.write(host_source, "MochiHostAdapter.register({name: 'formatting', version: 1, sync: {format: function () { return '1'; }}});\n")
         component = build_mrbc_fixture(dir)
         component.manifest.formatting = true
         output = File.join(dir, "out")
@@ -577,6 +577,9 @@ RUBY
         File.exists?(File.join(output, "mochi-format.js")).should be_true
         manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
         manifest["format_host"].as_s.should eq("mochi-format.js")
+        manifest["capabilities"]["formatting"]["version"].as_i.should eq(1)
+        manifest["capabilities"]["formatting"]["operations"]["format"].as_s.should eq("sync")
+        compiler.host_adapter_paths.keys.should eq(["mochi-format.js"])
         descriptor = JSON.parse(
           File.read(File.join(output, manifest["components"][0]["descriptor"].as_s))
         )

@@ -21,6 +21,7 @@ class MrbcCompiler
   getter js_path : String?
   getter loader_path : String?
   getter format_host_path : String?
+  getter host_adapter_paths : Hash(String, String)
   getter package_graph : MochiPackaging::PackageGraph?
   getter warnings : Array(String)
 
@@ -30,6 +31,7 @@ class MrbcCompiler
     @loader_source : String? = ENV["MOCHI_LOADER"]?,
     @js_source : String? = ENV["MOCHI_GVM_JS"]?,
     @format_host_source : String? = ENV["MOCHI_FORMAT_HOST"]?,
+    @host_adapter_sources : Hash(String, String)? = nil,
   )
     @manifest_path = nil
     @chi_paths = [] of String
@@ -40,6 +42,7 @@ class MrbcCompiler
     @js_path = nil
     @loader_path = nil
     @format_host_path = nil
+    @host_adapter_paths = {} of String => String
     @package_graph = nil
     @warnings = [] of String
   end
@@ -86,6 +89,7 @@ class MrbcCompiler
     @ruby_package_paths.clear
     @prelude_path = nil
     @format_host_path = nil
+    @host_adapter_paths.clear
     @package_graph = nil
     @warnings.clear
     validate_component_inventory(components)
@@ -124,7 +128,13 @@ class MrbcCompiler
     end
 
     if format_host
-      components.each { |component| component.manifest.formatting = true }
+      graph.ensure_capability("formatting")
+      components.each do |component|
+        component.manifest.formatting = true
+        unless component.manifest.capabilities.includes?("formatting")
+          component.manifest.capabilities << "formatting"
+        end
+      end
     end
 
     sorted_components = graph.component_order
@@ -151,15 +161,22 @@ class MrbcCompiler
     @wasm_path = copy_asset(resolved_wasm_source, output_dir, "mochi-gvm.wasm")
     @js_path = copy_asset(resolved_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
-    uses_format_host = format_host || graph.has_capability?("formatting")
-    if uses_format_host
-      @format_host_path = copy_asset(resolved_format_host_source, output_dir, "mochi-format.js")
-      if @format_host_path.nil?
-        @warnings << "mochi-format.js not found; set MOCHI_FORMAT_HOST or add runtime/mochi-format.js"
+    used_hosts = graph.capabilities.values.compact_map(&.host)
+    used_hosts << "mochi-format.js" if format_host
+    used_hosts.uniq.sort.each do |host|
+      path = copy_asset(resolved_host_adapter_source(host), output_dir, host)
+      if path
+        @host_adapter_paths[host] = path
+      else
+        @warnings << "#{host} not found; add it under runtime/ or set its source explicitly"
       end
-    else
-      stale_format_host = File.join(output_dir, "mochi-format.js")
-      File.delete(stale_format_host) if File.exists?(stale_format_host)
+    end
+    @format_host_path = @host_adapter_paths["mochi-format.js"]?
+    MochiPackaging::CAPABILITY_DEFINITIONS.each do |definition|
+      host = definition.host
+      next if host.nil? || used_hosts.includes?(host)
+      stale = File.join(output_dir, host)
+      File.delete(stale) if File.exists?(stale)
     end
 
     if @wasm_path.nil?
@@ -374,8 +391,16 @@ class MrbcCompiler
     @loader_source || self.class.find_loader
   end
 
-  private def resolved_format_host_source : String?
-    @format_host_source || self.class.find_format_host
+  private def resolved_host_adapter_source(host : String) : String?
+    if sources = @host_adapter_sources
+      if source = sources[host]?
+        return source
+      end
+    end
+    if host == "mochi-format.js" && (source = @format_host_source)
+      return source
+    end
+    self.class.find_host_adapter(host)
   end
 
   private def self.search_roots : Array(String)
@@ -396,8 +421,29 @@ class MrbcCompiler
   @@js_resolved : Bool = false
   @@cached_loader : String?
   @@loader_resolved : Bool = false
-  @@cached_format_host : String?
-  @@format_host_resolved : Bool = false
+  @@cached_host_adapters = {} of String => String?
+  @@host_adapter_resolved = Set(String).new
+
+  def self.find_format_host : String?
+    find_host_adapter("mochi-format.js")
+  end
+
+  def self.find_host_adapter(host : String) : String?
+    host = File.basename(host)
+    return @@cached_host_adapters[host]? if @@host_adapter_resolved.includes?(host)
+    @@host_adapter_resolved << host
+
+    candidates = [] of String
+    search_roots.each do |root|
+      candidates << File.join(root, "runtime", host)
+      candidates << File.join(root, "..", "runtime", host)
+      candidates << File.join(root, "..", "..", "runtime", host)
+      candidates << File.join(root, "..", "mochi-gvm", "runtime", host)
+      candidates << File.join(root, "..", "..", "mochi-gvm", "runtime", host)
+    end
+
+    @@cached_host_adapters[host] = first_existing_file(candidates)
+  end
 
   def self.find_mrbc : String?
     return @@cached_mrbc if @@mrbc_resolved
@@ -462,22 +508,6 @@ class MrbcCompiler
     @@cached_loader = first_existing_file(candidates)
   end
 
-  def self.find_format_host : String?
-    return @@cached_format_host if @@format_host_resolved
-    @@format_host_resolved = true
-
-    candidates = [] of String
-    search_roots.each do |root|
-      candidates << File.join(root, "runtime", "mochi-format.js")
-      candidates << File.join(root, "..", "runtime", "mochi-format.js")
-      candidates << File.join(root, "..", "..", "runtime", "mochi-format.js")
-      candidates << File.join(root, "..", "mochi-gvm", "runtime", "mochi-format.js")
-      candidates << File.join(root, "..", "..", "mochi-gvm", "runtime", "mochi-format.js")
-    end
-
-    @@cached_format_host = first_existing_file(candidates)
-  end
-
   private def self.first_existing_file(candidates : Array(String)) : String?
     candidates.find { |path| File.file?(path) }
   end
@@ -519,6 +549,13 @@ class MrbcCompiler
                       json.field "version", capability.version
                       if host = capability.host
                         json.field "host", host
+                      end
+                      json.field "operations" do
+                        json.object do
+                          capability.operations.sort_by(&.name).each do |operation|
+                            json.field operation.name, operation.mode
+                          end
+                        end
                       end
                       json.field "packages" do
                         json.array do

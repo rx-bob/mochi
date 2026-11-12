@@ -285,6 +285,8 @@ RUBY
       graph = dependency_graph(root, [plain, formatted], [format], [helper])
       graph.has_capability?("formatting").should be_true
       graph.capabilities["formatting"].host.should eq("mochi-format.js")
+      graph.capabilities["formatting"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"format", "sync"}])
       plain.manifest.capabilities.should eq([] of String)
       plain.manifest.formatting.should be_false
       formatted.manifest.capabilities.should eq(["formatting"])

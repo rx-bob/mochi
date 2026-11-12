@@ -1,8 +1,9 @@
 // mochi-format.js - optional browser Intl adapter for MochiFormat.
 //
-// The VM calls this host synchronously through the small formatting bridge in
-// mochi-gvm. It is a separate script so applications that never use MochiFormat
-// do not request it.
+// The loader installs the capability registrar before requesting this script.
+// The VM then calls the registered synchronous `format` operation through the
+// small host-dispatch bridge in mochi-gvm. It is a separate script so
+// applications that never use MochiFormat do not request it.
 (function (global) {
   "use strict";
 
@@ -264,6 +265,25 @@
     fail("unsupported formatting kind '" + kind + "'");
   }
 
+  // Host capability contract: one JSON argument array, one typed JSON result.
+  function formatArgs(argsJson) {
+    var args;
+    try {
+      args = JSON.parse(argsJson);
+    } catch (error) {
+      fail("invalid formatting arguments: " + (error.message || error));
+    }
+    if (!Array.isArray(args) || args.length < 2) {
+      fail("formatting requires kind and value arguments");
+    }
+    var kind = args[0];
+    var value = args[1];
+    var options = args[2] && typeof args[2] === "object" ? args[2] : {};
+    if (kind === "number") return formatNumber(value, options);
+    if (kind === "date") return formatDate(value, options);
+    fail("unsupported formatting kind '" + String(kind) + "'");
+  }
+
   function debugStats() {
     return {
       numberFormatters: numberCache.size,
@@ -271,7 +291,17 @@
     };
   }
 
-  var host = { format: format, debugStats: debugStats };
-  global.MochiFormatHost = host;
+  var host = {
+    name: "formatting",
+    version: 1,
+    sync: {
+      format: formatArgs
+    },
+    format: format,
+    debugStats: debugStats
+  };
+  if (global.MochiHostAdapter && typeof global.MochiHostAdapter.register === "function") {
+    global.MochiHostAdapter.register(host);
+  }
   if (typeof module === "object" && module.exports) module.exports = host;
 })(typeof globalThis !== "undefined" ? globalThis : window);

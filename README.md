@@ -459,15 +459,70 @@ silently returning an imprecise JavaScript number. Use the
 minor-unit total to `currency`.
 
 Formatting uses the browser's built-in `Intl` facilities through an optional
-host module. The compiler writes `mochi-format.js` and records the `formatting`
-capability in `mochi-manifest.json` only when a reachable Ruby package owns
-`MochiFormat`. The loader requests that module before mounting a component
-whose dependency closure includes the capability; a component or application
-that does not use formatting neither ships nor requests it. The bundle contains
-no locale database. If the host module is missing or fails to load, the mount
-fails with a Ruby-facing `mochi:error` instead of an unknown-method failure.
-Formatter instances are cached by locale and options, with a bounded cache so a
-long-lived application cannot grow it without limit.
+host adapter. The compiler writes `mochi-format.js` and records the
+`formatting` capability in `mochi-manifest.json` only when a reachable Ruby
+package owns `MochiFormat`. The manifest entry names the adapter, its version,
+and the `format` operation as `sync`. The loader requests the adapter before
+mounting a component whose dependency closure includes the capability and
+validates the adapter's name, version, and operation table before installing
+it. A component or application that does not use formatting neither ships nor
+requests it. The bundle contains no locale database. If the adapter is missing,
+fails to load, or registers a different version or operation, the mount fails
+with a Ruby-facing `mochi:error` that names the component and capability instead
+of an unknown-method failure. Formatter instances are cached by locale and
+options, with a bounded cache so a long-lived application cannot grow it
+without limit.
+
+### Host capability adapters
+
+Optional Ruby capabilities that need browser facilities use one internal
+adapter contract. Application code still calls ordinary Ruby APIs such as
+`MochiFormat`; it never writes a promise, imports a JavaScript module, or adds a
+script tag. The compiler and loader own the adapter lifecycle.
+
+A manifest capability record has this shape:
+
+```json
+"capabilities": {
+  "formatting": {
+    "version": 1,
+    "host": "mochi-format.js",
+    "operations": { "format": "sync" },
+    "packages": ["ruby:lib/mochi_builtin_format.rb"]
+  }
+}
+```
+
+The adapter is a local build artifact named by the manifest. It registers
+itself with the loader while its script runs:
+
+```js
+MochiHostAdapter.register({
+  name: "formatting",
+  version: 1,
+  sync: {
+    format: function (argsJson) { /* return one typed JSON value */ }
+  }
+  // async: { operation: function (argsJson) { return Promise.resolve(value); } }
+});
+```
+
+Synchronous operations receive one JSON argument array and return one typed
+JSON value, including strings, numbers, booleans, arrays, and hashes. The VM
+dispatches only a declared capability and operation; it never evaluates
+JavaScript supplied by application code. Asynchronous operations return a
+promise. Their result reaches the Ruby caller through the documented callback
+Hash `{ok:, value:, error:}`, carrying the requesting instance and mount
+attempt. A completion that arrives after unmount or after a replacement mount
+is dropped, and unmount removes the pending request. Unknown capability names,
+unsupported versions, undeclared operations, and adapter load failures are
+explicit errors.
+
+The fixed capability dispatch bridge is part of the core WASM artifact because
+the VM must be able to call a registered adapter synchronously. Splitting
+`.chi` files or adapters does not remove that small bridge from the WASM; only
+the adapter implementation itself is omitted for applications that do not
+declare the capability.
 
 ### Synchronous event modifiers and focus
 
@@ -597,11 +652,11 @@ cd mochi
 task run
 ```
 
-The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes one local JavaScript adapter per host capability that a reachable package declares; today that is `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
 
-`mochi-manifest.json` is the compact entry index for the bundle. It records a `schema_version` for the bundle format and lists each component's identity, dependency package, and descriptor location. Templates, local styles, bindings, props, and events live in the per-component descriptor instead of the entry manifest. A loader that does not support the bundle schema fails before it runs Ruby bytecode, and a descriptor whose schema does not match the entry manifest fails with the component name. Each component descriptor names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
+`mochi-manifest.json` is the compact entry index for the bundle. It records a `schema_version` for the bundle format and lists each component's identity, dependency package, and descriptor location. Templates, local styles, bindings, props, and events live in the per-component descriptor instead of the entry manifest. A loader that does not support the bundle schema fails before it runs Ruby bytecode, and a descriptor whose schema does not match the entry manifest fails with the component name. Each component descriptor names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. An optional capability is a versioned record with a local adapter location and an explicit table of synchronous or asynchronous operations. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
 
-On first use, the loader fetches that component's descriptor, its shared style files, and its dependency closure before mounting. Descriptor, package bytecode, style text, formatting host, and parsed template data are cached immutably, while every component instance keeps its own VM state. Concurrent instances share one request per resource, failed downloads are evicted so a reconnect can retry, and a component removed during loading is never mounted.
+On first use, the loader fetches that component's descriptor, its shared style files, its host adapters, and its dependency closure before mounting. Descriptor, package bytecode, style text, registered host adapters, and parsed template data are cached immutably, while every component instance keeps its own VM state. Concurrent instances share one request per resource, failed downloads are evicted so a reconnect can retry, and a component removed during loading is never mounted. Adapter loading failures name the component and capability instead of falling back to a global script or arbitrary JavaScript evaluation.
 
 ### Compiler Tasks
 
@@ -617,7 +672,8 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task gvm:fmt` | Check `mochi-gvm` Goose formatting |
 | `task gvm:wasm` | Rebuild the `mochi-gvm` WASM and JS artifacts |
 | `task generate-batteries` | Regenerate the built-in battery sources |
-| `task check` | Run specs, GVM tests, and the GVM end-to-end test |
+| `task runtime:test` | Run the loader and host adapter Node tests |
+| `task check` | Run runtime tests, compiler specs, GVM tests, and the GVM end-to-end test |
 
 ### Usage
 

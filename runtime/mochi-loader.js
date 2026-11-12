@@ -27,6 +27,10 @@
     styleTextCache: new Map(),
     componentRuntimeCache: new Map(),
     hostModulePromises: new Map(),
+    hostAdapters: new Map(),
+    hostAdapterRegistrations: new Map(),
+    loadingHostAdapterUrl: null,
+    pendingHostRequests: new Map(),
     internCache: new Map(),
     tags: new Set(),
     elements: new Map(),
@@ -506,6 +510,122 @@
     });
   }
 
+  function hostRequestKey(request) {
+    return String(request.instance) + ":" + String(request.id);
+  }
+
+  function hostRequestElement(request) {
+    var element = state.elements.get(String(request.instance));
+    if (!element || element._mochiDisconnected || element._mochiUnmounted) return null;
+    if (request.mountToken !== undefined && element._mochiMountToken !== request.mountToken) {
+      return null;
+    }
+    return element;
+  }
+
+  function writeHostResult(module, element, request, envelope) {
+    var offset = module._mochi_host_inbox_offset ? module._mochi_host_inbox_offset() : 0;
+    var capacity = module._mochi_host_inbox_capacity ? module._mochi_host_inbox_capacity() : 0;
+    var bytes = encode(JSON.stringify(envelope));
+    if (!offset || capacity <= 0 || bytes.length + 1 > capacity) {
+      throw new Error("mochi-loader: host capability response exceeds inbox capacity");
+    }
+    module.HEAPU8.set(bytes, offset);
+    var delivered = false;
+    withUtf8(module, request.callback, function (pointer, length) {
+      delivered = module._mochi_deliver_host_result(
+        element._mochiInstance, pointer, length, bytes.length) === 0;
+    });
+    if (!delivered) {
+      throw new Error("mochi-loader: host capability callback failed for " +
+        request.callback + ": " + lastError(module));
+    }
+  }
+
+  function deliverHostResult(module, element, request, envelope) {
+    state.pendingHostRequests.delete(hostRequestKey(request));
+    var liveElement = hostRequestElement(request);
+    if (!liveElement || liveElement !== element) return;
+    try {
+      writeHostResult(module, element, request, envelope);
+      if (!element._mochiDisconnected) {
+        applyPatches(element, module);
+        drainEmits(module);
+        drainFetches(module);
+      }
+    } catch (error) {
+      reportError(element, "capability", request && request.callback, error, module);
+    }
+  }
+
+  // An async adapter request carries the live mount attempt. A result that
+  // arrives after disposal or a replacement mount is dropped instead of
+  // reaching a different component that reused the VM instance slot.
+  function startHostCapability(module, entry) {
+    var request = {
+      id: entry.id,
+      instance: entry.instance,
+      capability: typeof entry.capability === "string" ? entry.capability : "",
+      operation: typeof entry.operation === "string" ? entry.operation : "",
+      callback: typeof entry.callback === "string" ? entry.callback : ""
+    };
+    var element = hostRequestElement(request);
+    if (!element) return;
+    request.mountToken = element._mochiMountToken;
+
+    var adapter = state.hostAdapters.get(request.capability);
+    var operation = adapter && adapter.async && adapter.async[request.operation];
+    if (typeof operation !== "function") {
+      deliverHostResult(module, element, request, {
+        ok: false,
+        value: null,
+        error: "host capability '" + request.capability + "' has no async operation '" +
+          request.operation + "'"
+      });
+      return;
+    }
+
+    state.pendingHostRequests.set(hostRequestKey(request), request);
+    var argsJson;
+    try {
+      argsJson = JSON.stringify(entry.args === undefined ? [] : entry.args);
+    } catch (error) {
+      deliverHostResult(module, element, request, {
+        ok: false,
+        value: null,
+        error: "host capability arguments are not serializable: " +
+          (error && error.message ? error.message : String(error))
+      });
+      return;
+    }
+
+    var result;
+    try {
+      result = operation.call(adapter.async, argsJson);
+    } catch (error) {
+      deliverHostResult(module, element, request, {
+        ok: false,
+        value: null,
+        error: error && error.message ? error.message : String(error)
+      });
+      return;
+    }
+
+    Promise.resolve(result).then(function (value) {
+      deliverHostResult(module, element, request, {
+        ok: true,
+        value: value === undefined ? null : value,
+        error: null
+      });
+    }, function (error) {
+      deliverHostResult(module, element, request, {
+        ok: false,
+        value: null,
+        error: error && error.message ? error.message : String(error)
+      });
+    });
+  }
+
   // Drains Ruby `Mochi.fetch` requests. Requests for instances that have not
   // mounted yet stay pending so a concurrent mount cannot consume them.
   function drainFetches(module) {
@@ -625,6 +745,10 @@
       if (!restoreRememberedFocus(restoreHost)) {
         reportFocusError(restoreHost, "restore_focus", "no connected focus target to restore", module);
       }
+      return;
+    }
+    if (hostKind === "capability_async") {
+      startHostCapability(module, entry);
       return;
     }
     if (hostKind === "timer") {
@@ -1217,52 +1341,238 @@
     return promise;
   }
 
-  // Optional host adapters must be registered before a component can call them
-  // from initialize or its first binding. The manifest names the adapter; the
-  // promise map keeps concurrent mounts to one request.
-  function formatHostPath(manifest) {
-    if (!manifest) return null;
-    var capability = manifest.capabilities && manifest.capabilities.formatting;
-    if (capability && capability.host) return capability.host;
-    return manifest.format_host || null;
+  // Optional host adapters register a typed operation table before a
+  // component can call them from initialize or its first binding. The
+  // manifest names each adapter and whether its operations are synchronous or
+  // asynchronous; the promise map keeps concurrent mounts to one request.
+  function localAdapterLocation(host) {
+    if (typeof host !== "string" || host.length === 0) return false;
+    // Capability adapters are local build artifacts. Reject schemes and
+    // protocol-relative URLs so a manifest cannot pull code from a CDN.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(host)) return false;
+    return host.indexOf("//") !== 0;
   }
 
-  function ensureFormatHost(manifest, manifestUrl) {
-    var host = formatHostPath(manifest);
-    if (!host) return Promise.resolve();
-    var url = absoluteUrl(host, manifestUrl);
-    var existing = state.hostModulePromises.get(url);
-    if (existing) return existing;
+  function capabilityEntry(manifest, name) {
+    if (!manifest) return null;
+    var entry = manifest.capabilities && manifest.capabilities[name];
+    if (entry) return entry;
+    if (name === "formatting" && manifest.format_host) {
+      return {
+        version: 1,
+        host: manifest.format_host,
+        operations: { format: "sync" },
+        packages: []
+      };
+    }
+    return null;
+  }
 
-    var promise = loadRuntime(manifest, manifestUrl).then(function (module) {
-      if (module.__mochiFormatHost) return module;
-      if (global.MochiFormatHost) {
-        module.__mochiFormatHost = global.MochiFormatHost;
-        return module;
-      }
-      var load = loader.hostModuleFactory
-        ? Promise.resolve(loader.hostModuleFactory(url))
-        : loadScript(url);
-      return load.then(function () {
-        if (!global.MochiFormatHost || typeof global.MochiFormatHost.format !== "function") {
-          throw new Error("formatting host did not register");
-        }
-        module.__mochiFormatHost = global.MochiFormatHost;
-        return module;
+  function capabilityOperations(capability) {
+    var operations = capability && capability.operations;
+    if (operations && typeof operations === "object" && !Array.isArray(operations)) {
+      return operations;
+    }
+    // Bundles from before operation metadata still have the one synchronous
+    // formatting operation. New capabilities always declare their table.
+    return capability && capability.host ? { format: "sync" } : {};
+  }
+
+  function componentCapabilities(component) {
+    var names = [];
+    if (component && Array.isArray(component.capabilities)) {
+      component.capabilities.forEach(function (name) {
+        if (typeof name === "string" && names.indexOf(name) === -1) names.push(name);
       });
-    }).catch(function (error) {
+    }
+    if (component && component.formatting === true && names.indexOf("formatting") === -1) {
+      names.push("formatting");
+    }
+    return names.sort();
+  }
+
+  function ensureHostAdapterRegistrar() {
+    var existing = global.MochiHostAdapter;
+    if (existing && existing.__mochiLoaderRegistrar === true) return;
+    global.MochiHostAdapter = {
+      __mochiLoaderRegistrar: true,
+      register: function (spec) {
+        var url = "";
+        if (global.document && global.document.currentScript) {
+          url = global.document.currentScript.src || "";
+        }
+        if (!url) url = state.loadingHostAdapterUrl || "";
+        var registrations = state.hostAdapterRegistrations.get(url);
+        if (!registrations) {
+          registrations = [];
+          state.hostAdapterRegistrations.set(url, registrations);
+        }
+        registrations.push(spec);
+      }
+    };
+  }
+
+  function hostAdapterError(name, host, tag, detail) {
+    var label = tag ? " for " + tag : "";
+    var error = new Error("mochi-loader: host capability '" + name +
+      "' (" + host + ")" + label + ": " + detail);
+    error.mochiCapability = name;
+    error.mochiPhase = "capability";
+    return error;
+  }
+
+  function validateHostAdapterSpec(spec, name, capability, url) {
+    if (!spec || typeof spec !== "object") {
+      throw new Error("adapter " + url + " did not register a capability object");
+    }
+    if (spec.name !== name) {
+      throw new Error("adapter " + url + " registered as '" + spec.name +
+        "' instead of '" + name + "'");
+    }
+    if (spec.version !== capability.version) {
+      throw new Error("adapter " + url + " registers version " + spec.version +
+        " but the manifest requires version " + capability.version);
+    }
+
+    var operations = capabilityOperations(capability);
+    var declared = Object.keys(operations).sort();
+    ["sync", "async"].forEach(function (mode) {
+      var group = spec[mode];
+      if (group === undefined) return;
+      if (!group || typeof group !== "object" || Array.isArray(group)) {
+        throw new Error("adapter " + url + " has an invalid " + mode + " table");
+      }
+      Object.keys(group).forEach(function (operation) {
+        if (!Object.prototype.hasOwnProperty.call(operations, operation)) {
+          throw new Error("adapter " + url + " registers undeclared operation '" +
+            operation + "'");
+        }
+        if (operations[operation] !== mode) {
+          throw new Error("adapter " + url + " registers operation '" + operation +
+            "' as " + mode + " but the manifest declares " + operations[operation]);
+        }
+        if (typeof group[operation] !== "function") {
+          throw new Error("adapter " + url + " operation '" + operation +
+            "' is not a function");
+        }
+      });
+    });
+    declared.forEach(function (operation) {
+      var mode = operations[operation];
+      var group = spec[mode];
+      if (!group || typeof group[operation] !== "function") {
+        throw new Error("adapter " + url + " is missing " + mode +
+          " operation '" + operation + "'");
+      }
+    });
+    return spec;
+  }
+
+  function installHostAdapter(module, name, capability, spec, url) {
+    var hosts = module.__mochiHostCapabilities;
+    if (!hosts) {
+      hosts = Object.create(null);
+      module.__mochiHostCapabilities = hosts;
+    }
+    var existing = hosts[name];
+    if (existing) {
+      if (existing.version !== spec.version) {
+        throw new Error("host capability '" + name + "' is already registered at version " +
+          existing.version + ", not " + spec.version);
+      }
+      return existing;
+    }
+    if (spec.sync) Object.freeze(spec.sync);
+    if (spec.async) Object.freeze(spec.async);
+    Object.freeze(spec);
+    hosts[name] = spec;
+    state.hostAdapters.set(name, spec);
+    return spec;
+  }
+
+  async function loadHostAdapter(module, name, capability, manifest, manifestUrl, tag) {
+    var url = absoluteUrl(capability.host, manifestUrl);
+    var hosts = module.__mochiHostCapabilities;
+    var installed = hosts && hosts[name];
+    if (installed) {
+      if (installed.version !== capability.version) {
+        throw hostAdapterError(name, capability.host, tag,
+          "registered version " + installed.version + " does not match manifest version " +
+          capability.version);
+      }
+      return installed;
+    }
+
+    var existing = state.hostModulePromises.get(url);
+    if (existing) {
+      await existing;
+      return module.__mochiHostCapabilities[name];
+    }
+
+    var promise = (async function () {
+      ensureHostAdapterRegistrar();
+      state.loadingHostAdapterUrl = url;
+      var returned = null;
+      try {
+        if (loader.hostModuleFactory) {
+          returned = await loader.hostModuleFactory(url);
+        } else {
+          await loadScript(url);
+        }
+      } finally {
+        state.loadingHostAdapterUrl = null;
+      }
+
+      var registrations = state.hostAdapterRegistrations.get(url) || [];
+      state.hostAdapterRegistrations.delete(url);
+      if (returned && typeof returned === "object") registrations = registrations.concat([returned]);
+      if (registrations.length === 0) {
+        throw new Error("adapter " + url + " did not register a capability");
+      }
+
+      var installedSpec = null;
+      registrations.forEach(function (spec) {
+        var specName = spec && spec.name;
+        var declared = capabilityEntry(manifest, specName);
+        if (!declared || !declared.host ||
+            absoluteUrl(declared.host, manifestUrl) !== url) {
+          throw new Error("adapter " + url + " registered unknown capability '" +
+            specName + "'");
+        }
+        validateHostAdapterSpec(spec, specName, declared, url);
+        var installed = installHostAdapter(module, specName, declared, spec, url);
+        if (specName === name) installedSpec = installed;
+      });
+      if (!installedSpec) {
+        throw new Error("adapter " + url + " did not register capability '" + name + "'");
+      }
+      return installedSpec;
+    })().catch(function (error) {
       state.hostModulePromises.delete(url);
-      throw new Error("mochi-loader: failed to load formatting host " + url + ": " +
-        (error && error.message ? error.message : String(error)));
+      state.hostAdapterRegistrations.delete(url);
+      throw hostAdapterError(name, capability.host, tag,
+        error && error.message ? error.message : String(error));
     });
 
     state.hostModulePromises.set(url, promise);
     return promise;
   }
 
-  function componentNeedsFormatting(component) {
-    return component.formatting === true ||
-      (Array.isArray(component.capabilities) && component.capabilities.indexOf("formatting") !== -1);
+  async function ensureHostAdapters(component, manifest, manifestUrl) {
+    var tag = component.tag_name || component.class_name || "component";
+    var names = componentCapabilities(component);
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      var capability = capabilityEntry(manifest, name);
+      if (!capability) {
+        throw hostAdapterError(name, "(missing)", tag,
+          "the manifest does not declare this capability");
+      }
+      if (!capability.host) continue;
+      var module = await loadRuntime(manifest, manifestUrl);
+      await loadHostAdapter(module, name, capability, manifest, manifestUrl, tag);
+    }
+    return state.activeModule;
   }
 
   function loadPackage(id, manifest, manifestUrl, trail) {
@@ -1290,8 +1600,16 @@
 
     return chain.then(function () {
       if (descriptor.kind === "capability") {
-        if (id === "capability:formatting") return ensureFormatHost(manifest, manifestUrl);
-        return null;
+        var name = String(id).replace(/^capability:/, "");
+        var capability = capabilityEntry(manifest, name);
+        if (!capability) {
+          throw hostAdapterError(name, "(missing)", null,
+            "the manifest does not declare this capability");
+        }
+        if (!capability.host) return null;
+        return loadRuntime(manifest, manifestUrl).then(function (module) {
+          return loadHostAdapter(module, name, capability, manifest, manifestUrl, name);
+        });
       }
       if (!descriptor.file) {
         throw new Error("mochi-loader: package '" + id + "' has no bytecode file");
@@ -1301,14 +1619,7 @@
   }
 
   async function loadComponentClass(component, manifest, manifestUrl) {
-    var needsFormatting = componentNeedsFormatting(component);
-    if (needsFormatting) {
-      if (!formatHostPath(manifest)) {
-        throw new Error("mochi-loader: formatting capability requested by " +
-          (component.tag_name || component.class_name) + " but the manifest has no host");
-      }
-      await ensureFormatHost(manifest, manifestUrl);
-    }
+    await ensureHostAdapters(component, manifest, manifestUrl);
 
     if (manifest && manifest.packages && (component.package || (Array.isArray(component.dependencies) && component.dependencies.length > 0))) {
       var dependencies = Array.isArray(component.dependencies)
@@ -3474,6 +3785,9 @@
         state.timers.forEach(function (record, timerId) {
           if (record.instance === key) clearTimerEntry(timerId);
         });
+        state.pendingHostRequests.forEach(function (request, requestKey) {
+          if (String(request.instance) === key) state.pendingHostRequests.delete(requestKey);
+        });
         if (state.elements.get(key) === this) state.elements.delete(key);
 
         try {
@@ -3696,6 +4010,47 @@
     if (!manifest.packages || typeof manifest.packages !== "object" || Array.isArray(manifest.packages)) {
       throw new Error("mochi-loader: manifest " + manifestUrl + " has no package descriptors");
     }
+    if (manifest.format_host !== undefined && !localAdapterLocation(manifest.format_host)) {
+      throw new Error("mochi-loader: manifest " + manifestUrl +
+        " has an invalid formatting adapter location");
+    }
+    if (manifest.capabilities !== undefined) {
+      if (!manifest.capabilities || typeof manifest.capabilities !== "object" ||
+          Array.isArray(manifest.capabilities)) {
+        throw new Error("mochi-loader: manifest " + manifestUrl +
+          " has an invalid capabilities table");
+      }
+      Object.keys(manifest.capabilities).sort().forEach(function (name) {
+        var capability = manifest.capabilities[name];
+        if (!capability || typeof capability !== "object" || Array.isArray(capability)) {
+          throw new Error("mochi-loader: capability '" + name +
+            "' must be an object in " + manifestUrl);
+        }
+        if (!Number.isInteger(capability.version) || capability.version <= 0) {
+          throw new Error("mochi-loader: capability '" + name +
+            "' has no supported version in " + manifestUrl);
+        }
+        if (capability.host !== undefined && capability.host !== null &&
+            (!localAdapterLocation(capability.host))) {
+          throw new Error("mochi-loader: capability '" + name +
+            "' has an invalid adapter location in " + manifestUrl);
+        }
+        if (capability.operations !== undefined) {
+          if (!capability.operations || typeof capability.operations !== "object" ||
+              Array.isArray(capability.operations)) {
+            throw new Error("mochi-loader: capability '" + name +
+              "' has an invalid operation table in " + manifestUrl);
+          }
+          Object.keys(capability.operations).forEach(function (operation) {
+            var mode = capability.operations[operation];
+            if (mode !== "sync" && mode !== "async") {
+              throw new Error("mochi-loader: capability '" + name + "' operation '" +
+                operation + "' must be sync or async in " + manifestUrl);
+            }
+          });
+        }
+      });
+    }
     return manifest;
   }
 
@@ -3736,6 +4091,7 @@
       elements: state.elements.size,
       timers: state.timers.size,
       pendingFetches: state.pendingFetches.length,
+      pendingHostRequests: state.pendingHostRequests.size,
       unmountedInstances: state.unmountedInstances.size,
       stateObjects: module && typeof module._mochi_state_object_count === "function"
         ? Number(module._mochi_state_object_count()) : -1,

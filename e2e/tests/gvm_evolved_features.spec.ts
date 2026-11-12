@@ -2595,6 +2595,7 @@ end
   expect(formatManifest.capabilities.formatting).toMatchObject({
     version: 1,
     host: "mochi-format.js",
+    operations: { format: "sync" },
   });
   const formatDescriptor = readComponentDescriptor(bundleDir, formatManifest, "format-screen");
   expect(formatDescriptor.formatting).toBe(true);
@@ -3002,8 +3003,8 @@ end
     const failure = await page.evaluate(
       () => (window as any).__mochiFormatFailures[0],
     );
-    expect(failure.phase).toBe("mount");
-    expect(failure.message).toMatch(/failed to load formatting host/);
+    expect(failure.phase).toBe("capability");
+    expect(failure.message).toMatch(/host capability 'formatting'/);
     expect(failure.message).toMatch(/mochi-format\.js/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

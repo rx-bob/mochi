@@ -16,10 +16,38 @@ module MochiPackaging
   SCHEMA_VERSION   = 2
   RUNTIME_REQUIRES = Set{"json", "await"}
 
+  # A host capability operation is either a synchronous WASM-to-JS call or an
+  # asynchronous request whose result is delivered back to a live component.
+  record CapabilityOperation,
+    name : String,
+    mode : String
+
+  # Build-time registry for optional capabilities backed by a local browser
+  # adapter. A definition only enters the manifest when a reachable package
+  # exports its Ruby API; the compiler never bundles an adapter just because it
+  # exists in the repository.
+  record CapabilityDefinition,
+    name : String,
+    version : Int32,
+    host : String?,
+    exporting : String,
+    operations : Array(CapabilityOperation)
+
+  CAPABILITY_DEFINITIONS = [
+    CapabilityDefinition.new(
+      "formatting",
+      1,
+      "mochi-format.js",
+      "MochiFormat",
+      [CapabilityOperation.new("format", "sync")]
+    ),
+  ]
+
   record Capability,
     name : String,
     version : Int32,
     host : String?,
+    operations : Array(CapabilityOperation),
     packages : Array(String)
 
   class PackageNode
@@ -499,35 +527,51 @@ module MochiPackaging
 
     def resolve_capabilities : Nil
       @capabilities = {} of String => Capability
-      format_packages = @packages.values
-        .select { |node| node.exports.includes?("MochiFormat") }
-        .map(&.id)
-        .sort
-      return if format_packages.empty?
-
       reachable = reachable_packages(@entry_packages)
-      active_packages = format_packages.select { |id| reachable.includes?(id) }
-      return if active_packages.empty?
+      CAPABILITY_DEFINITIONS.each do |definition|
+        active_packages = @packages.values
+          .select { |node| node.exports.includes?(definition.exporting) && reachable.includes?(node.id) }
+          .map(&.id)
+          .sort
+        next if active_packages.empty?
 
-      @capabilities["formatting"] = Capability.new(
-        "formatting",
-        1,
-        "mochi-format.js",
-        active_packages
+        @capabilities[definition.name] = Capability.new(
+          definition.name,
+          definition.version,
+          definition.host,
+          definition.operations,
+          active_packages
+        )
+      end
+    end
+
+    # Legacy callers can request a capability explicitly instead of relying on
+    # an exporting package. Keep the manifest shape identical either way.
+    def ensure_capability(name : String) : Nil
+      return if @capabilities.has_key?(name)
+      definition = CAPABILITY_DEFINITIONS.find { |candidate| candidate.name == name }
+      return unless definition
+
+      @capabilities[name] = Capability.new(
+        definition.name,
+        definition.version,
+        definition.host,
+        definition.operations,
+        [] of String
       )
     end
 
     def sync_components : Nil
-      capability_ids = capability_package_ids
       @component_order.each do |component|
         node = @packages[self.class.component_package_id(component.manifest.tag_name)]?
         next unless node
 
         closure = reachable_from(node.id)
-        if capability_ids.any? { |id| closure.includes?(id) }
-          node.capabilities << "formatting"
-          node.capabilities = node.capabilities.uniq.sort
+        @capabilities.each_value do |capability|
+          next unless capability.packages.any? { |id| closure.includes?(id) }
+          node.capabilities << capability.name
         end
+        node.capabilities = node.capabilities.uniq.sort
 
         component.manifest.package_id = node.id
         component.manifest.dependencies = node.dependencies
