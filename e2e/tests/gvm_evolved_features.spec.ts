@@ -28,9 +28,13 @@ const CONTENT_TYPES: Record<string, string> = {
 
 function startStaticServer(
   rootDir: string,
-  options: { spaFallback?: boolean } = {}
+  options: {
+    spaFallback?: boolean;
+    apiHandler?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean;
+  } = {}
 ): Promise<{ server: http.Server; baseURL: string }> {
   const server = http.createServer((request, response) => {
+    if (options.apiHandler && options.apiHandler(request, response)) return;
     const requestPath = decodeURIComponent((request.url || "/").split("?")[0]);
     if (requestPath === "/favicon.ico") {
       response.writeHead(204);
@@ -1697,11 +1701,31 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     // 4. Costs screen dynamic period & harness filtering
     await topbar.locator('button[data-screen="costs"]').click();
     const costs = root.locator("costs-screen");
-    await expect(costs.locator(".summary.primary strong")).toHaveText("183k");
+    await expect(costs.locator(".summary.primary strong")).toHaveText("184K");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "183500");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "73400");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "64225");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "45875");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "834");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "56");
+    await expect(costs.locator("costs-daily-chart .day")).toHaveCount(7);
     await costs.locator('button[data-period="30"]').click();
-    await expect(costs.locator(".summary.primary strong")).toHaveText("549k");
+    await expect(costs.locator(".summary.primary strong")).toHaveText("549K");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "549000");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "219600");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "192150");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "137250");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "2495");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "167");
+    await expect(costs.locator("costs-daily-chart .day")).toHaveCount(30);
     await costs.locator('button[data-harness="Codex"]').click();
-    await expect(costs.locator("tbody tr")).toHaveCount(2);
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "219600");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "87840");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "76860");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "54900");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "998");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "77");
+    await expect(costs.locator("costs-model-table tbody tr")).toHaveCount(2);
 
     // 5. Limits screen
     await topbar.locator('button[data-screen="limits"]').click();
@@ -1710,12 +1734,39 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     // 6. Logs screen filtering & drawer
     await topbar.locator('button[data-screen="logs"]').click();
     const logs = root.locator("logs-screen");
-    await expect(logs.locator(".log-row")).toHaveCount(8);
+    await expect(logs.locator(".log-row")).toHaveCount(50);
+    await expect(logs.locator(".logs-screen")).toHaveAttribute("data-retained-count", "480");
+    await expect(logs.locator(".log-row[data-log-id='log-480'] .log-message")).toHaveText("Task completed successfully <img src=x onerror=alert(1)>");
+    await expect(logs.locator("img[src='x']")).toHaveCount(0);
+    await logs.locator('logs-results button[data-action="next-page"]').click();
+    await expect(logs.locator(".log-row").first()).toHaveAttribute("data-log-id", "log-430");
+    await logs.locator('button[data-action="sort"]').click();
+    await expect(logs.locator(".log-row").first()).toHaveAttribute("data-log-id", "log-1");
+    await logs.locator(".log-row").first().click();
+    await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-1");
+    await logs.locator('logs-results button[data-action="next-page"]').click();
+    await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-1");
+    await logs.locator('button[data-action="sort"]').click();
+    await expect(logs.locator('button[data-action="sort"]')).toHaveText("Sort: newest first");
+    await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-1");
     await logs.locator('button[data-level="error"]').click();
-    await expect(logs.locator(".log-row")).toHaveCount(1);
+    await expect(logs.locator(".result-count")).toContainText("48 events");
+    await expect(logs.locator(".log-row")).toHaveCount(48);
+    await expect(logs.locator("aside.drawer")).toHaveCount(0);
+    await logs.locator('button[data-project="cowboy-api"]').click();
+    await expect(logs.locator(".result-count")).toContainText("16 events");
+    await expect(logs.locator(".log-row").first()).toHaveAttribute("data-log-id", "log-476");
     await logs.locator(".log-row").first().click();
     await expect(logs.locator("aside.drawer h2")).toHaveText("error");
+    await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-476");
     await logs.locator('aside.drawer button[data-action="close-drawer"]').click();
+    await logs.locator('button[data-project="all"]').click();
+    await logs.locator('button[data-level="all"]').click();
+    await logs.locator("#log-query").fill("definitely absent");
+    await logs.locator('button[data-action="apply-search"]').click();
+    await expect(logs.locator(".result-count")).toContainText("0 events");
+    await expect(logs.locator(".log-row")).toHaveCount(0);
+    await logs.locator('button[data-action="clear-search"]').click();
 
     // 7. Canvas screen node inspector & Steward
     await topbar.locator('button[data-screen="canvas"]').click();
@@ -1733,6 +1784,121 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     await page.reload();
     await expect(root.locator(".shell")).toHaveClass(/dark/);
     await expect(root.locator("settings-screen h1")).toHaveText("Settings");
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Logs refresh is bounded, latest-wins, retryable, and disposed on navigation", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const errors: string[] = [];
+  const requested: string[] = [];
+  let manualBatch = 0;
+  let failureCount = 0;
+  let finishDelayedResponse: (() => void) | null = null;
+  const delayedResponseFinished = new Promise<void>((resolve) => {
+    finishDelayedResponse = resolve;
+  });
+
+  const { server, baseURL } = await startStaticServer(senchaDistDir, {
+    spaFallback: true,
+    apiHandler: (request, response) => {
+      if (new URL(request.url || "/", "http://localhost").pathname !== "/api/logs") return false;
+      let bodyText = "";
+      request.on("data", (chunk) => { bodyText += String(chunk); });
+      request.on("end", () => {
+        const body = JSON.parse(bodyText || "{}");
+        requested.push(`${body.reason}:${body.level}:${body.query}`);
+        const send = (status: number, payload: Record<string, unknown>) => {
+          if (response.destroyed || response.writableEnded) return;
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end(JSON.stringify(payload));
+        };
+        const label = body.query || body.level;
+        if (body.query === "trigger-failure" && body.reason !== "retry") {
+          failureCount += 1;
+          send(500, { token: body.token, label, sequences: [] });
+          return;
+        }
+        let sequences: number[] = [];
+        if (body.reason === "manual") {
+          const start = 481 + manualBatch * 1000;
+          sequences = Array.from({ length: 1000 }, (_, index) => start + index);
+          manualBatch += 1;
+        }
+        const delay = body.level === "error" ? 120
+          : body.level === "info" && body.reason === "filter" ? 300
+            : 10;
+        setTimeout(() => {
+          send(200, { token: body.token, label, sequences });
+          if (body.level === "info" && body.reason === "filter") finishDelayedResponse?.();
+        }, delay);
+      });
+      return true;
+    },
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => requested.push(`http:${new URL(request.url()).pathname}`));
+
+  try {
+    await page.goto(baseURL);
+    const root = page.locator("z-root");
+    await expect(root.locator("home-screen h1")).toHaveText("Keep the herd moving.");
+    expect(requested.some((entry) => entry.includes("logs-screen.chi"))).toBe(false);
+    expect(requested.some((entry) => entry === "http:/api/logs")).toBe(false);
+
+    const topbar = root.locator("top-bar");
+    await topbar.locator('button[data-screen="logs"]').click();
+    const logs = root.locator("logs-screen");
+    await expect(logs.locator(".refresh-toolbar")).toHaveAttribute("data-refresh-state", "ready");
+    expect(requested.some((entry) => entry === "http:/api/logs")).toBe(true);
+    expect(fs.existsSync(path.join(senchaDistDir, "test"))).toBe(false);
+    expect(fs.readdirSync(senchaDistDir).some((entry) => /test-runner|api-fixture/i.test(entry))).toBe(false);
+
+    await logs.locator('button[data-level="error"]').click();
+    await logs.locator('button[data-level="warn"]').click();
+    await expect(logs.locator(".refresh-status")).toHaveText("Synced: warn");
+
+    await logs.locator("#log-query").fill("trigger-failure");
+    await logs.locator('button[data-action="apply-search"]').click();
+    await expect(logs.locator(".refresh-toolbar")).toHaveAttribute("data-refresh-state", "error");
+    await expect(logs.locator(".refresh-error")).toContainText("HTTP 500");
+    await expect(logs.locator('button[data-action="retry-refresh"]')).toBeVisible();
+    await logs.locator('button[data-action="retry-refresh"]').click();
+    await expect(logs.locator(".refresh-status")).toHaveText("Synced: trigger-failure");
+    expect(failureCount).toBe(1);
+
+    await logs.locator('button[data-action="clear-search"]').click();
+    await logs.locator('button[data-level="all"]').click();
+    await expect(logs.locator(".refresh-status")).toHaveText("Synced: all");
+    await logs.locator(".log-row[data-log-id='log-480']").click();
+    await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-480");
+
+    await logs.locator('button[data-action="refresh-now"]').click();
+    await expect(logs.locator(".logs-screen")).toHaveAttribute("data-retained-count", "1480");
+    await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-480");
+    await logs.locator('button[data-action="refresh-now"]').click();
+    await expect(logs.locator(".logs-screen")).toHaveAttribute("data-retained-count", "2000");
+    await expect(logs.locator(".log-row").first()).toHaveAttribute("data-log-id", "log-2480");
+    await expect(logs.locator("aside.drawer")).toHaveCount(0);
+    await expect(logs.locator(".log-row")).toHaveCount(50);
+
+    const lateRequest = page.waitForRequest((request) =>
+      request.url().endsWith("/api/logs") && request.method() === "POST" &&
+      request.postData()?.includes('"level":"info"') === true,
+    );
+    await logs.locator('button[data-level="info"]').click();
+    await lateRequest;
+    await topbar.locator('button[data-screen="home"]').click();
+    await expect(root.locator("logs-screen")).toHaveCount(0);
+    await delayedResponseFinished;
+    await expect.poll(async () => page.evaluate(() => {
+      const stats = (window as any).MochiLoader.debugStats();
+      return `${stats.timers}:${stats.activeFetches}:${stats.pendingFetches}`;
+    })).toBe("0:0:0");
+    await expect(root.locator("home-screen h1")).toHaveText("Keep the herd moving.");
     expect(errors).toEqual([]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -1821,7 +1987,7 @@ test("GVM routing: a direct Costs URL loads only the Costs dependency closure", 
   try {
     await page.goto(`${baseURL}/costs`);
     const root = page.locator("z-root");
-    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("183k");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("184K");
     await expect(root.locator("home-screen")).toHaveCount(0);
     await expect(root.locator("top-bar").locator('button[data-screen="costs"]')).toHaveClass(/active/);
 
@@ -1853,22 +2019,135 @@ test("GVM routing: back and forward render the route-owned screens", async ({ pa
 
     const topbar = root.locator("top-bar");
     await topbar.locator('button[data-screen="costs"]').click();
-    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("183k");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("184K");
     expect(new URL(page.url()).pathname).toBe("/costs");
 
     await topbar.locator('button[data-screen="logs"]').click();
-    await expect(root.locator("logs-screen .log-row")).toHaveCount(8);
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(50);
     expect(new URL(page.url()).pathname).toBe("/logs");
 
     await page.goBack();
-    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("183k");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("184K");
     expect(new URL(page.url()).pathname).toBe("/costs");
     await expect(topbar.locator('button[data-screen="costs"]')).toHaveClass(/active/);
 
     await page.goForward();
-    await expect(root.locator("logs-screen .log-row")).toHaveCount(8);
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(50);
     expect(new URL(page.url()).pathname).toBe("/logs");
     await expect(topbar.locator('button[data-screen="logs"]')).toHaveClass(/active/);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Costs stays lazy on Home and retains one copy of its dependency closure", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(new URL(request.url()).pathname));
+  const manifest = readManifest(senchaDistDir);
+  const costTags = ["costs-screen", "costs-summary", "costs-daily-chart", "costs-model-table"];
+  const costResources = new Set<string>();
+  const initialStyles = new Set<string>();
+  const initialCss = ["z-root", "top-bar", "home-screen", "toast-stack", "modal-container"]
+    .map((tag) => readComponentDescriptor(senchaDistDir, manifest, tag).css || "")
+    .join("\n");
+  const costCss = costTags.map((tag) => {
+    const descriptor = readComponentDescriptor(senchaDistDir, manifest, tag);
+    (descriptor.style_resources || [])
+      .forEach((id: string) => initialStyles.add(id));
+    return descriptor.css || "";
+  });
+  costTags.forEach((tag) => {
+    const descriptor = readComponentDescriptor(senchaDistDir, manifest, tag);
+    (descriptor.style_resources || []).forEach((id: string) => {
+      if (!initialStyles.has(id)) costResources.add(manifest.resources[id].file);
+    });
+  });
+  expect(costCss.join("\n")).toContain(".summary-grid");
+  expect(costCss.join("\n")).toContain(".chart");
+  expect(initialCss).not.toContain(".summary-grid");
+  expect(initialCss).not.toContain(".model-panel");
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/`);
+    await expect(page.locator("z-root home-screen h1")).toHaveText("Keep the herd moving.");
+    expect(requested.some((url) => url.endsWith("/mochi-format.js"))).toBe(false);
+    costTags.forEach((tag) => {
+      expect(requested.some((url) => url.endsWith(`/components/${tag}.json`))).toBe(false);
+      expect(requested.some((url) => url.endsWith(`/components/${tag}.chi`))).toBe(false);
+    });
+    costResources.forEach((file) => {
+      expect(requested.some((url) => url.endsWith(`/${file}`))).toBe(false);
+    });
+
+    await page.locator("z-root top-bar button[data-screen='costs']").click();
+    await expect(page.locator("z-root costs-screen costs-summary .summary.primary strong")).toHaveText("184K");
+    costTags.forEach((tag) => {
+      expect(requested.filter((url) => url.endsWith(`/components/${tag}.json`))).toHaveLength(1);
+      expect(requested.filter((url) => url.endsWith(`/components/${tag}.chi`))).toHaveLength(1);
+    });
+    costResources.forEach((file) => {
+      expect(requested.filter((url) => url.endsWith(`/${file}`))).toHaveLength(1);
+    });
+    expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Costs navigation and filter loops keep screen registrations bounded", async ({ page }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__costsRuntimeErrors = [];
+    document.addEventListener("mochi:error", (event: any) => {
+      (window as any).__costsRuntimeErrors.push(event.detail || { message: "Mochi runtime error" });
+    });
+  });
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  try {
+    await page.goto(`${baseURL}/`);
+    const root = page.locator("z-root");
+    const topbar = root.locator("top-bar");
+    await expect(root.locator("home-screen h1")).toHaveText("Keep the herd moving.");
+    const homeBaseline = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+    let costsBaseline: Record<string, number> | null = null;
+    const samples: Array<{ screen: string; stats: Record<string, number> }> = [];
+
+    for (let round = 0; round < 200; round += 1) {
+      await topbar.locator('button[data-screen="costs"]').click();
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "183500");
+      await root.locator("costs-screen button[data-period='30']").click();
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "549000");
+      await root.locator("costs-screen button[data-harness='Codex']").click();
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "219600");
+      await root.locator("costs-screen button[data-harness='Antigravity']").click();
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "192150");
+      await root.locator("costs-screen button[data-harness='Ollama']").click();
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "137250");
+      await root.locator("costs-screen button[data-harness='All']").click();
+      await root.locator("costs-screen button[data-period='7']").click();
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "183500");
+      const stats = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+      if (!costsBaseline) costsBaseline = stats;
+      samples.push({ screen: "costs", stats });
+
+      await topbar.locator('button[data-screen="home"]').click();
+      await expect(root.locator("home-screen h1")).toHaveText("Keep the herd moving.");
+      samples.push({ screen: "home", stats: await page.evaluate(() => (window as any).MochiLoader.debugStats()) });
+    }
+
+    const mismatches = samples.filter(({ screen, stats }) => {
+      const baseline = screen === "home" ? homeBaseline : costsBaseline;
+      return !baseline || ["components", "bindings", "elements", "timers"].some((key) => stats[key] !== baseline[key]);
+    });
+    expect(mismatches.slice(0, 2)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__costsRuntimeErrors)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -1885,7 +2164,8 @@ test("GVM routing: encoded params and query values arrive as Ruby strings", asyn
     await expect(root.locator(".shell")).toHaveAttribute("data-log-id", "hello world");
     await expect(root.locator("logs-screen .route-context")).toHaveText("Focused: hello world");
     await expect(root.locator('logs-screen button[data-level="warn"]')).toHaveClass(/active/);
-    await expect(root.locator("logs-screen .log-row")).toHaveCount(1);
+    await expect(root.locator("logs-screen .result-count")).toContainText("72 events");
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(50);
     expect(new URL(page.url()).pathname).toBe("/logs/hello%20world");
     expect(new URL(page.url()).search).toBe("?level=warn");
   } finally {
@@ -1932,10 +2212,10 @@ test("GVM routing: rapid navigation never mounts an obsolete delayed screen", as
     await topbar.locator('button[data-screen="costs"]').click();
     await costsClass;
     await topbar.locator('button[data-screen="logs"]').click();
-    await expect(root.locator("logs-screen .log-row")).toHaveCount(8, { timeout: 15_000 });
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(50, { timeout: 15_000 });
     await page.waitForTimeout(700);
     await expect(root.locator("costs-screen")).toHaveCount(0);
-    await expect(root.locator("logs-screen .log-row")).toHaveCount(8);
+    await expect(root.locator("logs-screen .log-row")).toHaveCount(50);
     expect(new URL(page.url()).pathname).toBe("/logs");
     expect(errors).toEqual([]);
   } finally {

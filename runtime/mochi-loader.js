@@ -769,6 +769,20 @@
     var fetchOptions = Object.assign({}, options);
     delete fetchOptions.key;
     delete fetchOptions.request_key;
+    var requestBody = fetchOptions.body;
+    var plainBody = requestBody && typeof requestBody === "object" &&
+      (Array.isArray(requestBody) || Object.getPrototypeOf(requestBody) === Object.prototype ||
+        Object.getPrototypeOf(requestBody) === null);
+    if (plainBody) {
+      fetchOptions.body = JSON.stringify(requestBody);
+      var headers = fetchOptions.headers && typeof fetchOptions.headers === "object"
+        ? Object.assign({}, fetchOptions.headers) : {};
+      var hasContentType = Object.keys(headers).some(function (name) {
+        return name.toLowerCase() === "content-type";
+      });
+      if (!hasContentType) headers["content-type"] = "application/json";
+      fetchOptions.headers = headers;
+    }
     if (typeof global.AbortController === "function") {
       active.controller = new global.AbortController();
       fetchOptions.signal = active.controller.signal;

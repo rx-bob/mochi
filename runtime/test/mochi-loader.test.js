@@ -2518,6 +2518,46 @@ test("drains JSON fetch requests after mount and delivers parsed responses", asy
   }]);
 });
 
+test("fetch converts Ruby Hash request bodies to JSON without losing headers", async () => {
+  const calls = [];
+  const { module } = await setup([COMPONENT], {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: () => "application/json" },
+        text: async () => "{}"
+      };
+    }
+  });
+
+  module.queueFetch(JSON.stringify({
+    id: 1,
+    instance: "1",
+    url: "/api/logs",
+    callback: "on_logs",
+    options: {
+      method: "POST",
+      headers: { "x-request-source": "logs" },
+      body: { token: 7, query: "timeout & retry" }
+    }
+  }) + "\n");
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.body, '{"token":7,"query":"timeout & retry"}');
+  assert.deepEqual(calls[0].init.headers, {
+    "x-request-source": "logs",
+    "content-type": "application/json"
+  });
+});
+
 test("fetch callback mutations flush patches into bound DOM", async () => {
   const { module, log } = await setup([COMPONENT], {
     fetch: async () => ({
