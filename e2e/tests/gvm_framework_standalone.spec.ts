@@ -343,3 +343,71 @@ test("five siblings with four typed props mount independently across cold and ca
   });
   expect(runtimeErrors).toEqual([]);
 });
+
+test("Ruby-authored five-prop siblings survive controlled cold descriptor completion", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  let descriptorSeen!: () => void;
+  let releaseDescriptor!: () => void;
+  const seen = new Promise<void>((resolve) => { descriptorSeen = resolve; });
+  const released = new Promise<void>((resolve) => { releaseDescriptor = resolve; });
+  let descriptorRequests = 0;
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__siblingErrors = [];
+    document.addEventListener("mochi:error", (event) => (window as any).__siblingErrors.push((event as CustomEvent).detail));
+  });
+  await page.route("**/components/child-probe.json", async (route) => {
+    descriptorRequests += 1;
+    descriptorSeen();
+    await released;
+    await route.continue();
+  });
+
+  try {
+    await withFrameworkProject(async (baseURL) => {
+      await page.goto(`${baseURL}/index.html`);
+      await seen;
+      const root = page.locator("sibling-props-root");
+      await root.evaluate((element: any) => element._mochiReady);
+      const children = root.locator("child-probe");
+      await expect(children).toHaveCount(5);
+      expect(descriptorRequests).toBe(1);
+      expect(await children.evaluateAll((elements: any[]) => elements.map((element) => element._mochiMountState)))
+        .toEqual(["mounting", "mounting", "mounting", "mounting", "mounting"]);
+      await children.nth(4).evaluate((element: any) => {
+        element._mochiReady.catch(() => {});
+        element.setAttribute("remaining", "not-an-integer");
+      });
+
+      releaseDescriptor();
+      await root.evaluate(async (element: any) => {
+        await Promise.allSettled(Array.from(element.shadowRoot.querySelectorAll("child-probe"))
+          .map((child: any) => child._mochiReady));
+      });
+      for (const [index, label] of ["A", "B", "C", "D"].entries()) {
+        const probe = children.nth(index).locator(".probe");
+        await expect(probe).toHaveText(`${20 + index}%`);
+        await expect(probe).toHaveAttribute("data-label", label);
+        await expect(probe).toHaveAttribute("data-reset", `r${index}`);
+        await expect(probe).toHaveAttribute("data-tone", "normal");
+      }
+      expect(await children.nth(4).evaluate((element: any) => element._mochiMountState)).toBe("failed");
+      expect(await children.nth(4).evaluate((element: any) => element.shadowRoot.childNodes.length)).toBe(0);
+      expect(await children.nth(4).evaluate((element: any) => element.mochiError.message))
+        .toContain('prop "remaining" expects an integer');
+      const retryText = await children.nth(4).evaluate(async (element: any) => {
+        const parent = element.parentNode;
+        element.remove();
+        element.setAttribute("remaining", "24");
+        parent.appendChild(element);
+        await element._mochiReady;
+        return element.shadowRoot.querySelector(".probe").textContent;
+      });
+      expect(retryText).toBe("24%");
+      expect(await page.evaluate(() => (window as any).__siblingErrors.length)).toBe(1);
+    }, "<sibling-props-root></sibling-props-root>");
+  } finally {
+    releaseDescriptor();
+  }
+  expect(runtimeErrors).toEqual([]);
+});

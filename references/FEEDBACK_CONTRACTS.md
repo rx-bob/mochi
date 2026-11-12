@@ -9,7 +9,7 @@ Evidence index for the 17 reports reviewed on 2026-11-12. Status describes Mochi
 | 003 Loop-local event arguments | Passing in isolation for a simple keyed-row handler; nested/reordered cases remain open. | E2.S2 |
 | 004 Keyed table rows | Reproduced: row text slot missing in table context. | E2.S3 |
 | 005 Dynamic child props | Passing for simple nested String props; conditional Hash and mixed contexts remain open. | E3.S2 |
-| 006 Multiple typed-prop siblings | Reproduced: five four-prop children fail; two simple children pass. | E3.S1, E3.S3 |
+| 006 Multiple typed-prop siblings | Reproduced and repaired at the VM entry root boundary: keep both promoted prop snapshots reachable across `initialize` and its allocations. ABI regression mounts five instances through the same generated prop method and forces GC between mounts; Chromium covers a Ruby-authored five-child tree, cold descriptor completion, cached/reverse mounts, sibling isolation, and retry. | E3.S1, E3.S3 |
 | 007 Scratch object exhaustion | Reported 540-row case passes; exact exhaustion and recovery need framework-owned coverage. | E5.S1, E5.S2 |
 | 008 Emitter receives its own implicit global event | Contract gap: delivery currently broadcasts to matching methods without explicit subscription. | E4.S1, E4.S2 |
 | 009 Root-level conditional | Reproduced: both initial states compile to an empty descriptor. | E2.S1 |
