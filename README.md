@@ -436,6 +436,12 @@ normal `mochi:error` channel. A zero denominator reports `division by zero`.
 The minimum signed 64-bit value remains exact while its denominator is
 positive; an operation that would negate it reports overflow.
 
+Numerators, denominators, minor-unit amounts, and ledger fields must be Ruby
+integers. Floats and strings are rejected before arithmetic, so they cannot
+create an inexact ledger. Keep a ledger's `:numerator` and `:denominator`
+integer-valued if you edit its ordinary Hash fields directly. An operation
+that fails while reducing a result leaves its input ledger unchanged.
+
 The helper performs no currency symbols, grouping, decimal separators, or
 locale lookup. Format the integer returned by a `round_*` method in your
 component. Applications that do not use `MochiMoney` pay no bytes for it; the

@@ -2870,6 +2870,53 @@ test("GVM money helpers keep exact minor-unit totals and named rounding", async 
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-money-"));
   const bundleDir = path.join(projectDir, "bundle");
   fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  const roundVectors = [
+    { name: "positive_half", numerator: 1, denominator: 2 },
+    { name: "negative_half", numerator: -1, denominator: 2 },
+    { name: "positive_odd_half", numerator: 3, denominator: 2 },
+    { name: "negative_odd_half", numerator: -3, denominator: 2 },
+    { name: "positive_even_half", numerator: 5, denominator: 2 },
+    { name: "negative_even_half", numerator: -5, denominator: 2 },
+    { name: "negative_denominator", numerator: 3, denominator: -2 },
+  ];
+  const rationalOracle = JSON.parse(execFileSync("ruby", ["-rjson", "-e", `
+    vectors = JSON.parse(STDIN.read)
+    puts vectors.map { |vector|
+      value = Rational(vector["numerator"], vector["denominator"])
+      {
+        "name" => vector["name"],
+        "exact" => "#{value.numerator}/#{value.denominator}",
+        "half_up" => value.round(half: :up),
+        "half_down" => value.round(half: :down),
+        "half_even" => value.round(half: :even),
+        "floor" => value.floor,
+        "ceil" => value.ceil,
+        "truncate" => value.to_i
+      }
+    }.to_json
+  `], { input: JSON.stringify(roundVectors), encoding: "utf8" }));
+  const adjustmentOracle = execFileSync("ruby", ["-e", `
+    ledger = Rational(0, 1)
+    ledger += Rational(3, 5)
+    ledger += Rational(-4, 5)
+    ledger *= Rational(3, 2)
+    puts "#{ledger.numerator}/#{ledger.denominator}|#{ledger.round(half: :up)}"
+  `], { encoding: "utf8" }).trim();
+  const roundVectorRuby = roundVectors.map((vector) => `
+    @${vector.name}_ledger = MochiMoney.amount(${vector.numerator}, ${vector.denominator})
+    @${vector.name}_rounds = [
+      MochiMoney.exact(@${vector.name}_ledger),
+      MochiMoney.round_half_up(@${vector.name}_ledger).to_s,
+      MochiMoney.round_half_down(@${vector.name}_ledger).to_s,
+      MochiMoney.round_half_even(@${vector.name}_ledger).to_s,
+      MochiMoney.round_floor(@${vector.name}_ledger).to_s,
+      MochiMoney.round_ceil(@${vector.name}_ledger).to_s,
+      MochiMoney.round_truncate(@${vector.name}_ledger).to_s
+    ].join("|")
+  `).join("\n");
+  const roundVectorHTML = roundVectors.map((vector) =>
+    `<span class="vector-${vector.name}">{@${vector.name}_rounds}</span>`
+  ).join("\n");
 
   fs.writeFileSync(path.join(projectDir, "lib", "MoneyLedger.rb"), `
 class MoneyLedger
@@ -2888,6 +2935,13 @@ class MoneyLedger
   @max
   @min
   @overflow
+  @atomic_add
+  @atomic_apply
+  @atomic_add_exact
+  @atomic_apply_exact
+  @adjusted
+  @adjusted_exact
+  @adjusted_rounded
   @model_a_exact
   @model_a_cents
   @model_a_label
@@ -2920,6 +2974,7 @@ class MoneyLedger
   @max_cents
   @min_exact
   @min_cents
+  ${roundVectors.map((vector) => `@${vector.name}_ledger\n  @${vector.name}_rounds`).join("\n  ")}
 
   def money(cents)
     sign = ""
@@ -2970,6 +3025,7 @@ class MoneyLedger
     @max_cents = MochiMoney.round_half_up(@max)
     @min_exact = MochiMoney.exact(@min)
     @min_cents = MochiMoney.round_half_up(@min)
+    ${roundVectorRuby}
   end
 
   def initialize
@@ -3008,12 +3064,47 @@ class MoneyLedger
     @max = MochiMoney.minor(9223372036854775807)
     @min = MochiMoney.minor(-9223372036854775808)
     @overflow = MochiMoney.minor(9223372036854775807)
+    @atomic_add = MochiMoney.ledger
+    @atomic_apply = MochiMoney.ledger
+    @atomic_add_exact = MochiMoney.exact(@atomic_add)
+    @atomic_apply_exact = MochiMoney.exact(@atomic_apply)
+    @adjusted = MochiMoney.ledger
+    MochiMoney.add_ratio(@adjusted, 3, 5)
+    MochiMoney.merge(@adjusted, MochiMoney.amount(-4, 5))
+    MochiMoney.apply_ratio(@adjusted, 3, 2)
+    @adjusted_exact = MochiMoney.exact(@adjusted)
+    @adjusted_rounded = MochiMoney.round_half_up(@adjusted)
 
     refresh
   end
 
   def force_overflow
     MochiMoney.add_minor(@overflow, 1)
+  end
+
+  def force_zero_denominator
+    MochiMoney.amount(1, 0)
+  end
+
+  def force_float_input
+    MochiMoney.add_ratio(@atomic_add, 1.0, 2)
+  end
+
+  def force_string_input
+    MochiMoney.add_ratio(@atomic_add, "1", 2)
+  end
+
+  def force_normalize_overflow
+    MochiMoney.add_ratio(@atomic_add, 1, -9223372036854775808)
+  end
+
+  def force_apply_normalize_overflow
+    MochiMoney.apply_ratio(@atomic_apply, 1, -9223372036854775808)
+  end
+
+  def inspect_failed_ledgers
+    @atomic_add_exact = MochiMoney.exact(@atomic_add)
+    @atomic_apply_exact = MochiMoney.exact(@atomic_apply)
   end
 
   def html
@@ -3050,7 +3141,18 @@ class MoneyLedger
       <span class="max-cents">{@max_cents}</span>
       <span class="min-exact">{@min_exact}</span>
       <span class="min-cents">{@min_cents}</span>
+      <span class="atomic-add-exact">{@atomic_add_exact}</span>
+      <span class="atomic-apply-exact">{@atomic_apply_exact}</span>
+      <span class="adjusted-exact">{@adjusted_exact}</span>
+      <span class="adjusted-rounded">{@adjusted_rounded}</span>
+      ${roundVectorHTML}
       <button class="overflow" onclick="{force_overflow}">Overflow</button>
+      <button class="zero-denominator" onclick="{force_zero_denominator}">Zero denominator</button>
+      <button class="float-input" onclick="{force_float_input}">Float input</button>
+      <button class="string-input" onclick="{force_string_input}">String input</button>
+      <button class="normalize-overflow" onclick="{force_normalize_overflow}">Normalize overflow</button>
+      <button class="apply-normalize-overflow" onclick="{force_apply_normalize_overflow}">Apply normalize overflow</button>
+      <button class="inspect-failed-ledgers" onclick="{inspect_failed_ledgers}">Inspect failed ledgers</button>
     }
   end
 end
@@ -3090,6 +3192,34 @@ end
   ).toBe(true);
   expect(moneyPackages.some((pkg) => pkg.id.startsWith("capability:"))).toBe(false);
 
+  const unusedProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-no-money-"));
+  const unusedBundleDir = path.join(unusedProjectDir, "bundle");
+  fs.mkdirSync(path.join(unusedProjectDir, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(unusedProjectDir, "lib", "PlainPanel.rb"), `
+class PlainPanel
+  @tag_name = "plain-panel"
+  def html
+    %Q{<p>plain application</p>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(unusedProjectDir, "index.html"), `<!doctype html>
+<html><body><plain-panel></plain-panel></body></html>`);
+  try {
+    execFileSync(compilerBinary, ["-i", unusedProjectDir, "-o", unusedBundleDir], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    const unusedManifest = JSON.parse(
+      fs.readFileSync(path.join(unusedBundleDir, "mochi-manifest.json"), "utf8"),
+    );
+    const unusedPackages = Object.values(unusedManifest.packages) as any[];
+    expect(unusedPackages.some((pkg) => (pkg.exports || []).includes("MochiMoney"))).toBe(false);
+  } finally {
+    fs.rmSync(unusedProjectDir, { recursive: true, force: true });
+  }
+
   const { server, baseURL } = await startStaticServer(bundleDir);
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
@@ -3107,6 +3237,21 @@ end
     await expect(host.locator("span.negative-exact")).toHaveText("-1/2");
     await expect(host.locator("span.max-exact")).toHaveText("9223372036854775807/1");
     await expect(host.locator("span.min-exact")).toHaveText("-9223372036854775808/1");
+    const [adjustedExact, adjustedRounded] = adjustmentOracle.split("|");
+    await expect(host.locator("span.adjusted-exact")).toHaveText(adjustedExact);
+    await expect(host.locator("span.adjusted-rounded")).toHaveText(adjustedRounded);
+
+    for (const vector of rationalOracle) {
+      await expect(host.locator(`.vector-${vector.name}`)).toHaveText([
+        vector.exact,
+        vector.half_up,
+        vector.half_down,
+        vector.half_even,
+        vector.floor,
+        vector.ceil,
+        vector.truncate,
+      ].join("|"));
+    }
 
     await expect(host.locator("span.model-a-cents")).toHaveText("61");
     await expect(host.locator("span.model-b-cents")).toHaveText("1");
@@ -3140,11 +3285,49 @@ end
         (window as any).__mochiMoneyErrors.push(event.detail);
       });
     });
-    await host.locator("button.overflow").click();
+    await host.locator("button.zero-denominator").click();
     await expect.poll(async () => page.evaluate(
       () => (window as any).__mochiMoneyErrors.length,
     )).toBe(1);
-    const moneyError = await page.evaluate(() => (window as any).__mochiMoneyErrors[0]);
+    const zeroDenominatorError = await page.evaluate(() => (window as any).__mochiMoneyErrors[0]);
+    expect(zeroDenominatorError.phase).toBe("event");
+    expect(zeroDenominatorError.message).toMatch(/division by zero/);
+
+    await host.locator("button.float-input").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiMoneyErrors.length,
+    )).toBe(2);
+    const floatInputError = await page.evaluate(() => (window as any).__mochiMoneyErrors[1]);
+    expect(floatInputError.phase).toBe("event");
+    expect(floatInputError.message).toMatch(/MochiMoney#__require_integer: unknown method at lib\/MoneyLedger\.rb:/);
+    await host.locator("button.string-input").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiMoneyErrors.length,
+    )).toBe(3);
+    const stringInputError = await page.evaluate(() => (window as any).__mochiMoneyErrors[2]);
+    expect(stringInputError.phase).toBe("event");
+    expect(stringInputError.message).toMatch(/MochiMoney#__require_integer: unknown method at lib\/MoneyLedger\.rb:/);
+    await host.locator("button.normalize-overflow").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiMoneyErrors.length,
+    )).toBe(4);
+    const normalizeError = await page.evaluate(() => (window as any).__mochiMoneyErrors[3]);
+    expect(normalizeError.message).toMatch(/integer overflow at lib\/MoneyLedger\.rb:/);
+    await host.locator("button.apply-normalize-overflow").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiMoneyErrors.length,
+    )).toBe(5);
+    const applyNormalizeError = await page.evaluate(() => (window as any).__mochiMoneyErrors[4]);
+    expect(applyNormalizeError.message).toMatch(/integer overflow at lib\/MoneyLedger\.rb:/);
+    await host.locator("button.inspect-failed-ledgers").click();
+    await expect(host.locator("span.atomic-add-exact")).toHaveText("0/1");
+    await expect(host.locator("span.atomic-apply-exact")).toHaveText("0/1");
+
+    await host.locator("button.overflow").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiMoneyErrors.length,
+    )).toBe(6);
+    const moneyError = await page.evaluate(() => (window as any).__mochiMoneyErrors[5]);
     expect(moneyError.phase).toBe("event");
     expect(moneyError.message).toMatch(/integer overflow/);
     expect(errors).toEqual([]);

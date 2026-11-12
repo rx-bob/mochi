@@ -15,6 +15,14 @@ class MochiMoney
     return {:numerator => 0, :denominator => 1}
   end
 
+  # The VM exposes integer-only even?/odd? dispatch but does not yet expose
+  # Integer#=== or Kernel#raise. Calling an integer-only method here rejects
+  # floats and other values before they can enter or mutate a ledger.
+  def self.__require_integer(value)
+    value.even?
+    return value
+  end
+
   # A ledger holding numerator / denominator minor units.
   def self.amount(numerator, denominator)
     value = MochiMoney.ledger
@@ -29,6 +37,8 @@ class MochiMoney
   # Greatest common divisor for normalization. Ruby's floor remainder keeps
   # the minimum signed 64-bit integer exact without negating it.
   def self.gcd(a, b)
+    MochiMoney.__require_integer(a)
+    MochiMoney.__require_integer(b)
     while b != 0
       remainder = a % b
       a = b
@@ -40,26 +50,38 @@ class MochiMoney
   def self.normalize(value)
     numerator = value[:numerator]
     denominator = value[:denominator]
+    MochiMoney.__require_integer(numerator)
+    MochiMoney.__require_integer(denominator)
+    if denominator == 0
+      numerator = numerator / denominator
+    end
     if denominator < 0
       numerator = -numerator
       denominator = -denominator
     end
     divisor = MochiMoney.gcd(numerator, denominator)
-    value[:numerator] = numerator / divisor
-    value[:denominator] = denominator / divisor
+    normalized_numerator = numerator / divisor
+    normalized_denominator = denominator / divisor
+    value[:numerator] = normalized_numerator
+    value[:denominator] = normalized_denominator
     return value
   end
 
   # Adds an exact numerator / denominator amount to a ledger.
   def self.add_ratio(value, numerator, denominator)
+    MochiMoney.__require_integer(value[:numerator])
+    MochiMoney.__require_integer(value[:denominator])
+    MochiMoney.__require_integer(numerator)
+    MochiMoney.__require_integer(denominator)
     if denominator == 0
       numerator = numerator / denominator
     end
     total_numerator = value[:numerator] * denominator + numerator * value[:denominator]
     total_denominator = value[:denominator] * denominator
-    value[:numerator] = total_numerator
-    value[:denominator] = total_denominator
-    return MochiMoney.normalize(value)
+    candidate = MochiMoney.normalize({:numerator => total_numerator, :denominator => total_denominator})
+    value[:numerator] = candidate[:numerator]
+    value[:denominator] = candidate[:denominator]
+    return value
   end
 
   # Adds a whole number of minor units to a ledger.
@@ -74,26 +96,35 @@ class MochiMoney
 
   # Multiplies a ledger by numerator / denominator exactly.
   def self.apply_ratio(value, numerator, denominator)
+    MochiMoney.__require_integer(value[:numerator])
+    MochiMoney.__require_integer(value[:denominator])
+    MochiMoney.__require_integer(numerator)
+    MochiMoney.__require_integer(denominator)
     if denominator == 0
       numerator = numerator / denominator
     end
     total_numerator = value[:numerator] * numerator
     total_denominator = value[:denominator] * denominator
-    value[:numerator] = total_numerator
-    value[:denominator] = total_denominator
-    return MochiMoney.normalize(value)
+    candidate = MochiMoney.normalize({:numerator => total_numerator, :denominator => total_denominator})
+    value[:numerator] = candidate[:numerator]
+    value[:denominator] = candidate[:denominator]
+    return value
   end
 
   def self.numerator(value)
+    MochiMoney.__require_integer(value[:numerator])
     return value[:numerator]
   end
 
   def self.denominator(value)
+    MochiMoney.__require_integer(value[:denominator])
     return value[:denominator]
   end
 
   # Reduced exact value, for example "303/5".
   def self.exact(value)
+    MochiMoney.__require_integer(value[:numerator])
+    MochiMoney.__require_integer(value[:denominator])
     return value[:numerator].to_s + "/" + value[:denominator].to_s
   end
 
@@ -101,6 +132,8 @@ class MochiMoney
   def self.round_with(value, mode)
     numerator = value[:numerator]
     denominator = value[:denominator]
+    MochiMoney.__require_integer(numerator)
+    MochiMoney.__require_integer(denominator)
     quotient = numerator / denominator
     remainder = numerator % denominator
     if remainder == 0
