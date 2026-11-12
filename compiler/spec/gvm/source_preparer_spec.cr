@@ -36,4 +36,34 @@ RUBY
 
     GvmSourcePreparer.strip_class_ivars(source).should eq(source)
   end
+
+  it "strips class metadata from every class in a multi-class source" do
+    source = <<-RUBY
+HELPER = 1
+
+class Screen
+  @tag_name = "x-screen"
+  @count
+  def initialize
+    @count = 0
+  end
+end
+
+class Row
+  @tag_name = "x-row"
+  @label
+  def initialize
+    @label = "row"
+  end
+end
+RUBY
+
+    result = GvmSourcePreparer.strip_class_ivars(source)
+    result.should_not contain("@tag_name")
+    result.should_not contain("  @count\n")
+    result.should_not contain("  @label\n")
+    result.should contain("@count = 0")
+    result.should contain("@label = \"row\"")
+    result.should contain("HELPER = 1")
+  end
 end

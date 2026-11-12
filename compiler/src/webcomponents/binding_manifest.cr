@@ -80,6 +80,7 @@ class ComponentManifest
   property css : String
   property bindings : Array(BindingDescriptor)
   property events : Array(EventDescriptor)
+  property helper_chi : String?
 
   def initialize(
     @tag_name : String,
@@ -89,6 +90,7 @@ class ComponentManifest
     @css : String,
     @bindings : Array(BindingDescriptor),
     @events : Array(EventDescriptor) = [] of EventDescriptor,
+    @helper_chi : String? = nil,
   )
   end
 

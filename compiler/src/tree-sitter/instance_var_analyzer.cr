@@ -45,11 +45,30 @@ module TreeSitter
       variables.values.to_a
     end
 
+    # Analyzes one component class without counting state from sibling or
+    # nested helper classes.
+    def self.analyze_class(class_node : Node) : Array(VariableInfo)
+      variables = {} of String => VariableInfo
+      body = class_node.child_by_field_name("body")
+      return variables.values.to_a unless body
+
+      visit_node(body, variables, nil, skip_nested: true)
+      variables.values.to_a
+    end
+
     private def self.get_var(variables, name : String)
       variables[name] ||= VariableInfo.new(name)
     end
 
-    private def self.visit_node(node : Node, variables : Hash(String, VariableInfo), current_method : String?, is_write : Bool = false)
+    private def self.visit_node(
+      node : Node,
+      variables : Hash(String, VariableInfo),
+      current_method : String?,
+      is_write : Bool = false,
+      skip_nested : Bool = false,
+    )
+      return if skip_nested && node.type.in?("class", "module")
+
       # Update current method
       if node.type == "method"
         name_node = node.child_by_field_name("name")
@@ -97,10 +116,10 @@ module TreeSitter
         right_node = node.child_by_field_name("right")
 
         if left_node
-          visit_node(left_node, variables, current_method, true)
+          visit_node(left_node, variables, current_method, true, skip_nested)
         end
         if right_node
-          visit_node(right_node, variables, current_method, false)
+          visit_node(right_node, variables, current_method, false, skip_nested)
         end
         return # prevent double traversal
       end
@@ -153,7 +172,7 @@ module TreeSitter
 
       # Traverse children
       node.each_named_child do |child|
-        visit_node(child, variables, current_method, false)
+        visit_node(child, variables, current_method, false, skip_nested)
       end
     end
   end

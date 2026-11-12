@@ -54,10 +54,15 @@ class RubyUnderstander
   end
 
   def self.get_cmp_name(rb_file : String, cls_name : String) : String?
-    TreeSitter::PropertyExtractor.extract_property(rb_file, "@tag_name")
+    parser = TreeSitter::RubyParser.new
+    tree = parser.parse(rb_file)
+    get_cmp_name(tree.root_node, cls_name)
   end
 
   def self.get_cmp_name(root : TreeSitter::Node, cls_name : String) : String?
-    TreeSitter::PropertyExtractor.extract_property(root, "@tag_name")
+    declaration = TreeSitter::ClassExtractor.extract_class_decls(root).find do |candidate|
+      candidate.name == cls_name || candidate.qualified_name == cls_name
+    end
+    declaration.try(&.tag_name)
   end
 end

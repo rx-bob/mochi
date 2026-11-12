@@ -12,14 +12,28 @@ module TreeSitter
     end
 
     def self.extract_method_bodies(root : Node, class_name : String, source : String) : Hash(String, RubyDef)
-      methods = {} of String => RubyDef
-
       class_node = find_class_by_name(root, class_name)
-      return methods unless class_node
+      return {} of String => RubyDef unless class_node
+
+      extract_method_bodies_from_class(class_node, class_name, source)
+    end
+
+    # Extracts instance methods directly owned by this class declaration.
+    # Methods on nested helper classes belong to the helper, not the component.
+    def self.extract_method_bodies_from_class(class_node : Node, class_name : String, source : String) : Hash(String, RubyDef)
+      methods = {} of String => RubyDef
+      body = class_node.child_by_field_name("body")
+      return methods unless body
 
       source_lines = source.lines
-      visit_node_for_methods(class_node, class_name, methods, source, source_lines)
-      return methods
+      body.each_named_child do |child|
+        next unless child.type == "method"
+
+        if ruby_def = extract_method_def(child, class_name, source, source_lines)
+          methods[ruby_def.name.not_nil!] = ruby_def
+        end
+      end
+      methods
     end
 
     # Collects the reader names declared with attr_reader / attr_accessor in
@@ -32,10 +46,14 @@ module TreeSitter
     end
 
     def self.extract_attribute_readers(root : Node, class_name : String) : Set(String)
-      readers = Set(String).new
       class_node = find_class_by_name(root, class_name)
-      return readers unless class_node
+      return Set(String).new unless class_node
 
+      extract_attribute_readers_from_class(class_node)
+    end
+
+    def self.extract_attribute_readers_from_class(class_node : Node) : Set(String)
+      readers = Set(String).new
       body = class_node.child_by_field_name("body")
       return readers unless body
 
@@ -158,18 +176,6 @@ module TreeSitter
       end
 
       return parts.join("::")
-    end
-
-    private def self.visit_node_for_methods(node : Node, class_name : String, methods : Hash(String, RubyDef), source : String, source_lines : Array(String))
-      if node.type == "method"
-        if ruby_def = extract_method_def(node, class_name, source, source_lines)
-          methods[ruby_def.name.not_nil!] = ruby_def
-        end
-      end
-
-      node.each_named_child do |child|
-        visit_node_for_methods(child, class_name, methods, source, source_lines)
-      end
     end
 
     private def self.extract_method_def(method_node : Node, class_name : String, source : String, source_lines : Array(String)) : RubyDef?

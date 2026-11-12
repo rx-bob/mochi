@@ -19,8 +19,17 @@ module TreeSitter
 
     def self.extract_properties(root : Node) : Array(Property)
       properties = [] of Property
-      visit_node(root, properties)
+      visit_node(root, properties, skip_nested: false)
       properties
+    end
+
+    # Reads an assignment from a class body without descending into nested
+    # classes or modules. A sibling component's metadata must never satisfy a
+    # lookup for this component.
+    def self.extract_property_from_body(body : Node, property_name : String) : String?
+      properties = [] of Property
+      visit_node(body, properties, skip_nested: true)
+      properties.find { |property| property.name == property_name }.try(&.value)
     end
 
     def self.extract_property(source : String, property_name : String) : String?
@@ -39,7 +48,9 @@ module TreeSitter
       extract_properties(root).first?
     end
 
-    private def self.visit_node(node : Node, results : Array(Property))
+    private def self.visit_node(node : Node, results : Array(Property), skip_nested : Bool)
+      return if skip_nested && node.type.in?("class", "module")
+
       if node.type == "assignment"
         if property = extract_property_from_assignment(node)
           results << property
@@ -47,7 +58,7 @@ module TreeSitter
       end
 
       node.each_named_child do |child|
-        visit_node(child, results)
+        visit_node(child, results, skip_nested)
       end
     end
 

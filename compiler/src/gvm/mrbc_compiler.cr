@@ -11,6 +11,7 @@ class MrbcCompiler
 
   getter manifest_path : String?
   getter chi_paths : Array(String)
+  getter helper_chi_paths : Array(String)
   getter prelude_path : String?
   getter wasm_path : String?
   getter js_path : String?
@@ -25,6 +26,7 @@ class MrbcCompiler
   )
     @manifest_path = nil
     @chi_paths = [] of String
+    @helper_chi_paths = [] of String
     @prelude_path = nil
     @wasm_path = nil
     @js_path = nil
@@ -32,10 +34,17 @@ class MrbcCompiler
     @warnings = [] of String
   end
 
-  def compile(components : Array(MochiComponent), output_dir : String, prelude_code : String = "") : Nil
+  def compile(
+    components : Array(MochiComponent),
+    output_dir : String,
+    prelude_code : String = "",
+    helpers : Array(HelperUnit) = [] of HelperUnit,
+  ) : Nil
     @chi_paths.clear
+    @helper_chi_paths.clear
     @prelude_path = nil
     @warnings.clear
+    validate_component_inventory(components)
     Dir.mkdir_p(output_dir)
     components_dir = File.join(output_dir, COMPONENTS_DIR)
     Dir.mkdir_p(components_dir)
@@ -44,6 +53,12 @@ class MrbcCompiler
 
     unless prelude_code.strip.empty?
       @prelude_path = compile_prelude(prelude_code, components_dir)
+    end
+
+    helpers_by_key = {} of String => HelperUnit
+    helpers.each { |helper| helpers_by_key[helper.key] = helper }
+    @helper_chi_paths = helpers_by_key.keys.sort.map do |key|
+      compile_helper(helpers_by_key[key], components_dir)
     end
 
     sorted_components = sort_components_topologically(components)
@@ -80,6 +95,31 @@ class MrbcCompiler
 
     @manifest_path = File.join(output_dir, "mochi-manifest.json")
     File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components))
+  end
+
+  private def validate_component_inventory(components : Array(MochiComponent)) : Nil
+    tags = {} of String => MochiComponent
+    class_names = {} of String => MochiComponent
+
+    components.each do |component|
+      tag = component.manifest.tag_name
+      if previous = tags[tag]?
+        raise "duplicate component tag '#{tag}' at #{component_location(previous)} and #{component_location(component)}"
+      end
+      tags[tag] = component
+
+      class_name = component.manifest.class_name
+      if previous = class_names[class_name]?
+        raise "duplicate component class '#{class_name}' at #{component_location(previous)} and #{component_location(component)}"
+      end
+      class_names[class_name] = component
+    end
+  end
+
+  private def component_location(component : MochiComponent) : String
+    return component.absolute_path if component.class_line <= 0
+
+    "#{component.absolute_path}:#{component.class_line}"
   end
 
   private def sort_components_topologically(components : Array(MochiComponent)) : Array(MochiComponent)
@@ -124,38 +164,28 @@ class MrbcCompiler
   end
 
   private def compile_prelude(prelude_code : String, components_dir : String) : String
-    source = SorbetTypeStripper.strip(prelude_code)
-    source = GvmSourcePreparer.strip_class_ivars(source)
+    chi_path = File.join(components_dir, "prelude.chi")
+    compile_ruby_source(prelude_code, chi_path, "prelude")
+  end
 
-    ruby_file = File.tempfile("mochi-prelude", ".rb")
-    mrb_file = File.tempfile("mochi-prelude", ".mrb")
-
-    begin
-      ruby_file.print(source)
-      ruby_file.close
-      mrb_file.close
-
-      run_mrbc(ruby_file.path, mrb_file.path)
-      bytecode = File.read(mrb_file.path).to_slice
-      RiteVerifier.verify!(bytecode, "prelude.chi")
-      body = strip_rite_header(bytecode, "prelude")
-
-      chi_path = File.join(components_dir, "prelude.chi")
-      File.write(chi_path, body)
-      chi_path
-    ensure
-      File.delete(ruby_file.path) if File.exists?(ruby_file.path)
-      File.delete(mrb_file.path) if File.exists?(mrb_file.path)
-    end
+  private def compile_helper(helper : HelperUnit, components_dir : String) : String
+    chi_path = File.join(components_dir, helper.key)
+    compile_ruby_source(helper.source, chi_path, helper.key)
   end
 
   private def compile_component(component : MochiComponent, components_dir : String) : String
     manifest = component.manifest
-    source = SorbetTypeStripper.strip(component.ruby_code)
+    chi_path = File.join(components_dir, manifest.chi_file)
+    compile_ruby_source(component.ruby_code, chi_path, manifest.tag_name)
+  end
+
+  private def compile_ruby_source(ruby_code : String, chi_path : String, label : String) : String
+    source = SorbetTypeStripper.strip(ruby_code)
     source = GvmSourcePreparer.strip_class_ivars(source)
 
-    ruby_file = File.tempfile("mochi-#{safe_name(manifest.tag_name)}", ".rb")
-    mrb_file = File.tempfile("mochi-#{safe_name(manifest.tag_name)}", ".mrb")
+    prefix = "mochi-#{safe_name(label)}"
+    ruby_file = File.tempfile(prefix, ".rb")
+    mrb_file = File.tempfile(prefix, ".mrb")
 
     begin
       ruby_file.print(source)
@@ -165,11 +195,9 @@ class MrbcCompiler
       run_mrbc(ruby_file.path, mrb_file.path)
 
       bytecode = File.read(mrb_file.path).to_slice
-      RiteVerifier.verify!(bytecode, manifest.tag_name)
+      RiteVerifier.verify!(bytecode, label)
+      body = strip_rite_header(bytecode, label)
 
-      body = strip_rite_header(bytecode, manifest.tag_name)
-
-      chi_path = File.join(components_dir, manifest.chi_file)
       File.write(chi_path, body)
       chi_path
     ensure
@@ -351,6 +379,9 @@ class MrbcCompiler
       json.field "tag_name", manifest.tag_name
       json.field "class_name", manifest.class_name
       json.field "chi_file", manifest.chi_file
+      if helper_chi = manifest.helper_chi
+        json.field "helper_chi", helper_chi
+      end
       json.field "html_template", manifest.html_template
       json.field "css", manifest.css
 

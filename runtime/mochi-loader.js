@@ -658,6 +658,10 @@
       var preludeUrl = chiUrl(manifest.prelude, manifestUrl);
       await loadIrepUrl(preludeUrl, "prelude", manifest, manifestUrl);
     }
+    if (component.helper_chi) {
+      var helperUrl = chiUrl(component.helper_chi, manifestUrl);
+      await loadIrepUrl(helperUrl, "helpers:" + component.helper_chi, manifest, manifestUrl);
+    }
     var url = chiUrl(component, manifestUrl);
     return loadIrepUrl(url, component.class_name || component.tag_name, manifest, manifestUrl);
   }

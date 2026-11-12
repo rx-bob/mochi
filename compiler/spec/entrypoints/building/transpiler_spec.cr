@@ -25,6 +25,11 @@ private def temp_output_dir(prefix : String) : String
   dir
 end
 
+private def transpile_file_source(source : String, name : String) : TranspileFileResult
+  path = File.join(Dir.tempdir, "mochi_transpile_file_#{name}_#{Random.rand(1_000_000)}.rb")
+  Compiler.new.transpile_file(source, path, 1)
+end
+
 describe Compiler do
   describe "#transpile_component" do
     it "allows a component without a css method and injects helpers after the class body" do
@@ -501,6 +506,226 @@ RUBY
           json["prelude"].as_s.should eq("prelude.chi")
           tags = json["components"].as_a.map { |entry| entry.as_h["tag_name"].as_s }
           tags.should eq(["z-child-item", "a-parent-box"])
+        ensure
+          FileUtils.rm_rf(output)
+        end
+      end
+    end
+  end
+
+  describe "#transpile_file" do
+    it "compiles every component class and keeps helper code in one helper unit" do
+      source = <<-RUBY
+class RowLabels
+  def self.label(value)
+    "row-" + value.to_s
+  end
+end
+
+class RowChip
+  @tag_name = "x-row-chip"
+  def html
+    %Q{<span class="row-only">{RowLabels.label("chip")}</span>}
+  end
+end
+
+class ScreenPanel
+  @tag_name = "x-screen-panel"
+  @count = 0
+  def html
+    %Q{<div class="screen-only">{@count}</div>}
+  end
+end
+RUBY
+
+      result = transpile_file_source(source, "MultiComponentFile")
+      result.components.map { |component| component.manifest.tag_name }.should eq(["x-row-chip", "x-screen-panel"])
+      result.components.map { |component| component.manifest.class_name }.should eq(["RowChip", "ScreenPanel"])
+
+      row = result.components[0]
+      screen = result.components[1]
+      row.ruby_code.should contain("class RowChip")
+      row.ruby_code.should_not contain("class ScreenPanel")
+      row.ruby_code.should_not contain("class RowLabels")
+      row.manifest.html_template.should contain("row-only")
+      row.manifest.html_template.should_not contain("screen-only")
+
+      screen.ruby_code.should contain("class ScreenPanel")
+      screen.ruby_code.should_not contain("class RowChip")
+      screen.manifest.html_template.should_not contain("row-only")
+
+      helper = result.helper.not_nil!
+      helper.source.should contain("class RowLabels")
+      helper.source.should_not contain("class RowChip")
+      helper.source.should_not contain("class ScreenPanel")
+      row.manifest.helper_chi.should eq(helper.key)
+      screen.manifest.helper_chi.should eq(helper.key)
+    end
+
+    it "finds a component after an ordinary helper class" do
+      source = <<-RUBY
+class PlainHelper
+  def self.value
+    "plain"
+  end
+end
+
+class ActualComponent
+  @tag_name = "x-actual"
+  def html
+    %Q{<span>{PlainHelper.value}</span>}
+  end
+end
+RUBY
+
+      result = transpile_file_source(source, "HelperBeforeComponent")
+      result.components.size.should eq(1)
+      result.components.first.manifest.tag_name.should eq("x-actual")
+      result.helper.not_nil!.source.should contain("class PlainHelper")
+    end
+
+    it "keeps class-local tags and css out of sibling components" do
+      source = <<-RUBY
+class FirstCard
+  @tag_name = "x-first-card"
+  def html
+    %Q{<span class="first-only">first</span>}
+  end
+  def css
+    ".first-only { color: red; }"
+  end
+end
+
+class SecondCard
+  @tag_name = "x-second-card"
+  def html
+    %Q{<span class="second-only">second</span>}
+  end
+  def css
+    ".second-only { color: blue; }"
+  end
+end
+RUBY
+
+      result = transpile_file_source(source, "SiblingCards")
+      result.components.map { |component| component.manifest.tag_name }.should eq(["x-first-card", "x-second-card"])
+      first = result.components[0]
+      second = result.components[1]
+      first.manifest.css.should contain("first-only")
+      first.manifest.css.should_not contain("second-only")
+      second.manifest.css.should contain("second-only")
+      second.manifest.css.should_not contain("first-only")
+    end
+
+    it "uses the GVM class symbol for namespaced components" do
+      source = <<-RUBY
+module UI
+  class Panel
+    @tag_name = "x-ns-panel"
+    def html
+      %Q{<span>panel</span>}
+    end
+  end
+end
+RUBY
+
+      result = transpile_file_source(source, "NamespacedComponent")
+      component = result.components.first
+      component.manifest.class_name.should eq("Panel")
+      component.ruby_code.should contain("module UI")
+      component.ruby_code.should contain("class Panel")
+    end
+
+    it "rejects duplicate component tags with both source locations" do
+      source = <<-RUBY
+class FirstDuplicate
+  @tag_name = "x-duplicate"
+  def html
+    %Q{<span>first</span>}
+  end
+end
+
+class SecondDuplicate
+  @tag_name = "x-duplicate"
+  def html
+    %Q{<span>second</span>}
+  end
+end
+RUBY
+
+      error = expect_raises(Exception) { transpile_file_source(source, "DuplicateTags") }
+      error.message.not_nil!.should contain("Duplicate component tag 'x-duplicate'")
+      error.message.not_nil!.should contain(":1")
+      error.message.not_nil!.should contain(":8")
+    end
+
+    it "rejects duplicate GVM class symbols across namespaces" do
+      source = <<-RUBY
+module One
+  class Panel
+    @tag_name = "x-one-panel"
+    def html
+      %Q{<span>one</span>}
+    end
+  end
+end
+
+module Two
+  class Panel
+    @tag_name = "x-two-panel"
+    def html
+      %Q{<span>two</span>}
+    end
+  end
+end
+RUBY
+
+      error = expect_raises(Exception) { transpile_file_source(source, "DuplicateClasses") }
+      error.message.not_nil!.should contain("Duplicate component class 'Panel'")
+      error.message.not_nil!.should contain(":2")
+      error.message.not_nil!.should contain(":11")
+    end
+
+    if real_mrbc = MrbcCompiler.find_mrbc
+      it "emits one helper bytecode file shared by both components" do
+        source = <<-RUBY
+class SharedLabel
+  def self.value
+    "shared"
+  end
+end
+
+class FirstBox
+  @tag_name = "x-first-box"
+  def html
+    %Q{<span>{SharedLabel.value}</span>}
+  end
+end
+
+class SecondBox
+  @tag_name = "x-second-box"
+  def html
+    %Q{<span>{SharedLabel.value}</span>}
+  end
+end
+RUBY
+
+        result = transpile_file_source(source, "SharedHelperFile")
+        helper = result.helper.not_nil!
+        output = temp_output_dir("mochi_multi_class_spec")
+
+        begin
+          compiler = MrbcCompiler.new(mrbc_path: real_mrbc)
+          compiler.compile(result.components, output, "", [helper])
+
+          File.exists?(File.join(output, "components", helper.key)).should be_true
+          compiler.helper_chi_paths.should eq([File.join(output, "components", helper.key)])
+          compiler.chi_paths.size.should eq(2)
+
+          json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+          json["components"].as_a.each do |entry|
+            entry.as_h["helper_chi"].as_s.should eq(helper.key)
+          end
         ensure
           FileUtils.rm_rf(output)
         end

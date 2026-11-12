@@ -1,8 +1,10 @@
+require "digest/sha1"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
 require "./trace_helper"
 require "../../webcomponents/component_generator"
 require "../../gvm/mrbc_compiler"
 require "../../tree-sitter/instance_var_analyzer"
+require "../../tree-sitter/source_slicer"
 require "../../ruby/ruby_understander"
 require "../../html/attribute_conditional_extractor"
 require "../../html/attribute_hash_extractor"
@@ -14,6 +16,8 @@ require "../../ruby/attribute_method_generator"
 require "../../ruby/attribute_hash_generator"
 require "../../ruby/conditional_method_generator"
 require "../../ruby/each_method_generator"
+
+record TranspileFileResult, components : Array(MochiComponent), helper : HelperUnit?
 
 class Compiler
   include TraceHelper
@@ -31,6 +35,7 @@ class Compiler
     puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'"
 
     components = [] of MochiComponent
+    helpers = [] of HelperUnit
     prelude_files = [] of Tuple(String, String)
     i = 1
 
@@ -45,13 +50,14 @@ class Compiler
           absolute_path = Path[path].expand.to_s
 
           rb_file = File.read(absolute_path)
-          component = transpile_component(rb_file, i, absolute_path)
+          result = transpile_file(rb_file, absolute_path, i)
 
           i += 1
-          if component
-            components << component
-          elsif !rb_file.strip.empty?
-            prelude_files << {absolute_path, rb_file}
+          if result.components.empty?
+            prelude_files << {absolute_path, rb_file} unless rb_file.strip.empty?
+          else
+            components.concat(result.components)
+            helpers << result.helper.not_nil! if result.helper
           end
         rescue ex
           errors << "Error processing file #{path}: #{ex.message}"
@@ -63,12 +69,14 @@ class Compiler
       raise "Component transpilation failed:\n#{errors.join("\n")}"
     end
 
+    validate_component_inventory(components)
+
     puts "Done with preparing components for transpilation (#{Time.monotonic})"
     prelude_code = prelude_files.sort_by(&.[0]).map(&.[1]).join("\n\n")
 
     trace_slice(trace, "EmitBytecode", sequence_id) do
       compiler = MrbcCompiler.new
-      compiler.compile(components, output_dir, prelude_code)
+      compiler.compile(components, output_dir, prelude_code, helpers)
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
       puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
     end
@@ -77,40 +85,221 @@ class Compiler
   end
 
   def transpile_component(rb_file : String, i : Int32, absolute_path : String)
+    transpile_file(rb_file, absolute_path, i).components.first?
+  end
+
+  # Discovers every component in one Ruby file. A file can hold a screen, its
+  # row component, and helpers; each component owns only its own class body.
+  def transpile_file(rb_file : String, absolute_path : String, i : Int32 = 1) : TranspileFileResult
     tree = @ruby_parser.parse(rb_file)
     root = tree.root_node
 
-    cls_name = RubyUnderstander.class_name(root)
+    declarations = TreeSitter::ClassExtractor.extract_class_decls(root)
+    class_declarations = declarations.select(&.class?)
+    component_decls = discover_component_declarations(class_declarations, absolute_path)
+    return TranspileFileResult.new([] of MochiComponent, nil) if component_decls.empty?
 
+    validate_component_declarations(component_decls, class_declarations, absolute_path)
+
+    legacy_source = legacy_single_source?(component_decls, class_declarations)
+    helper = nil
+    unless legacy_source
+      helper_source = TreeSitter::SourceSlicer.remove_ranges(
+        rb_file,
+        component_decls.map(&.range)
+      )
+      helper = build_helper(helper_source, absolute_path)
+    end
+
+    components = component_decls.map do |declaration|
+      source = legacy_source ? rb_file : component_source_for(
+        rb_file,
+        declaration,
+        declarations
+      )
+      transpile_class(
+        declaration,
+        source,
+        helper.try(&.key),
+        root,
+        rb_file,
+        absolute_path,
+        i
+      )
+    end
+
+    TranspileFileResult.new(components, helper)
+  end
+
+  private def discover_component_declarations(
+    class_declarations : Array(TreeSitter::ClassDecl),
+    absolute_path : String,
+  ) : Array(TreeSitter::ClassDecl)
+    tagged = class_declarations.select(&.component?)
+    if tagged.empty?
+      html_component = class_declarations.find(&.has_html)
+      return [] of TreeSitter::ClassDecl unless html_component
+
+      raise "Component '#{html_component.name}' defines an html method but no @tag_name at #{html_component.location(absolute_path)}"
+    end
+
+    tagged.each do |declaration|
+      tag_name = declaration.tag_name.not_nil!
+      unless tag_name.includes?("-")
+        raise "Component '#{declaration.name}' has invalid @tag_name '#{tag_name}' at #{declaration.location(absolute_path)}: custom element tag names must contain a hyphen"
+      end
+
+      unless declaration.has_html
+        raise "Component '#{declaration.name}' defines @tag_name but no html method at #{declaration.location(absolute_path)}"
+      end
+    end
+
+    tagged
+  end
+
+  private def legacy_single_source?(
+    components : Array(TreeSitter::ClassDecl),
+    class_declarations : Array(TreeSitter::ClassDecl),
+  ) : Bool
+    return false unless components.size == 1
+
+    component = components.first
+    class_declarations.none? do |declaration|
+      next false if same_declaration?(declaration, component)
+      next false if range_contains?(component, declaration)
+
+      true
+    end
+  end
+
+  private def validate_component_declarations(
+    components : Array(TreeSitter::ClassDecl),
+    class_declarations : Array(TreeSitter::ClassDecl),
+    absolute_path : String,
+  ) : Nil
+    grouped = class_declarations.group_by(&.qualified_name)
+    components.each do |component|
+      declarations = grouped[component.qualified_name]
+      next if declarations.size <= 1
+
+      locations = declarations.map(&.location(absolute_path)).join(", ")
+      raise "Component class '#{component.qualified_name}' is reopened at #{locations}; keep a component class in one declaration"
+    end
+
+    components.each do |component|
+      if outer = components.find { |candidate| range_contains?(candidate, component) }
+        raise "Component '#{component.name}' is nested inside component '#{outer.name}' at #{component.location(absolute_path)}"
+      end
+    end
+
+    tags = {} of String => TreeSitter::ClassDecl
+    components.each do |component|
+      tag = component.tag_name.not_nil!
+      if previous = tags[tag]?
+        raise "Duplicate component tag '#{tag}' at #{previous.location(absolute_path)} and #{component.location(absolute_path)}"
+      end
+      tags[tag] = component
+    end
+
+    class_names = {} of String => TreeSitter::ClassDecl
+    components.each do |component|
+      if previous = class_names[component.simple_name]?
+        raise "Duplicate component class '#{component.simple_name}' at #{previous.location(absolute_path)} and #{component.location(absolute_path)}"
+      end
+      class_names[component.simple_name] = component
+    end
+  end
+
+  private def validate_component_inventory(components : Array(MochiComponent)) : Nil
+    tags = {} of String => MochiComponent
+    class_names = {} of String => MochiComponent
+
+    components.each do |component|
+      tag = component.manifest.tag_name
+      if previous = tags[tag]?
+        raise "Duplicate component tag '#{tag}' at #{component_location(previous)} and #{component_location(component)}"
+      end
+      tags[tag] = component
+
+      class_name = component.manifest.class_name
+      if previous = class_names[class_name]?
+        raise "Duplicate component class '#{class_name}' at #{component_location(previous)} and #{component_location(component)}"
+      end
+      class_names[class_name] = component
+    end
+  end
+
+  private def component_location(component : MochiComponent) : String
+    return component.absolute_path if component.class_line <= 0
+
+    "#{component.absolute_path}:#{component.class_line}"
+  end
+
+  private def component_source_for(
+    source : String,
+    component : TreeSitter::ClassDecl,
+    declarations : Array(TreeSitter::ClassDecl),
+  ) : String
+    start_byte = component.wrapper_start_byte
+    end_byte = component.wrapper_end_byte
+    if start_byte == component.start_byte && end_byte == component.end_byte
+      return source.byte_slice(component.start_byte, component.end_byte - component.start_byte)
+    end
+
+    removals = [] of Tuple(Int32, Int32)
+
+    declarations.each do |declaration|
+      next if same_declaration?(declaration, component)
+      next if declaration.start_byte < start_byte || declaration.end_byte > end_byte
+      next if range_contains?(component, declaration)
+      next if range_contains?(declaration, component)
+
+      removals << declaration.range
+    end
+
+    TreeSitter::SourceSlicer.remove_ranges(source, removals)
+  end
+
+  private def build_helper(source : String, absolute_path : String) : HelperUnit?
+    return nil if source.strip.empty?
+
+    digest = Digest::SHA1.hexdigest(absolute_path)[0, 12]
+    HelperUnit.new("mochi-helpers-#{digest}.chi", source, absolute_path)
+  end
+
+  private def same_declaration?(left : TreeSitter::ClassDecl, right : TreeSitter::ClassDecl) : Bool
+    left.start_byte == right.start_byte && left.end_byte == right.end_byte
+  end
+
+  private def range_contains?(outer : TreeSitter::ClassDecl, inner : TreeSitter::ClassDecl) : Bool
+    return false if same_declaration?(inner, outer)
+
+    inner.start_byte >= outer.start_byte && inner.end_byte <= outer.end_byte
+  end
+
+  private def transpile_class(
+    declaration : TreeSitter::ClassDecl,
+    component_source : String,
+    helper_chi : String?,
+    root : TreeSitter::Node,
+    rb_file : String,
+    absolute_path : String,
+    i : Int32,
+  ) : MochiComponent
+    cls_name = declaration.name
     print_cmp_start_separator(cls_name, i)
     puts "ClassName:'#{cls_name}'"
 
-    if cls_name.blank?
-      return
-    end
-
-    methods : Hash(String, RubyDef) = RubyUnderstander.extract_method_bodies(root, cls_name, rb_file)
-    tag_name = RubyUnderstander.get_cmp_name(root, cls_name)
+    methods : Hash(String, RubyDef) = TreeSitter::MethodBodyExtractor.extract_method_bodies_from_class(
+      declaration.node,
+      cls_name,
+      rb_file
+    )
+    tag_name = declaration.tag_name.not_nil!
     html_method = methods["html"]?
 
-    # A component is identified by its tag name or its html method. Classes
-    # with neither marker are ordinary Ruby classes and stay out of the bundle.
-    if tag_name.nil? && html_method.nil?
-      puts "Skipping '#{cls_name}', no @tag_name or html method"
-      print_cmp_end_seperator(cls_name, i)
-      return
-    end
-
-    if tag_name.nil?
-      raise "Component '#{cls_name}' defines an html method but no @tag_name"
-    end
-
-    unless tag_name.includes?("-")
-      raise "Component '#{cls_name}' has invalid @tag_name '#{tag_name}': custom element tag names must contain a hyphen"
-    end
-
     if html_method.nil?
-      raise "Component '#{cls_name}' defines @tag_name but no html method"
+      raise "Component '#{cls_name}' defines @tag_name but no html method at #{declaration.location(absolute_path)}"
     end
 
     imports = RubyUnderstander.get_imports(root)
@@ -129,7 +318,7 @@ class Compiler
 
     # Remove html and css before injecting helpers. Their string bodies may
     # contain `{end}`, which must never be mistaken for the class terminator.
-    amped_ruby_code = RubyUnderstander.remove_methods(root, rb_file, cls_name, ["html", "css"])
+    amped_ruby_code = RubyUnderstander.remove_methods(component_source, cls_name, ["html", "css"])
 
     # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
     attr_hash_result = AttributeHashExtractor.process(html)
@@ -155,7 +344,7 @@ class Compiler
     html = EventArgumentExtractor.process(html, source_locator)
 
     # Analyze instance variables to determine reactables automatically
-    vars = TreeSitter::InstanceVarAnalyzer.analyze(root)
+    vars = TreeSitter::InstanceVarAnalyzer.analyze_class(declaration.node)
     validate_ivar_capacity(cls_name, vars)
 
     # Filter for variables that are either:
@@ -205,9 +394,10 @@ class Compiler
       methods.keys,
       source_locator
     )
+    manifest.helper_chi = helper_chi
 
-    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, root)
-    validate_row_expressions(cls_name, generator.each_row_templates, methods.keys, root)
+    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, declaration.attribute_readers)
+    validate_row_expressions(cls_name, generator.each_row_templates, methods.keys, declaration.attribute_readers)
 
     amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
       amped_ruby_code,
@@ -223,14 +413,15 @@ class Compiler
     )
 
     print_cmp_end_seperator(cls_name, i)
-    return MochiComponent.new(
+    MochiComponent.new(
       absolute_path,
       cls_name,
       imports,
-      ruby_code = rewritten_ruby_code,
+      rewritten_ruby_code,
       manifest,
       manifest.html_template,
-      css
+      css,
+      declaration.line
     )
   end
 
@@ -238,11 +429,11 @@ class Compiler
     cls_name : String,
     bindings : Array(BindingDescriptor),
     method_names : Array(String),
-    root : TreeSitter::Node,
+    attribute_readers : Set(String),
   ) : Nil
     readable = Set(String).new
     method_names.each { |name| readable << name }
-    RubyUnderstander.attribute_readers(root, cls_name).each { |name| readable << name }
+    attribute_readers.each { |name| readable << name }
 
     bindings.each do |binding|
       expression = binding.getter_expr
@@ -258,27 +449,17 @@ class Compiler
     end
   end
 
-  private def validate_binding_methods(
-    cls_name : String,
-    bindings : Array(BindingDescriptor),
-    method_names : Array(String),
-    rb_file : String,
-  ) : Nil
-    tree = @ruby_parser.parse(rb_file)
-    validate_binding_methods(cls_name, bindings, method_names, tree.root_node)
-  end
-
   # Rejects bare method names in list rows that cannot resolve to a component
   # method, attribute reader, literal, or one of the row's lexical names.
   private def validate_row_expressions(
     cls_name : String,
     rows : Array(EachRowTemplate),
     method_names : Array(String),
-    root : TreeSitter::Node,
+    attribute_readers : Set(String),
   ) : Nil
     readable = Set(String).new
     method_names.each { |name| readable << name }
-    RubyUnderstander.attribute_readers(root, cls_name).each { |name| readable << name }
+    attribute_readers.each { |name| readable << name }
 
     rows.each do |root_row|
       root_row.each_template do |row|

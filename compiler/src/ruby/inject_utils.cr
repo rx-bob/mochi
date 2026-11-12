@@ -1,4 +1,5 @@
 require "../tree-sitter/ruby_parser"
+require "../tree-sitter/class_extractor"
 
 class InjectUtils
   def self.find_insertion_point(ruby_code : String, class_name : String, end_keyword : String, fallback_offset : Int32) : Int32?
@@ -60,8 +61,7 @@ class InjectUtils
 
   def self.find_class_node(node : TreeSitter::Node, class_name : String) : TreeSitter::Node?
     if node.type == "class"
-      name_node = node.child_by_field_name("name")
-      return node if name_node && name_node.text == class_name
+      return node if TreeSitter::ClassExtractor.declaration_name(node) == class_name
     end
 
     node.each_named_child do |child|

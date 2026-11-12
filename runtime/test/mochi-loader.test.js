@@ -1203,6 +1203,36 @@ test("multiple instances share one class and irep but keep independent targets a
   assert.equal(log.calls.filter((call) => call === "init_runtime").length, 1);
 });
 
+test("helper bytecode loads once before components that share it", async () => {
+  const first = {
+    ...COMPONENT,
+    tag_name: "shared-first",
+    class_name: "SharedFirst",
+    chi_file: "shared-first.chi",
+    helper_chi: "helpers-shared.chi",
+  };
+  const second = {
+    ...COMPONENT,
+    tag_name: "shared-second",
+    class_name: "SharedSecond",
+    chi_file: "shared-second.chi",
+    helper_chi: "helpers-shared.chi",
+  };
+
+  const { log } = await setup([first, second]);
+  const firstElement = document.createElement("shared-first");
+  const secondElement = document.createElement("shared-second");
+  document.body.appendChild(firstElement);
+  document.body.appendChild(secondElement);
+
+  await Promise.all([firstElement._mochiReady, secondElement._mochiReady]);
+
+  const helperFetches = log.fetches.filter((url) => url.endsWith("helpers-shared.chi"));
+  assert.equal(helperFetches.length, 1);
+  assert.equal(log.loads.length, 3);
+  assert.ok(log.fetches.indexOf(helperFetches[0]) < log.fetches.findIndex((url) => url.endsWith("shared-first.chi")));
+});
+
 test("binding paths resolve through text nodes and comments exactly as emitted", async () => {
   const component = {
     ...COMPONENT,

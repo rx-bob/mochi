@@ -986,6 +986,129 @@ end
   }
 });
 
+test("one Ruby file emits a screen, row component, and shared helper", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-multi-class-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "MultiPanel.rb"), `
+class SharedLabels
+  def self.label(value)
+    "label-" + value.to_s
+  end
+end
+
+class MultiRowBadge
+  @tag_name = "multi-row-badge"
+  @count
+
+  def initialize
+    @count = 10
+  end
+
+  def html
+    %Q{
+      <div class="row-badge">
+        <span class="value">{SharedLabels.label(@count)}</span>
+        <button class="increment" onclick="{increment}">row+</button>
+      </div>
+    }
+  end
+
+  def increment
+    @count += 1
+  end
+end
+
+class MultiScreenPanel
+  @tag_name = "multi-screen-panel"
+  @count
+
+  def initialize
+    @count = 0
+  end
+
+  def html
+    %Q{
+      <div class="screen-panel">
+        <span class="value">{SharedLabels.label(@count)}</span>
+        <button class="increment" onclick="{increment}">screen+</button>
+      </div>
+    }
+  end
+
+  def increment
+    @count += 1
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <multi-row-badge></multi-row-badge>
+    <multi-screen-panel></multi-screen-panel>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"));
+  expect(manifest.components).toHaveLength(2);
+  const helperNames = new Set(manifest.components.map((component: { helper_chi: string }) => component.helper_chi));
+  expect(helperNames.size).toBe(1);
+  const helperName = [...helperNames][0];
+  expect(fs.existsSync(path.join(bundleDir, "components", helperName))).toBe(true);
+
+  const helperRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith(".chi")) helperRequests.push(request.url());
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await page.waitForFunction(() => {
+      const loader = (window as any).MochiLoader;
+      return loader && loader.components.length === 2 &&
+        window.customElements.get("multi-row-badge") &&
+        window.customElements.get("multi-screen-panel");
+    });
+
+    const row = page.locator("multi-row-badge");
+    const screen = page.locator("multi-screen-panel");
+    await expect(row.locator(".value")).toHaveText("label-10");
+    await expect(screen.locator(".value")).toHaveText("label-0");
+
+    await screen.locator("button.increment").click();
+    await expect(screen.locator(".value")).toHaveText("label-1");
+    await expect(row.locator(".value")).toHaveText("label-10");
+
+    await row.locator("button.increment").click();
+    await expect(row.locator(".value")).toHaveText("label-11");
+    await expect(screen.locator(".value")).toHaveText("label-1");
+
+    expect(helperRequests.filter((url) => url.endsWith(helperName))).toHaveLength(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 test("Sencha frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
   test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
