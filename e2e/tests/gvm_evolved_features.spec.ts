@@ -2004,3 +2004,185 @@ end
     fs.rmSync(projectDir, { recursive: true, force: true });
   }
 });
+
+test("GVM numbers keep integer and float semantics across props, events, and bindings", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-numbers-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "NumericChild.rb"), `
+class NumericChild
+  @tag_name = "numeric-child"
+  prop :total, Integer, default: 0
+  prop :ratio, Float, default: 0.0
+  event :measured, total: Integer, ratio: Float
+
+  def html
+    %Q{
+      <span class="child-total">{@total}</span>
+      <span class="child-ratio">{@ratio}</span>
+      <div class="child-bar" style="height: {@ratio * 100}px"></div>
+      <button class="send" onclick="{send_measured}">Send</button>
+    }
+  end
+
+  def send_measured
+    emit :measured, total: @total, ratio: @ratio
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "lib", "NumericHost.rb"), `
+class NumericHost
+  @tag_name = "numeric-host"
+  @one
+  @two
+  @ratio
+  @total
+  @int_half
+  @float_half
+  @rate
+  @items
+  @received_total
+  @received_ratio
+  @max
+  @minimum
+
+  def initialize
+    @one = 1
+    @two = 2
+    @ratio = 0.25
+    @total = 9007199254740993
+    @int_half = @one / @two
+    @float_half = 1.0 / 2
+    @rate = 3000000 * 1500
+    @items = [1.25, 2.5, 3.75]
+    @received_total = 0
+    @received_ratio = 0.0
+    @max = 9223372036854775807
+    @minimum = -9223372036854775808
+  end
+
+  def html
+    %Q{
+      <span class="int-half">{@int_half}</span>
+      <span class="float-half">{@float_half}</span>
+      <span class="rate">{@rate}</span>
+      <span class="large">{@total}</span>
+      <span class="large-sum">{@total + 2}</span>
+      <span class="minimum">{@minimum}</span>
+      <div class="chart" style="height: {@ratio * 100}px"></div>
+      <div class="points">
+        {each @items as item}
+          <div class="point" style="height: {item * 10}px"><span class="point-value">{item}</span></div>
+        {end}
+      </div>
+      <numeric-child
+        class="numeric-child"
+        total="{@total}"
+        ratio="{@ratio}"
+        on:measured="{measured($event)}"
+      ></numeric-child>
+      <span class="received-total">{@received_total}</span>
+      <span class="received-ratio">{@received_ratio}</span>
+      <button class="change" onclick="{change_numbers}">Change</button>
+      <button class="overflow" onclick="{force_overflow}">Overflow</button>
+    }
+  end
+
+  def measured(payload)
+    @received_total = payload[:total]
+    @received_ratio = payload[:ratio]
+  end
+
+  def change_numbers
+    @ratio = 0.5
+    @items = [0.5, 1.5, 2.5]
+  end
+
+  def force_overflow
+    @total = @max + 1
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <numeric-host></numeric-host>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const host = page.locator("numeric-host");
+    const child = host.locator("numeric-child.numeric-child");
+
+    await expect(host.locator("span.int-half")).toHaveText("0");
+    await expect(host.locator("span.float-half")).toHaveText("0.5");
+    await expect(host.locator("span.rate")).toHaveText("4500000000");
+    await expect(host.locator("span.large")).toHaveText("9007199254740993");
+    await expect(host.locator("span.large-sum")).toHaveText("9007199254740995");
+    await expect(host.locator("span.minimum")).toHaveText("-9223372036854775808");
+    await expect(host.locator("div.chart")).toHaveAttribute("style", /height:\s*25(?:\.0)?px/);
+
+    await expect(host.locator("div.point")).toHaveCount(3);
+    await expect(host.locator("span.point-value")).toHaveText(["1.25", "2.5", "3.75"]);
+    await expect(host.locator("div.point").nth(0)).toHaveAttribute("style", /height:\s*12\.5px/);
+    await expect(host.locator("div.point").nth(2)).toHaveAttribute("style", /height:\s*37\.5px/);
+
+    await expect(child.locator("span.child-total")).toHaveText("9007199254740993");
+    await expect(child.locator("span.child-ratio")).toHaveText("0.25");
+    await expect(child.locator("div.child-bar")).toHaveAttribute("style", /height:\s*25(?:\.0)?px/);
+
+    await child.locator("button.send").click();
+    await expect(host.locator("span.received-total")).toHaveText("9007199254740993");
+    await expect(host.locator("span.received-ratio")).toHaveText("0.25");
+
+    await host.locator("button.change").click();
+    await expect(host.locator("div.chart")).toHaveAttribute("style", /height:\s*50(?:\.0)?px/);
+    await expect(host.locator("span.point-value")).toHaveText(["0.5", "1.5", "2.5"]);
+    await expect(host.locator("div.point").nth(0)).toHaveAttribute("style", /height:\s*5(?:\.0)?px/);
+    await expect(host.locator("div.point").nth(2)).toHaveAttribute("style", /height:\s*25(?:\.0)?px/);
+    await expect(child.locator("span.child-ratio")).toHaveText("0.5");
+    await expect(child.locator("div.child-bar")).toHaveAttribute("style", /height:\s*50(?:\.0)?px/);
+
+    await child.locator("button.send").click();
+    await expect(host.locator("span.received-total")).toHaveText("9007199254740993");
+    await expect(host.locator("span.received-ratio")).toHaveText("0.5");
+
+    await page.evaluate(() => {
+      (window as any).__mochiNumericErrors = [];
+      document.addEventListener("mochi:error", (event: any) => {
+        (window as any).__mochiNumericErrors.push(event.detail);
+      });
+    });
+    await host.locator("button.overflow").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiNumericErrors.length,
+    )).toBe(1);
+    const numericError = await page.evaluate(() => (window as any).__mochiNumericErrors[0]);
+    expect(numericError.phase).toBe("event");
+    expect(numericError.message).toMatch(/integer overflow/);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});

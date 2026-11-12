@@ -111,6 +111,7 @@ const TYPED_COMPONENT = {
   props: [
     { name: "label", type: "string", default: true, source: { file: "lib/badge.rb", line: 7 } },
     { name: "count", type: "integer", default: true, source: { file: "lib/badge.rb", line: 8 } },
+    { name: "ratio", type: "float", default: true, source: { file: "lib/badge.rb", line: 13 } },
     { name: "flag", type: "boolean", default: true, source: { file: "lib/badge.rb", line: 9 } },
     { name: "note", type: "string", source: { file: "lib/badge.rb", line: 10 } },
     { name: "rows", type: "array", default: true, source: { file: "lib/badge.rb", line: 11 } },
@@ -1079,6 +1080,38 @@ test("declared props mount as typed values and keep false, zero, and empty disti
   assert.deepEqual(log.propSets, []);
 });
 
+test("wide integers and floats use exact typed transport", async () => {
+  const { dom, log } = await setup([TYPED_COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+
+  try {
+    const element = document.createElement("typed-badge");
+    element.setAttribute("count", "9007199254740993");
+    element.setAttribute("ratio", "0.25");
+    document.body.appendChild(element);
+    await element._mochiReady;
+    assert.deepEqual(log.mountProps[0], {
+      count: { __mochi_number: "i64", value: "9007199254740993" },
+      ratio: { __mochi_number: "f64", value: "0.25" },
+    });
+
+    element.setAttribute("count", "9007199254740995");
+    element.setAttribute("ratio", "0.75");
+    await flushLifecycle();
+    assert.deepEqual(log.propSets.at(-1).props, {
+      count: { __mochi_number: "i64", value: "9007199254740995" },
+      ratio: { __mochi_number: "f64", value: "0.75" },
+    });
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
 test("a string prop keeps JSON text and defers parent placeholders", async () => {
   const { dom, log } = await setup([TYPED_COMPONENT]);
   const previousObserver = global.MutationObserver;
@@ -1541,7 +1574,7 @@ test("invalid child event payloads report the declared contract and stop deliver
     { label: "row", active: true, tags: [], meta: {} },
     { ...base, extra: true },
     { ...base, id: "not-an-integer" },
-    { ...base, id: 2147483648 },
+    { ...base, id: { __mochi_number: "i64", value: "9223372036854775808" } },
   ];
   module.queueEmit(invalidPayloads.map((payload) => JSON.stringify({
     __child_event: "select",
@@ -1565,7 +1598,7 @@ test("invalid child event payloads report the declared contract and stop deliver
   assert.equal(details[2].payloadKey, "id");
   assert.equal(details[2].eventType, "integer");
   assert.match(details[2].message, /expects integer, got string/);
-  assert.match(details[3].message, /not a 32-bit integer/);
+  assert.match(details[3].message, /invalid or out-of-range i64/);
   details.forEach((detail) => {
     assert.match(detail.source, /lib\/event_row\.rb:3/);
   });
@@ -3704,6 +3737,7 @@ test("template event arguments pass typed literals to the VM", async () => {
   const literalArguments = JSON.stringify([
     { kind: "literal", literal_type: "string", value: "tr_9f2a" },
     { kind: "literal", literal_type: "number", value: "1" },
+    { kind: "literal", literal_type: "number", value: "9007199254740993" },
   ]).replace(/"/g, "&quot;");
   const eventComponent = {
     tag_name: "event-args-check",
@@ -3731,7 +3765,11 @@ test("template event arguments pass typed literals to the VM", async () => {
   assert.deepEqual(log.dispatchedArgs.at(-1), {
     instance: "1",
     methodSymbol: selectSymbol,
-    args: ["tr_9f2a", 1],
+    args: [
+      "tr_9f2a",
+      1,
+      { __mochi_number: "i64", value: "9007199254740993" },
+    ],
   });
   assert.equal(log.dispatched.filter((entry) => entry.methodSymbol === selectSymbol).length, 0);
 });

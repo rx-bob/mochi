@@ -69,6 +69,7 @@ module TreeSitter
     PROP_TYPES = {
       "String"  => "string",
       "Integer" => "integer",
+      "Float"   => "float",
       "Boolean" => "boolean",
       "Array"   => "array",
       "Hash"    => "hash",
@@ -224,7 +225,7 @@ module TreeSitter
 
         unless value_node.type == "constant"
           raise EventDeclarationError.new(
-            "event :#{name} at #{location} payload field :#{field_name} must declare String, Integer, Boolean, Array, or Hash",
+            "event :#{name} at #{location} payload field :#{field_name} must declare String, Integer, Float, Boolean, Array, or Hash",
             line
           )
         end
@@ -352,6 +353,8 @@ module TreeSitter
                   value_node.type == "string"
                 when "integer"
                   value_node.type == "integer" || (value_node.type == "unary" && value_node.text.matches?(/\A-\d+\z/))
+                when "float"
+                  value_node.type == "float" || (value_node.type == "unary" && value_node.text.matches?(/\A-\d+\.\d+\z/))
                 when "boolean"
                   value_node.type == "true" || value_node.type == "false"
                 when "array"

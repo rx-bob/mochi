@@ -263,11 +263,11 @@ class ChildBadge
 end
 ```
 
-Supported types are `String`, `Integer`, `Boolean`, `Array`, and `Hash`. A
-declaration can be `required: true` or provide `default:`, but not both. Default
-expressions may be literals or constants. The compiler rejects unknown types,
-duplicate names, an unknown option, and a default whose literal type does not
-match the declaration.
+Supported types are `String`, `Integer`, `Float`, `Boolean`, `Array`, and
+`Hash`. A declaration can be `required: true` or provide `default:`, but not
+both. Default expressions may be literals or constants. The compiler rejects
+unknown types, duplicate names, an unknown option, and a default whose literal
+type does not match the declaration.
 
 The loader resolves declared props before it creates the VM instance. A missing
 required input or a value that does not match its type aborts the mount with a
@@ -279,10 +279,35 @@ HTML text maps to Ruby as follows:
 | Declared type | Attribute text | Ruby value |
 | --- | --- | --- |
 | `String` | any text | that string, including `""` |
-| `Integer` | `-?[0-9]+` inside the VM's 32-bit range | `Integer` |
+| `Integer` | `-?[0-9]+` inside the signed 64-bit range | `Integer` |
+| `Float` | decimal text such as `0.5` or `1e-3`, `Infinity`, `-Infinity`, or `NaN` | `Float` |
 | `Boolean` | `true`, `false`, or `""` (HTML presence) | `true` or `false` |
 | `Array` | JSON array text | a new Ruby `Array` |
 | `Hash` | JSON object text | a new Ruby `Hash` |
+
+### Numbers
+
+Ruby `Integer` is a checked signed 64-bit value. The VM keeps values that fit
+in 32 bits as immediates and boxes wider integers without changing their
+observable range. Ruby `Float` is a binary64 value, including `Infinity` and
+`NaN` where an operation produces them. Integer division stays integer
+division: `1 / 2` is `0`, while `1.0 / 2` is `0.5`. Mixed comparisons and
+arithmetic promote the integer operand to `Float`.
+
+Checked integer overflow, integer division by zero, and unsupported numeric
+operations stop the entry with a `mochi:error` instead of wrapping or
+truncating. The error names `integer overflow`, `division by zero`, or
+`type mismatch` and includes the Ruby method's source location. Floating-point
+division by zero follows IEEE 754 and produces `Infinity` or `NaN`, matching
+Ruby.
+
+Values crossing the browser boundary keep exact integers above JavaScript's
+2^53 exact-number range. Props and child-event payloads use a typed number
+transport instead of a raw JSON number, and the loader validates the signed
+64-bit range before the VM sees it. Integers that fit safely still travel as
+ordinary JSON numbers on the JavaScript side. Floats render with Ruby's
+shortest round-trip spelling, including a `.0` mantissa; locale-aware decimal
+formatting belongs to the component, not the numeric core.
 
 Absence is `nil`, distinct from `""`, `0`, and `false`. Removing a declared
 attribute installs `nil`; removing a required attribute is an error. A single
@@ -389,8 +414,9 @@ class EventRow
 end
 ```
 
-Payload fields use `lower_snake_case` and support `String`, `Integer`,
-`Boolean`, `Array`, and `Hash`. Integer fields use the VM's 32-bit range. The
+Payload fields use `lower_snake_case` and support `String`, `Integer`, `Float`,
+`Boolean`, `Array`, and `Hash`. Integer fields use the signed 64-bit range, and
+large values keep exact transport as described in [Numbers](#numbers). The
 payload is a fixed contract: every declared
 field is required, unknown fields are rejected, and values are checked against
 the declaration. `emit :opened` sends an empty payload. A component with

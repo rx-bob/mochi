@@ -697,13 +697,89 @@
     return typeof value;
   }
 
-  function checkEventNumberRange(value, eventName, descriptor, field) {
-    if (typeof value === "number") {
-      if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+  function mochiNumberKind(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    var keys = Object.keys(value);
+    if (keys.length !== 2 || keys.indexOf("__mochi_number") === -1 || keys.indexOf("value") === -1) {
+      return null;
+    }
+    if (value.__mochi_number !== "i64" && value.__mochi_number !== "f64") return null;
+    if (typeof value.value !== "string") return null;
+    return value.__mochi_number;
+  }
+
+  function isMochiNumber(value) {
+    return mochiNumberKind(value) !== null;
+  }
+
+  function mochiNumberText(value) {
+    return isMochiNumber(value) ? value.value : "";
+  }
+
+  function integerTextInInt64(text) {
+    if (!/^-?\d+$/.test(text)) return false;
+    try {
+      var value = BigInt(text);
+      return value >= -(1n << 63n) && value <= (1n << 63n) - 1n;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function integerTextIsSafe(text) {
+    if (!/^-?\d+$/.test(text)) return false;
+    try {
+      var value = BigInt(text);
+      return value >= -9007199254740991n && value <= 9007199254740991n;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function floatTextIsValid(text) {
+    if (text === "Infinity" || text === "-Infinity" || text === "NaN") return true;
+    return /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text) &&
+      !isNaN(Number(text));
+  }
+
+  function mochiNumberIsValid(value) {
+    var kind = mochiNumberKind(value);
+    if (kind === "i64") return integerTextInInt64(value.value);
+    if (kind === "f64") return floatTextIsValid(value.value);
+    return false;
+  }
+
+  function integerTransportValue(text) {
+    if (integerTextIsSafe(text)) return Number(text);
+    return { __mochi_number: "i64", value: text };
+  }
+
+  function floatTransportValue(text) {
+    return { __mochi_number: "f64", value: text };
+  }
+
+  function checkEventNumberRange(value, eventName, descriptor, field, integerField) {
+    var kind = mochiNumberKind(value);
+    if (kind !== null) {
+      if (!mochiNumberIsValid(value) || (integerField && kind !== "i64")) {
         throw childEventError(
           eventName,
           descriptor,
-          "payload field \"" + field.name + "\" contains a number that is not a 32-bit integer",
+          "payload field \"" + field.name + "\" contains an invalid or out-of-range " + kind + " number",
+          field
+        );
+      }
+      return;
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) ||
+          (Number.isInteger(value) && !Number.isSafeInteger(value)) ||
+          (integerField && !Number.isInteger(value))) {
+        throw childEventError(
+          eventName,
+          descriptor,
+          "payload field \"" + field.name + "\" contains a number that is not an exact " +
+            (integerField ? "signed 64-bit integer" : "finite float"),
           field
         );
       }
@@ -711,13 +787,13 @@
     }
     if (Array.isArray(value)) {
       value.forEach(function (item) {
-        checkEventNumberRange(item, eventName, descriptor, field);
+        checkEventNumberRange(item, eventName, descriptor, field, false);
       });
       return;
     }
     if (value && typeof value === "object") {
       Object.keys(value).forEach(function (key) {
-        checkEventNumberRange(value[key], eventName, descriptor, field);
+        checkEventNumberRange(value[key], eventName, descriptor, field, false);
       });
     }
   }
@@ -728,14 +804,22 @@
     if (type === "string") {
       valid = typeof value === "string";
     } else if (type === "integer") {
-      valid = typeof value === "number" && Number.isInteger(value);
-      if (valid) checkEventNumberRange(value, eventName, descriptor, field);
+      valid = (typeof value === "number" && Number.isInteger(value)) ||
+        mochiNumberKind(value) === "i64";
+      if (valid) checkEventNumberRange(value, eventName, descriptor, field, true);
+    } else if (type === "float") {
+      valid = (typeof value === "number" && Number.isFinite(value)) ||
+        mochiNumberKind(value) === "f64" || mochiNumberKind(value) === "i64";
+      if (valid) checkEventNumberRange(value, eventName, descriptor, field, false);
     } else if (type === "boolean") {
       valid = value === true || value === false;
     } else if (type === "array") {
       valid = Array.isArray(value);
+      if (valid) checkEventNumberRange(value, eventName, descriptor, field, false);
     } else if (type === "hash") {
-      valid = !!value && typeof value === "object" && !Array.isArray(value);
+      valid = !!value && typeof value === "object" && !Array.isArray(value) &&
+        mochiNumberKind(value) === null;
+      if (valid) checkEventNumberRange(value, eventName, descriptor, field, false);
     }
     if (!valid) {
       throw childEventError(
@@ -1070,9 +1154,16 @@
   }
 
   function checkPropNumberRange(value, descriptor, attribute) {
+    if (mochiNumberKind(value) !== null) {
+      if (!mochiNumberIsValid(value)) {
+        throw propError(descriptor, "contains an invalid or out-of-range number", attribute);
+      }
+      return;
+    }
     if (typeof value === "number") {
-      if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
-        throw propError(descriptor, "contains a number that is not a 32-bit integer", attribute);
+      if (!Number.isFinite(value) ||
+          (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+        throw propError(descriptor, "contains a number that is not exactly representable", attribute);
       }
       return;
     }
@@ -1118,11 +1209,16 @@
       if (!/^-?\d+$/.test(text)) {
         throw propError(descriptor, "expects an integer, got \"" + text + "\"", attribute);
       }
-      var number = Number(text);
-      if (!Number.isSafeInteger(number) || number < -2147483648 || number > 2147483647) {
-        throw propError(descriptor, "integer is outside the VM's 32-bit range", attribute);
+      if (!integerTextInInt64(text)) {
+        throw propError(descriptor, "integer is outside the signed 64-bit range", attribute);
       }
-      return { present: true, pending: false, value: number };
+      return { present: true, pending: false, value: integerTransportValue(text) };
+    }
+    if (descriptor.type === "float") {
+      if (!floatTextIsValid(text)) {
+        throw propError(descriptor, "expects a float, got \"" + text + "\"", attribute);
+      }
+      return { present: true, pending: false, value: floatTransportValue(text) };
     }
     if (descriptor.type === "array" || descriptor.type === "hash") {
       var parsed;
@@ -1747,7 +1843,12 @@
   function literalEventArgument(descriptor) {
     var value = descriptor.value;
     if (descriptor.literal_type === "string") return value === undefined ? "" : value;
-    if (descriptor.literal_type === "number") return Number(value);
+    if (descriptor.literal_type === "number") {
+      if (!integerTextInInt64(value)) {
+        throw new Error("mochi-loader: event literal " + value + " is outside the signed 64-bit range");
+      }
+      return integerTransportValue(value);
+    }
     if (descriptor.literal_type === "boolean") return value === "true";
     if (descriptor.literal_type === "null") return null;
     return value === undefined ? null : value;
@@ -2227,6 +2328,7 @@
   function displayRowValue(value) {
     if (value === null || value === undefined) return "";
     if (typeof value === "string") return value;
+    if (isMochiNumber(value)) return mochiNumberText(value);
     if (typeof value === "object") {
       try {
         return JSON.stringify(value);
@@ -2451,6 +2553,7 @@
   function rowKeyToken(value) {
     if (typeof value === "string") return "s:" + value;
     if (typeof value === "number") return "n:" + String(value);
+    if (isMochiNumber(value)) return "mn:" + mochiNumberKind(value) + ":" + mochiNumberText(value);
     if (typeof value === "boolean") return "b:" + String(value);
     if (value && typeof value === "object") {
       try {
@@ -2464,6 +2567,7 @@
 
   function rowKeyLabel(value) {
     if (typeof value === "string") return value;
+    if (isMochiNumber(value)) return mochiNumberText(value);
     if (value && typeof value === "object") {
       try {
         return JSON.stringify(value);

@@ -144,6 +144,35 @@ RUBY
       props[3].default_code.should eq "nil"
     end
 
+    it "accepts float declarations and float defaults" do
+      source = <<-RUBY
+class Meter
+  @tag_name = "meter"
+  prop :ratio, Float, default: 0.5
+  prop :height, Float
+end
+RUBY
+
+      props = TreeSitter::PropertyExtractor.extract_props(source, "meter.rb")
+      props.size.should eq 2
+      props[0].type.should eq "float"
+      props[0].default_code.should eq "0.5"
+      props[1].type.should eq "float"
+      props[1].default_code.should be_nil
+    end
+
+    it "rejects integer defaults for float declarations" do
+      source = <<-RUBY
+class Meter
+  prop :ratio, Float, default: 1
+end
+RUBY
+
+      expect_raises(TreeSitter::PropertyExtractor::PropDeclarationError, /does not match float/) do
+        TreeSitter::PropertyExtractor.extract_props(source, "meter.rb")
+      end
+    end
+
     it "ignores prop declarations in nested classes" do
       source = <<-RUBY
 class Outer

@@ -373,5 +373,29 @@ SH
         FileUtils.rm_rf(dir)
       end
     end
+
+    it "walks int64, float, and bigint pool entries without losing alignment" do
+      dir = File.join(Dir.tempdir, "mochi_numeric_mrbc_spec_#{Random.rand(1_000_000)}")
+      Dir.mkdir_p(dir)
+
+      begin
+        source_path = File.join(dir, "numeric.rb")
+        bytecode_path = File.join(dir, "numeric.mrb")
+        File.write(source_path, <<-RUBY)
+class NumericPool
+  def values
+    [2147483648, 9007199254740993, 9223372036854775807, -9223372036854775808, 0.5]
+  end
+end
+RUBY
+
+        output = IO::Memory.new
+        status = Process.run(real_mrbc, ["-o", bytecode_path, source_path], output: output, error: output)
+        status.success?.should be_true
+        RiteVerifier.verify!(File.read(bytecode_path).to_slice, "numeric.rb")
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
   end
 end

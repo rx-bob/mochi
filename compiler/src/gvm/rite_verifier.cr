@@ -207,10 +207,14 @@ class RiteVerifier
           at += 2
         end
         at += str_len + 1
-      elsif tt == 1 || tt == 3
+      elsif tt == 1
         at += 4
-      elsif tt == 5 || tt == 7 || tt == 9
+      elsif tt == 3 || tt == 5
         at += 8
+      elsif tt == 7
+        raise "Truncated IREP bigint length in #{context_name}" if at >= section_end
+        digits = bytecode[at].to_i
+        at += digits + 2
       else
         raise "Unsupported IREP pool entry type #{tt} in #{context_name}"
       end
