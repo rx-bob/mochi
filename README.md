@@ -307,7 +307,9 @@ transport instead of a raw JSON number, and the loader validates the signed
 64-bit range before the VM sees it. Integers that fit safely still travel as
 ordinary JSON numbers on the JavaScript side. Floats render with Ruby's
 shortest round-trip spelling, including a `.0` mantissa; locale-aware decimal
-formatting belongs to the component, not the numeric core.
+formatting belongs to the component, not the numeric core. For exact multi-step
+money work, use the [money helpers](#money-helpers) and round once at display
+time.
 
 Absence is `nil`, distinct from `""`, `0`, and `false`. Removing a declared
 attribute installs `nil`; removing a required attribute is an error. A single
@@ -336,6 +338,67 @@ Migration from undeclared attributes: add a `prop` declaration for each input
 the child reads, give it a default when absence should have one, then remove the
 child's `to_i`, boolean checks, and manual `JSON.parse`. Leave attributes that
 are deliberately string-only undeclared.
+
+### Money helpers
+
+Money is application data, not part of the numeric core. When a source mentions
+`MochiMoney`, the compiler emits a small exact-money Ruby helper into the
+prelude. Applications that never mention it do not receive the file.
+
+A ledger is an ordinary Ruby `Hash` holding an exact `numerator / denominator`
+number of minor units. The helper never rounds during aggregation. Choose the
+scale with the denominator you add. For example, a rate in cents per million
+tokens contributes `tokens * rate / 1_000_000` cents:
+
+```ruby
+cost = MochiMoney.ledger
+MochiMoney.add_ratio(cost, 202_000 * 300, 1_000_000)
+
+MochiMoney.exact(cost)          # "303/5" (60.6 cents)
+MochiMoney.round_half_up(cost)  # 61
+```
+
+`add_minor(ledger, 25)` adds 25 whole minor units. `merge(ledger, other)` adds
+another ledger exactly, and `apply_ratio(ledger, numerator, denominator)`
+scales it exactly. `numerator(ledger)`, `denominator(ledger)`, and
+`exact(ledger)` expose the reduced value. `MochiMoney.amount(numerator,
+denominator)` and `MochiMoney.minor(amount)` create a ledger for one value.
+
+Round only at the display boundary. The named modes are:
+
+| Method | Rule |
+| --- | --- |
+| `round_half_up` | nearest; exact halves away from zero |
+| `round_half_down` | nearest; exact halves toward zero |
+| `round_half_even` | nearest; exact halves to the even integer |
+| `round_floor` | toward negative infinity |
+| `round_ceil` | toward positive infinity |
+| `round_truncate` | toward zero |
+
+Negative adjustments are ordinary negative numerators. For `-1/2` of a minor
+unit, `round_half_up` and `round_floor` return `-1`; `round_half_down`,
+`round_half_even`, `round_ceil`, and `round_truncate` return `0`. Currency
+display normally uses `round_half_up`, matching `Intl.NumberFormat`'s default
+currency rounding.
+
+Do not round each line and then sum the labels. Three charges of `2/5` of a
+cent sum exactly to `6/5`; `round_half_up` gives `1`, while rounding each line
+gives `0`. Likewise, displayed model labels can differ from a displayed total
+by one minor unit. Derive every total from the same exact ledgers and account
+for the display difference explicitly rather than feeding rounded labels back
+into the pipeline.
+
+All arithmetic uses the checked signed 64-bit integer operations. A
+cross-product or scale that does not fit reports `integer overflow` through the
+normal `mochi:error` channel. A zero denominator reports `division by zero`.
+The minimum signed 64-bit value remains exact while its denominator is
+positive; an operation that would negate it reports overflow.
+
+The helper performs no currency symbols, grouping, decimal separators, or
+locale lookup. Format the integer returned by a `round_*` method in your
+component. Applications that do not use `MochiMoney` pay no prelude bytes for
+it; E6 will attach the helper to the components that depend on it instead of
+the shared prelude.
 
 ### Synchronous event modifiers and focus
 
@@ -465,7 +528,7 @@ cd mochi
 task run
 ```
 
-The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, and one `.chi` file per component. It does not generate component-specific JavaScript.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file per component, and a shared `prelude.chi` when helper-only Ruby or an optional helper such as `MochiMoney` is present. It does not generate component-specific JavaScript.
 
 ### Compiler Tasks
 
@@ -500,7 +563,7 @@ mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --t
 * --typecheck: Run Sorbet typechecks (optional)
 * --initialize: Creates a new preconfigured project directory
 
-The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader fetches the manifest, WASM, and component `.chi` files.
+The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader fetches the manifest, WASM, the shared prelude, and component `.chi` files.
 
 
 

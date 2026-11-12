@@ -2125,6 +2125,11 @@ end
     stdio: "pipe",
   });
 
+  const numericManifest = JSON.parse(
+    fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
+  );
+  expect(numericManifest.prelude).toBeUndefined();
+
   const { server, baseURL } = await startStaticServer(bundleDir);
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
@@ -2180,6 +2185,284 @@ end
     const numericError = await page.evaluate(() => (window as any).__mochiNumericErrors[0]);
     expect(numericError.phase).toBe("event");
     expect(numericError.message).toMatch(/integer overflow/);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("GVM money helpers keep exact minor-unit totals and named rounding", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-money-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "MoneyLedger.rb"), `
+class MoneyLedger
+  @tag_name = "money-ledger"
+  @rows
+  @model_a
+  @model_b
+  @harness
+  @total
+  @component
+  @subcent_a
+  @subcent_b
+  @subcent_c
+  @subcent
+  @negative
+  @max
+  @min
+  @overflow
+  @model_a_exact
+  @model_a_cents
+  @model_a_label
+  @model_b_exact
+  @model_b_cents
+  @model_b_label
+  @harness_exact
+  @harness_cents
+  @harness_label
+  @total_exact
+  @total_cents
+  @total_label
+  @component_exact
+  @component_cents
+  @component_label
+  @display_sum_cents
+  @display_difference
+  @subcent_exact
+  @subcent_cents
+  @subcent_lines_cents
+  @negative_exact
+  @negative_half_up
+  @negative_half_down
+  @negative_half_even
+  @negative_floor
+  @negative_ceil
+  @negative_truncate
+  @negative_label
+  @max_exact
+  @max_cents
+  @min_exact
+  @min_cents
+
+  def money(cents)
+    sign = ""
+    value = cents
+    if cents < 0
+      sign = "-"
+      value = -cents
+    end
+    whole = value / 100
+    remainder = value % 100
+    fraction = remainder.to_s
+    if remainder < 10
+      fraction = "0" + fraction
+    end
+    return sign + "$" + whole.to_s + "." + fraction
+  end
+
+  def refresh
+    @model_a_exact = MochiMoney.exact(@model_a)
+    @model_a_cents = MochiMoney.round_half_up(@model_a)
+    @model_a_label = money(@model_a_cents)
+    @model_b_exact = MochiMoney.exact(@model_b)
+    @model_b_cents = MochiMoney.round_half_up(@model_b)
+    @model_b_label = money(@model_b_cents)
+    @harness_exact = MochiMoney.exact(@harness)
+    @harness_cents = MochiMoney.round_half_up(@harness)
+    @harness_label = money(@harness_cents)
+    @total_exact = MochiMoney.exact(@total)
+    @total_cents = MochiMoney.round_half_up(@total)
+    @total_label = money(@total_cents)
+    @component_exact = MochiMoney.exact(@component)
+    @component_cents = MochiMoney.round_half_up(@component)
+    @component_label = money(@component_cents)
+    @display_sum_cents = @model_a_cents + @model_b_cents
+    @display_difference = @display_sum_cents - @total_cents
+    @subcent_exact = MochiMoney.exact(@subcent)
+    @subcent_cents = MochiMoney.round_half_up(@subcent)
+    @subcent_lines_cents = MochiMoney.round_half_up(@subcent_a) + MochiMoney.round_half_up(@subcent_b) + MochiMoney.round_half_up(@subcent_c)
+    @negative_exact = MochiMoney.exact(@negative)
+    @negative_half_up = MochiMoney.round_half_up(@negative)
+    @negative_half_down = MochiMoney.round_half_down(@negative)
+    @negative_half_even = MochiMoney.round_half_even(@negative)
+    @negative_floor = MochiMoney.round_floor(@negative)
+    @negative_ceil = MochiMoney.round_ceil(@negative)
+    @negative_truncate = MochiMoney.round_truncate(@negative)
+    @negative_label = money(@negative_half_up)
+    @max_exact = MochiMoney.exact(@max)
+    @max_cents = MochiMoney.round_half_up(@max)
+    @min_exact = MochiMoney.exact(@min)
+    @min_cents = MochiMoney.round_half_up(@min)
+  end
+
+  def initialize
+    @rows = [
+      {"model" => "claude-sonnet", "input" => 202000, "cached" => 0, "output" => 0, "rin" => 300, "rcache" => 30, "rout" => 1500},
+      {"model" => "gemini-pro", "input" => 1000, "cached" => 0, "output" => 0, "rin" => 200, "rcache" => 20, "rout" => 1000},
+      {"model" => "gemini-pro", "input" => 0, "cached" => 10000, "output" => 0, "rin" => 200, "rcache" => 20, "rout" => 1000},
+      {"model" => "gemini-pro", "input" => 0, "cached" => 0, "output" => 200, "rin" => 200, "rcache" => 20, "rout" => 1000}
+    ]
+    @model_a = MochiMoney.ledger
+    @model_b = MochiMoney.ledger
+    @harness = MochiMoney.ledger
+    @total = MochiMoney.ledger
+    @rows.each do |row|
+      charge = row["input"] * row["rin"] + row["cached"] * row["rcache"] + row["output"] * row["rout"]
+      if row["model"] == "claude-sonnet"
+        MochiMoney.add_ratio(@model_a, charge, 1000000)
+      else
+        MochiMoney.add_ratio(@model_b, charge, 1000000)
+      end
+      MochiMoney.add_ratio(@harness, charge, 1000000)
+      MochiMoney.add_ratio(@total, charge, 1000000)
+    end
+    @component = MochiMoney.ledger
+    MochiMoney.merge(@component, @total)
+    MochiMoney.apply_ratio(@component, 22, 100)
+
+    @subcent_a = MochiMoney.amount(2, 5)
+    @subcent_b = MochiMoney.amount(2, 5)
+    @subcent_c = MochiMoney.amount(2, 5)
+    @subcent = MochiMoney.ledger
+    MochiMoney.merge(@subcent, @subcent_a)
+    MochiMoney.merge(@subcent, @subcent_b)
+    MochiMoney.merge(@subcent, @subcent_c)
+    @negative = MochiMoney.amount(-1, 2)
+    @max = MochiMoney.minor(9223372036854775807)
+    @min = MochiMoney.minor(-9223372036854775808)
+    @overflow = MochiMoney.minor(9223372036854775807)
+
+    refresh
+  end
+
+  def force_overflow
+    MochiMoney.add_minor(@overflow, 1)
+  end
+
+  def html
+    %Q{
+      <span class="model-a-exact">{@model_a_exact}</span>
+      <span class="model-a-cents">{@model_a_cents}</span>
+      <span class="model-a-label">{@model_a_label}</span>
+      <span class="model-b-exact">{@model_b_exact}</span>
+      <span class="model-b-cents">{@model_b_cents}</span>
+      <span class="model-b-label">{@model_b_label}</span>
+      <span class="harness-exact">{@harness_exact}</span>
+      <span class="harness-cents">{@harness_cents}</span>
+      <span class="harness-label">{@harness_label}</span>
+      <span class="total-exact">{@total_exact}</span>
+      <span class="total-cents">{@total_cents}</span>
+      <span class="total-label">{@total_label}</span>
+      <span class="component-exact">{@component_exact}</span>
+      <span class="component-cents">{@component_cents}</span>
+      <span class="component-label">{@component_label}</span>
+      <span class="display-sum-cents">{@display_sum_cents}</span>
+      <span class="display-difference">{@display_difference}</span>
+      <span class="subcent-exact">{@subcent_exact}</span>
+      <span class="subcent-cents">{@subcent_cents}</span>
+      <span class="subcent-lines-cents">{@subcent_lines_cents}</span>
+      <span class="negative-exact">{@negative_exact}</span>
+      <span class="negative-half-up">{@negative_half_up}</span>
+      <span class="negative-half-down">{@negative_half_down}</span>
+      <span class="negative-half-even">{@negative_half_even}</span>
+      <span class="negative-floor">{@negative_floor}</span>
+      <span class="negative-ceil">{@negative_ceil}</span>
+      <span class="negative-truncate">{@negative_truncate}</span>
+      <span class="negative-label">{@negative_label}</span>
+      <span class="max-exact">{@max_exact}</span>
+      <span class="max-cents">{@max_cents}</span>
+      <span class="min-exact">{@min_exact}</span>
+      <span class="min-cents">{@min_cents}</span>
+      <button class="overflow" onclick="{force_overflow}">Overflow</button>
+    }
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <money-ledger></money-ledger>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const moneyManifest = JSON.parse(
+    fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
+  );
+  expect(moneyManifest.prelude).toBe("prelude.chi");
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const host = page.locator("money-ledger");
+
+    await expect(host.locator("span.model-a-exact")).toHaveText("303/5");
+    await expect(host.locator("span.model-b-exact")).toHaveText("3/5");
+    await expect(host.locator("span.harness-exact")).toHaveText("306/5");
+    await expect(host.locator("span.total-exact")).toHaveText("306/5");
+    await expect(host.locator("span.component-exact")).toHaveText("1683/125");
+    await expect(host.locator("span.subcent-exact")).toHaveText("6/5");
+    await expect(host.locator("span.negative-exact")).toHaveText("-1/2");
+    await expect(host.locator("span.max-exact")).toHaveText("9223372036854775807/1");
+    await expect(host.locator("span.min-exact")).toHaveText("-9223372036854775808/1");
+
+    await expect(host.locator("span.model-a-cents")).toHaveText("61");
+    await expect(host.locator("span.model-b-cents")).toHaveText("1");
+    await expect(host.locator("span.harness-cents")).toHaveText("61");
+    await expect(host.locator("span.total-cents")).toHaveText("61");
+    await expect(host.locator("span.component-cents")).toHaveText("13");
+    await expect(host.locator("span.display-sum-cents")).toHaveText("62");
+    await expect(host.locator("span.display-difference")).toHaveText("1");
+    await expect(host.locator("span.subcent-cents")).toHaveText("1");
+    await expect(host.locator("span.subcent-lines-cents")).toHaveText("0");
+    await expect(host.locator("span.max-cents")).toHaveText("9223372036854775807");
+    await expect(host.locator("span.min-cents")).toHaveText("-9223372036854775808");
+
+    await expect(host.locator("span.model-a-label")).toHaveText("$0.61");
+    await expect(host.locator("span.model-b-label")).toHaveText("$0.01");
+    await expect(host.locator("span.harness-label")).toHaveText("$0.61");
+    await expect(host.locator("span.total-label")).toHaveText("$0.61");
+    await expect(host.locator("span.component-label")).toHaveText("$0.13");
+
+    await expect(host.locator("span.negative-half-up")).toHaveText("-1");
+    await expect(host.locator("span.negative-half-down")).toHaveText("0");
+    await expect(host.locator("span.negative-half-even")).toHaveText("0");
+    await expect(host.locator("span.negative-floor")).toHaveText("-1");
+    await expect(host.locator("span.negative-ceil")).toHaveText("0");
+    await expect(host.locator("span.negative-truncate")).toHaveText("0");
+    await expect(host.locator("span.negative-label")).toHaveText("-$0.01");
+
+    await page.evaluate(() => {
+      (window as any).__mochiMoneyErrors = [];
+      document.addEventListener("mochi:error", (event: any) => {
+        (window as any).__mochiMoneyErrors.push(event.detail);
+      });
+    });
+    await host.locator("button.overflow").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiMoneyErrors.length,
+    )).toBe(1);
+    const moneyError = await page.evaluate(() => (window as any).__mochiMoneyErrors[0]);
+    expect(moneyError.phase).toBe("event");
+    expect(moneyError.message).toMatch(/integer overflow/);
     expect(errors).toEqual([]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

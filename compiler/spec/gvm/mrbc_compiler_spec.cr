@@ -397,5 +397,28 @@ RUBY
         FileUtils.rm_rf(dir)
       end
     end
+
+    it "compiles the optional money helper as prelude bytecode" do
+      dir = File.join(Dir.tempdir, "mochi_money_mrbc_spec_#{Random.rand(1_000_000)}")
+      Dir.mkdir_p(dir)
+
+      begin
+        money_source = File.read(File.join(__DIR__, "../../../fragments/batteries/money.rb"))
+        compiler = MrbcCompiler.new(
+          mrbc_path: real_mrbc,
+          wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
+          loader_source: File.join(dir, "missing.js")
+        )
+        compiler.compile([] of MochiComponent, File.join(dir, "out"), money_source)
+
+        prelude = compiler.prelude_path
+        prelude.should_not be_nil
+        File.exists?(prelude.not_nil!).should be_true
+        File.read(prelude.not_nil!).includes?("MATZ").should be_true
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
   end
 end

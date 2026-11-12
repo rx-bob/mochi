@@ -31,6 +31,7 @@ items.push(Item.new("Mochi", "#{dir_batteries}/mochi.rb", td_root, "mochi_rb.cr"
 items.push(Item.new("AppRouter", "#{dir_batteries}/app_router.rb", td_root, "app_router_rb.cr"))
 items.push(Item.new("BrowserId", "#{dir_batteries}/browser_id.rb", td_root, "browser_id_rb.cr"))
 items.push(Item.new("Logger", "#{dir_batteries}/logger.rb", td_root, "logger_rb.cr"))
+items.push(Item.new("MochiMoney", "#{dir_batteries}/money.rb", td_root, "money_rb.cr"))
 
 # ----- charts
 items.push(Item.new("Charts", "#{dir_charts}/charts.rb", td_charts, "charts_rb.cr"))

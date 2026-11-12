@@ -2,6 +2,7 @@ require "./builder_man"
 require "file"
 require "file_utils"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
+require "../../generated/money_rb"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
 
@@ -39,6 +40,13 @@ class BuildMain
 
       builtin_route_comp = rb_rewriter.gen_builtin_route_component
       File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_route_comp.rb", builtin_route_comp)
+    end
+
+    # Exact money arithmetic is ordinary Ruby bytecode. Emit it only for
+    # applications that mention the helper; E6 will attach it as a component
+    # dependency instead of placing it in the shared prelude.
+    if all_rb_sources.includes?("MochiMoney")
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_money.rb", MochiMoneyRbFragment.get_ruby_code)
     end
 
     print_separator
