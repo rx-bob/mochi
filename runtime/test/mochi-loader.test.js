@@ -1447,6 +1447,103 @@ test("failed binding registration rolls back the partial mount and a retry succe
   assert.deepEqual(log.unmounts, ["1"]);
 });
 
+test("compiler binding target failures report authored context and clear partial DOM", async () => {
+  const mismatch = {
+    ...COMPONENT,
+    tag_name: "mismatch-counter",
+    class_name: "MismatchCounter",
+    bindings: [
+      {
+        id: 7,
+        path: [0, 99],
+        kind: "attr",
+        attr_name: "class",
+        source: {
+          file: "app/components/mismatch_counter.rb",
+          line: 18,
+          column: 9,
+          end_line: 18,
+          end_column: 24,
+        },
+      },
+    ],
+  };
+  const { log } = await setup([mismatch]);
+  const element = document.createElement("mismatch-counter");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady, (error) => {
+    assert.match(error.message, /missing binding target at path \[0, 99\]/);
+    assert.match(error.message, /mismatch-counter \(MismatchCounter\)/);
+    assert.match(error.message, /binding 7, kind attr, attribute "class"/);
+    assert.match(error.message, /app\/components\/mismatch_counter\.rb:18:9-18:24/);
+    return true;
+  });
+
+  assert.equal(element._mochiMountState, "failed");
+  assert.match(element.mochiError.message, /app\/components\/mismatch_counter\.rb:18:9-18:24/);
+  assert.equal(element.shadowRoot.childNodes.length, 0);
+  assert.deepEqual(element.bindingTargets, {});
+  assert.deepEqual(element.bindingValues, {});
+  assert.deepEqual(element.bindingData, {});
+  assert.equal(log.components.size, 0);
+  assert.deepEqual(log.bindings, []);
+});
+
+test("compiler binding target node type mismatches fail before VM registration", async () => {
+  const mismatch = {
+    ...COMPONENT,
+    tag_name: "wrong-kind-counter",
+    class_name: "WrongKindCounter",
+    bindings: [{
+      id: 8,
+      path: [0, 0],
+      kind: "attr",
+      attr_name: "class",
+      source: { file: "app/components/wrong_kind.rb", line: 6, column: 4 },
+    }],
+  };
+  const { log } = await setup([mismatch]);
+  const element = document.createElement("wrong-kind-counter");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady, (error) => {
+    assert.match(error.message, /invalid attr binding target \(DOM node type 3\)/);
+    assert.match(error.message, /wrong-kind-counter \(WrongKindCounter\), binding 8, kind attr, attribute "class"/);
+    assert.match(error.message, /app\/components\/wrong_kind\.rb:6:4/);
+    return true;
+  });
+  assert.equal(element.shadowRoot.childNodes.length, 0);
+  assert.equal(log.components.size, 0);
+  assert.deepEqual(log.bindings, []);
+});
+
+test("failed mount reconnect reuses one delegated listener and installs bindings once", async () => {
+  const { log } = await setup([COMPONENT]);
+  const rootListeners = [];
+  const originalAddEventListener = window.ShadowRoot.prototype.addEventListener;
+  window.ShadowRoot.prototype.addEventListener = function (type, listener, options) {
+    rootListeners.push(type);
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+  log.failBindingAt = 2;
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await assert.rejects(element._mochiReady);
+  assert.equal(element.shadowRoot.childNodes.length, 0);
+
+  element.remove();
+  await flushLifecycle();
+  log.failBindingAt = undefined;
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(log.components.size, 1);
+  assert.equal(log.bindings.length, 2);
+  assert.deepEqual(rootListeners, ["click", "change"]);
+});
+
 test("mounted failure runs the unmounted hook once and discards pending host work", async () => {
   const { module, loader, log } = await setup([COMPONENT]);
   log.methods.add("unmounted");

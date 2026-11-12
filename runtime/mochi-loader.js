@@ -1481,7 +1481,10 @@
     var existing = state.irepPromises.get(url);
     if (existing) return existing;
 
-    var promise = state.loadChain.then(async function () {
+    // Fetch packages concurrently. Only the VM's synchronous irep load needs
+    // serialization; keeping network waits on this chain lets one slow sibling
+    // package stall unrelated components before their first render.
+    var promise = (async function () {
       var module = await loadRuntime(manifest, manifestUrl);
       var response = await global.fetch(url);
       if (!response.ok) throw new Error("mochi-loader: failed to fetch " + url);
@@ -1491,24 +1494,26 @@
       bytes.set(RITE_HEADER, 0);
       bytes.set(stripped, RITE_HEADER.length);
 
-      var malloc = module._malloc || module._mochi_malloc;
-      var free = module._free || module._mochi_free;
-      var pointer = malloc(bytes.length);
-      if (!pointer) throw new Error("mochi-gvm: out of memory");
+      var loadTask = state.loadChain.then(function () {
+        var malloc = module._malloc || module._mochi_malloc;
+        var free = module._free || module._mochi_free;
+        var pointer = malloc(bytes.length);
+        if (!pointer) throw new Error("mochi-gvm: out of memory");
 
-      try {
-        module.HEAPU8.set(bytes, pointer);
-        if (module._mochi_load_irep(pointer, bytes.length) !== 0) {
-          throw new Error("mochi-loader: load_irep failed for " + label + ": " + lastError(module));
+        try {
+          module.HEAPU8.set(bytes, pointer);
+          if (module._mochi_load_irep(pointer, bytes.length) !== 0) {
+            throw new Error("mochi-loader: load_irep failed for " + label + ": " + lastError(module));
+          }
+        } finally {
+          if (free) free(pointer);
         }
-      } finally {
-        if (free) free(pointer);
-      }
+        return module;
+      });
 
-      return module;
-    });
-
-    state.loadChain = promise.catch(function () {});
+      state.loadChain = loadTask.catch(function () {});
+      return loadTask;
+    })();
     state.irepPromises.set(url, promise);
     promise.catch(function () { state.irepPromises.delete(url); });
     return promise;
@@ -2359,11 +2364,51 @@
     return node || null;
   }
 
+  function bindingSource(binding) {
+    if (!binding) return null;
+    if (binding.source && binding.source.file) return binding.source;
+    var rowSource = binding.each_rows && binding.each_rows.span;
+    return rowSource && rowSource.file ? rowSource : null;
+  }
+
+  function bindingContext(element, binding, context) {
+    var component = element && element._mochiComponent || {};
+    var name = component.tag_name || component.class_name || "component";
+    if (component.class_name && component.class_name !== name) name += " (" + component.class_name + ")";
+    var details = [name, "binding " + binding.id, "kind " + (binding.kind || "unknown")];
+    if (binding.attr_name) details.push("attribute " + JSON.stringify(binding.attr_name));
+    var source = bindingSource(binding);
+    if (source) {
+      var location = source.file;
+      if (source.line) location += ":" + source.line;
+      if (source.column) location += ":" + source.column;
+      if (source.end_line && source.end_column) location += "-" + source.end_line + ":" + source.end_column;
+      details.push("Ruby source " + location);
+    }
+    if (context) details.push("install context " + context);
+    return details.join(", ");
+  }
+
+  function bindingTargetTypeError(node, binding) {
+    var type = node && node.nodeType;
+    if (["text", "text_html", "html", "attr", "prop", "cond", "each"].indexOf(binding.kind) === -1) return true;
+    if (binding.kind === "text") return type !== 3;
+    if (binding.kind === "attr" || binding.kind === "prop") return type !== 1;
+    if (binding.kind === "html") return type !== 1 && type !== 3;
+    if (binding.kind === "cond" || binding.kind === "each") return type !== 8;
+    if (binding.kind === "text_html") return type !== 1 && type !== 3;
+    return false;
+  }
+
   function installBindingTarget(element, root, binding, context) {
     var path = binding.path || [];
     var node = resolveTarget(root, path);
+    var description = bindingContext(element, binding, context);
     if (!node) {
-      throw new Error("mochi-loader: missing binding path [" + path.join(", ") + "] for " + context);
+      throw new Error("mochi-loader: missing binding target at path [" + path.join(", ") + "] for " + description);
+    }
+    if (bindingTargetTypeError(node, binding)) {
+      throw new Error("mochi-loader: invalid " + binding.kind + " binding target (DOM node type " + node.nodeType + ") at path [" + path.join(", ") + "] for " + description);
     }
 
     if ((binding.kind === "html" || binding.kind === "text_html") && node.nodeType === 3) {
@@ -2926,6 +2971,15 @@
       return fragmentFor(html);
     }
     if (!context || context.nodeType !== 1) {
+      // Generic root rows do not need an element-specific parser context. A
+      // top-level each anchor lives under the component ShadowRoot, which is
+      // a DocumentFragment rather than an element; keep context-sensitive
+      // table/select/SVG rows strict and parse only this generic case normally.
+      if (context && context.nodeType === 11 &&
+          (!descriptor.context_tag || String(descriptor.context_tag).toLowerCase() === "body") &&
+          (!descriptor.context_namespace || descriptor.context_namespace === "html")) {
+        return fragmentFor(html);
+      }
       throw new Error("mochi-loader: each row has no element insertion context for binding " + descriptor.id);
     }
     var expectedTag = descriptor.context_tag;
@@ -3947,10 +4001,18 @@
             if (mountToken === element._mochiMountToken) {
               element._mochiMountState = "failed";
               var phase = error && error.mochiPhase ? error.mochiPhase : "mount";
-              throw reportError(
+              var reported = reportError(
                 element, phase, methodFromError(error, "initialize"),
                 error, element._mochiModule
               );
+              // A failed transaction must not leave generated placeholders or
+              // partially installed compiler targets observable in the host.
+              while (root.firstChild) root.removeChild(root.firstChild);
+              element.bindingTargets = {};
+              element.bindingValues = {};
+              element.bindingData = {};
+              element.refs = element.bindingTargets;
+              throw reported;
             }
             console.error("[mochi] " + tag + " stale mount failed", error);
             throw error;
@@ -4102,6 +4164,7 @@
         this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
+        this.bindingData = {};
         focusStacks.delete(this);
         this.refs = this.bindingTargets;
       }
@@ -4172,6 +4235,7 @@
         this._mochiAttributeValues = null;
         this.bindingTargets = {};
         this.bindingValues = {};
+        this.bindingData = {};
         focusStacks.delete(this);
         this.refs = this.bindingTargets;
       }

@@ -20,6 +20,6 @@ Evidence index for the 17 reports reviewed on 2026-11-12. Status describes Mochi
 | 014 Compiler discovery | Capability gap: no supported installed development launcher/resource discovery workflow. | E10.S2, E10.S3 |
 | 015 Pointer capture | Capability gap: no Ruby pointer identity/capture/release/cancellation contract. | E8.S1, E8.S2 |
 | 016 Drag transfer data | Capability gap: no native typed/text transfer or bounded OS-file read contract. | E9.S1–E9.S4 |
-| 017 Intermittent attribute placeholders | Unverified intermittent report; control mount/resource order and capture first failure. | E2.S4, E3.S1 |
+| 017 Intermittent attribute placeholders | Original literal-placeholder report remains unverified. Controlled Chromium mounts preserve parent updates during delayed child descriptors, let an unrelated component render while a sibling `.chi` fetch is delayed, and isolate sibling descriptor failures. Adversarial first render exposed and fixed a separate top-level each/ShadowRoot parsing failure. Mismatched compiler targets now fail with component, binding, and Ruby span. No race has been established. | E2.S4, E3.S1 |
 
 The standalone fixture in `e2e/fixtures/framework_contracts` is checked-in Ruby source and compiles through Mochi. Its three-engine browser test does not use product routes, fixtures, or a Cowboy checkout.

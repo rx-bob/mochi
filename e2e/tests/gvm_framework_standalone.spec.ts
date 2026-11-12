@@ -174,6 +174,89 @@ test("root conditional anchors render, toggle nested branches, and support initi
   expect(runtimeErrors).toEqual([]);
 });
 
+test("delayed child descriptor preserves cached props and healthy first render", async ({ page }) => {
+  let requestSeen!: () => void;
+  let releaseRequest!: () => void;
+  const seen = new Promise<void>((resolve) => { requestSeen = resolve; });
+  const released = new Promise<void>((resolve) => { releaseRequest = resolve; });
+  await page.route("**/components/contract-child.json", async (route) => {
+    requestSeen();
+    await released;
+    await route.continue();
+  });
+
+  try {
+    await withFrameworkProject(async (baseURL) => {
+      await page.goto(`${baseURL}/index.html`);
+      await seen;
+      const root = page.locator("contract-root");
+      const child = root.locator("contract-child");
+      await root.evaluate((element: any) => element._mochiReady);
+      await expect(root.locator("button.change")).toBeVisible();
+      await expect(child).toHaveAttribute("label", "before");
+      expect(await child.evaluate((element: any) => element._mochiMountState)).toBe("mounting");
+      await root.locator("button.change").click();
+      await expect(child).toHaveAttribute("label", "after");
+
+      releaseRequest();
+      await expect(child.locator(".child-label")).toHaveText("after");
+    });
+  } finally {
+    releaseRequest();
+  }
+});
+
+test("delayed sibling package does not block an independent first render", async ({ page }) => {
+  let packageSeen!: () => void;
+  let releasePackage!: () => void;
+  const packageRequested = new Promise<void>((resolve) => { packageSeen = resolve; });
+  const packageReleased = new Promise<void>((resolve) => { releasePackage = resolve; });
+  await page.route("**/components/child-probe.chi", async (route) => {
+    packageSeen();
+    await packageReleased;
+    await route.continue();
+  });
+
+  try {
+    await withFrameworkProject(async (baseURL) => {
+      await page.goto(`${baseURL}/index.html`);
+      await packageRequested;
+      const root = page.locator("contract-root");
+      const child = root.locator("contract-child");
+      await root.evaluate((element: any) => element._mochiReady);
+      await expect(child.locator(".child-label")).toHaveText("before");
+      await expect(page.locator("child-probe")).toHaveJSProperty("_mochiMountState", "mounting");
+      await root.locator("button.change").click();
+      await expect(child.locator(".child-label")).toHaveText("after");
+
+      releasePackage();
+      await expect(page.locator("child-probe .probe")).toHaveText("37%");
+    }, '<contract-root></contract-root><child-probe label="delayed-package" remaining="37" reset="cold"></child-probe>');
+  } finally {
+    releasePackage();
+  }
+});
+
+test("one sibling descriptor failure does not strand healthy first-render bindings", async ({ page }) => {
+  await page.route("**/components/child-probe.json", (route) =>
+    route.fulfill({ status: 503, body: "descriptor unavailable" })
+  );
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("contract-root");
+    await expect(root.locator(".child-label")).toHaveText("before");
+    const failed = await page.locator("child-probe").evaluate(async (element: any) => {
+      try { await element._mochiReady; return { state: element._mochiMountState, error: "", childCount: element.shadowRoot.childNodes.length }; }
+      catch (error) { return { state: element._mochiMountState, error: (error as Error).message, childCount: element.shadowRoot.childNodes.length }; }
+    });
+    expect(failed.state).toBe("failed");
+    expect(failed.error).toContain("failed to fetch descriptor");
+    expect(failed.childCount).toBe(0);
+    await expect(root.locator(".child-label")).toHaveText("before");
+  }, '<contract-root></contract-root><child-probe label="broken" remaining="37" reset="cold"></child-probe>');
+});
+
 test("five siblings with four typed props mount independently across cold and cached class loads", async ({ page }) => {
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
