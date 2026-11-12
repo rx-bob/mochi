@@ -78,14 +78,58 @@ end
   fs.writeFileSync(path.join(projectDir, "lib", "ChildBadge.rb"), `
 class ChildBadge
   @tag_name = "child-badge"
-  @label
+  prop :label, String, default: "unset"
+  prop :count, Integer, default: 0
+  prop :flag, Boolean, default: false
+  prop :note, String
+  prop :rows, Array, default: []
+  prop :meta, Hash, default: {}
+
+  @summary
+  @ready
 
   def initialize
-    @label = "unset"
+    @summary = "#{@label}:#{@count}:#{@flag}:#{note_text_initial}"
+    @ready = "ready"
+  end
+
+  def note_text_initial
+    @note.nil? ? "nil" : @note
   end
 
   def html
-    %Q{<span class="badge-text">{@label}</span>}
+    %Q{
+      <span class="badge-text">{@label}</span>
+      <span class="badge-count">{@count}</span>
+      <span class="badge-flag">{@flag}</span>
+      <span class="badge-note">{note_text}</span>
+      <span class="badge-rows">{row_count}</span>
+      <span class="badge-currency">{currency}</span>
+      <span class="badge-init">{@summary}</span>
+      <span class="badge-pair">{badge_pair}</span>
+      <span class="badge-ready">{@ready}</span>
+      <button class="badge-mutate" onclick="{add_row}">Mutate</button>
+    }
+  end
+
+  def note_text
+    @note.nil? ? "nil" : @note
+  end
+
+  def row_count
+    @rows.length
+  end
+
+  def currency
+    @meta["currency"]
+  end
+
+  def badge_pair
+    "#{@label}:#{@count}"
+  end
+
+  def add_row
+    @rows << {"id" => "extra"}
   end
 end
 `);
@@ -101,6 +145,12 @@ class FeatureHost
   @last_key
   @pct_val
   @badge_label
+  @badge_count
+  @badge_flag
+  @badge_note
+  @badge_rows
+  @badge_meta
+  @parent_rows
 
   def initialize
     @items = [
@@ -114,6 +164,15 @@ class FeatureHost
     @last_key = "none"
     @pct_val = MathHelper.pct(16, 20)
     @badge_label = "synced-prop"
+    @badge_count = 0
+    @badge_flag = false
+    @badge_note = nil
+    @badge_rows = [
+      {"id" => "r1", "label" => "One"},
+      {"id" => "r2", "label" => "Two"}
+    ]
+    @badge_meta = {"currency" => "USD"}
+    @parent_rows = @badge_rows
   end
 
   def label_for(item)
@@ -132,7 +191,19 @@ class FeatureHost
         <input class="draft" type="text" bind:value="@draft">
         <p class="draft-out">{@draft}</p>
         <button class="badge-update" onclick="{bump_badge}">Badge</button>
-        <child-badge label="{@badge_label}"></child-badge>
+        <button class="badge-invalid" onclick="{break_badge_count}">Invalid</button>
+        <button class="badge-fix" onclick="{fix_badge_count}">Fix</button>
+        <p class="parent-rows">{@parent_rows.length}</p>
+        <child-badge
+          class="typed-badge"
+          label="{@badge_label}"
+          count="{@badge_count}"
+          flag="{@badge_flag}"
+          note="{@badge_note}"
+          rows="{@badge_rows}"
+          meta="{@badge_meta}"
+        ></child-badge>
+        <child-badge class="defaults-badge"></child-badge>
         <div class="list">
           {each @items as it}
             <button class="item-btn" onclick="{pick}">{label_for(it)}</button>
@@ -161,6 +232,16 @@ class FeatureHost
 
   def bump_badge
     @badge_label = @badge_label == "synced-prop" ? "live-prop" : "live-prop-2"
+    @badge_count = @badge_count + 1
+    @badge_flag = !@badge_flag
+  end
+
+  def break_badge_count
+    @badge_count = "not-a-count"
+  end
+
+  def fix_badge_count
+    @badge_count = 5
   end
 
   def on_key(ev)
@@ -201,8 +282,22 @@ end
     // The badge prop arrives through a live parent attribute. Updating it
     // after both components are mounted must keep the same child instance
     // and node while the child text follows the new value.
-    const badge = host.locator("child-badge");
+    const badge = host.locator("child-badge.typed-badge");
     await expect(badge.locator("span.badge-text")).toHaveText("synced-prop");
+    await expect(badge.locator("span.badge-count")).toHaveText("0");
+    await expect(badge.locator("span.badge-flag")).toHaveText("false");
+    await expect(badge.locator("span.badge-note")).toHaveText("nil");
+    await expect(badge.locator("span.badge-rows")).toHaveText("2");
+    await expect(badge.locator("span.badge-currency")).toHaveText("USD");
+    await expect(badge.locator("span.badge-pair")).toHaveText("synced-prop:0");
+
+    // A child mounted without any attributes observes declared defaults while
+    // initialize runs, not placeholder text or an unset ivar.
+    const defaultsBadge = host.locator("child-badge.defaults-badge");
+    await expect(defaultsBadge.locator("span.badge-init")).toHaveText("unset:0:false:nil");
+    await expect(defaultsBadge.locator("span.badge-ready")).toHaveText("ready");
+    await expect(defaultsBadge.locator("span.badge-rows")).toHaveText("0");
+
     const badgeInstance = await badge.evaluate((element: any) => {
       element.__badgeIdentity = true;
       return element._mochiInstance;
@@ -211,14 +306,76 @@ end
 
     await host.locator("button.badge-update").click();
     await expect(badge.locator("span.badge-text")).toHaveText("live-prop");
+    await expect(badge.locator("span.badge-count")).toHaveText("1");
+    await expect(badge.locator("span.badge-flag")).toHaveText("true");
+    // Three related props update in one batch, so no frame can expose the new
+    // label with the previous count.
+    await expect(badge.locator("span.badge-pair")).toHaveText("live-prop:1");
     await expect(badge).toHaveAttribute("label", "live-prop");
     expect(await badge.evaluate((element: any) => element._mochiInstance)).toBe(badgeInstance);
     expect(await badge.evaluate((element: any) => element.__badgeIdentity)).toBe(true);
 
     await host.locator("button.badge-update").click();
     await expect(badge.locator("span.badge-text")).toHaveText("live-prop-2");
+    await expect(badge.locator("span.badge-count")).toHaveText("2");
+    await expect(badge.locator("span.badge-flag")).toHaveText("false");
+    await expect(badge.locator("span.badge-pair")).toHaveText("live-prop-2:2");
     expect(await badge.evaluate((element: any) => element._mochiInstance)).toBe(badgeInstance);
     expect(await badge.evaluate((element: any) => element.__badgeIdentity)).toBe(true);
+
+    // An invalid typed value is rejected with the prop declaration location
+    // and the child keeps its last valid input.
+    await page.evaluate(() => {
+      (window as any).__mochiPropErrors = [];
+      document.addEventListener("mochi:error", (event: any) => {
+        (window as any).__mochiPropErrors.push(event.detail);
+      });
+    });
+    await host.locator("button.badge-invalid").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiPropErrors.length,
+    )).toBe(1);
+    const propError = await page.evaluate(() => (window as any).__mochiPropErrors[0]);
+    expect(propError.phase).toBe("attribute");
+    expect(propError.property).toBe("count");
+    expect(propError.propType).toBe("integer");
+    expect(propError.source).toMatch(/ChildBadge\.rb:\d+/);
+    await expect(badge.locator("span.badge-count")).toHaveText("2");
+
+    await host.locator("button.badge-fix").click();
+    await expect(badge.locator("span.badge-count")).toHaveText("5");
+    await expect(badge.locator("span.badge-pair")).toHaveText("live-prop-2:5");
+
+    // The child receives a private collection snapshot. Mutating it cannot
+    // change the parent's rows.
+    await expect(host.locator("p.parent-rows")).toHaveText("2");
+    await badge.locator("button.badge-mutate").click();
+    await expect(badge.locator("span.badge-rows")).toHaveText("3");
+    await expect(host.locator("p.parent-rows")).toHaveText("2");
+
+    // Removing a typed-prop child disposes its instance. A later mount builds
+    // a fresh instance from current attributes instead of reusing the snapshot.
+    const disposed = await badge.evaluate((element: any) => new Promise((resolve) => {
+      element.remove();
+      setTimeout(() => resolve(element._mochiUnmounted), 0);
+    }));
+    expect(disposed).toBe(true);
+    await expect(host.locator("child-badge.typed-badge")).toHaveCount(0);
+
+    await host.evaluate((element: any) => {
+      const remounted = document.createElement("child-badge");
+      remounted.className = "remount-badge";
+      remounted.setAttribute("label", "fresh");
+      remounted.setAttribute("count", "7");
+      remounted.setAttribute("rows", '[{"id":"x"}]');
+      element.shadowRoot.appendChild(remounted);
+      return remounted._mochiReady.then(() => true);
+    });
+    const remountBadge = host.locator("child-badge.remount-badge");
+    await expect(remountBadge.locator("span.badge-pair")).toHaveText("fresh:7");
+    await expect(remountBadge.locator("span.badge-rows")).toHaveText("1");
+    expect(await remountBadge.evaluate((element: any) => element._mochiInstance))
+      .not.toBe(badgeInstance);
 
     const itemBtns = host.locator("button.item-btn");
     await expect(itemBtns.nth(0)).toHaveText("Resume");

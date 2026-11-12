@@ -54,6 +54,7 @@ class ComponentGenerator
     each_blocks : Array(EachBlock) = [] of EachBlock,
     method_names : Array(String) = [] of String,
     source_locator : TemplateSourceLocator? = nil,
+    props : Array(PropDescriptor) = [] of PropDescriptor,
   ) : ComponentManifest
     @mochi_cmp_name = mochi_cmp_name
     @conditionals = conditionals
@@ -83,7 +84,8 @@ class ComponentGenerator
       html_template,
       css,
       bindings,
-      events
+      events,
+      props: props
     )
 
     validate_event_handlers(mochi_cmp_name, manifest.all_events, method_names)

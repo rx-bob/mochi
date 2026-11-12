@@ -62,9 +62,21 @@ class GvmSourcePreparer
 
   private def self.class_ivar_statement?(node : TreeSitter::Node) : Bool
     return true if node.type == "instance_variable"
+    return true if prop_declaration?(node)
     return false unless node.type == "assignment"
 
     left = node.child_by_field_name("left")
     !left.nil? && left.not_nil!.type == "instance_variable"
+  end
+
+  # `prop :label, String, default: "unset"` is compile-time metadata. The
+  # generated `__mochi_apply_props` installs the values at mount, so the
+  # declaration must not execute as a class-body method call in the VM.
+  private def self.prop_declaration?(node : TreeSitter::Node) : Bool
+    return false unless node.type == "call" || node.type == "command"
+    return false unless node.child_by_field_name("receiver").nil?
+
+    method = node.child_by_field_name("method")
+    !method.nil? && method.not_nil!.text == "prop"
   end
 end

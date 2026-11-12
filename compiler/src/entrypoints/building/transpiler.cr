@@ -16,6 +16,7 @@ require "../../ruby/attribute_method_generator"
 require "../../ruby/attribute_hash_generator"
 require "../../ruby/conditional_method_generator"
 require "../../ruby/each_method_generator"
+require "../../ruby/prop_method_generator"
 
 record TranspileFileResult, components : Array(MochiComponent), helper : HelperUnit?
 
@@ -359,6 +360,19 @@ class Compiler
       raise "Component '#{cls_name}' defines @tag_name but no html method at #{declaration.location(source_path)}"
     end
 
+    prop_declarations = TreeSitter::PropertyExtractor.extract_props_from_class(declaration.node, source_path)
+    props = prop_declarations.map do |prop|
+      PropDescriptor.new(
+        prop.name,
+        prop.type,
+        prop.required,
+        prop.has_default?,
+        prop.default_code,
+        source_path,
+        prop.line
+      )
+    end
+
     imports = RubyUnderstander.get_imports(root)
     css = if css_method = methods["css"]?
             css_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(css_method.body, "css")
@@ -449,7 +463,8 @@ class Compiler
       conditional_result.conditionals,
       each_result.each_blocks,
       methods.keys,
-      source_locator
+      source_locator,
+      props
     )
     manifest.helper_chi = helper_chi
     manifest.source_file = source_path
@@ -463,6 +478,12 @@ class Compiler
       amped_ruby_code,
       cls_name,
       generator.each_row_templates
+    )
+
+    amped_ruby_code = PropMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      props
     )
 
     rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(

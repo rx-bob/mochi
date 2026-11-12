@@ -38,6 +38,33 @@ const LOGS_COMPONENT = {
   chi_file: "my-logs.chi",
 };
 
+const TYPED_COMPONENT = {
+  tag_name: "typed-badge",
+  class_name: "TypedBadge",
+  chi_file: "typed-badge.chi",
+  html_template: '<span class="label">{@label}</span>',
+  css: "",
+  bindings: [
+    {
+      id: 0,
+      path: [0, 0],
+      kind: "text",
+      attr_name: null,
+      template_text: "{@label}",
+      getter_sym: "__mochi_bind_0",
+    },
+  ],
+  events: [],
+  props: [
+    { name: "label", type: "string", default: true, source: { file: "lib/badge.rb", line: 7 } },
+    { name: "count", type: "integer", default: true, source: { file: "lib/badge.rb", line: 8 } },
+    { name: "flag", type: "boolean", default: true, source: { file: "lib/badge.rb", line: 9 } },
+    { name: "note", type: "string", source: { file: "lib/badge.rb", line: 10 } },
+    { name: "rows", type: "array", default: true, source: { file: "lib/badge.rb", line: 11 } },
+    { name: "meta", type: "hash", default: true, source: { file: "lib/badge.rb", line: 12 } },
+  ],
+};
+
 function manifest(components) {
   return {
     components,
@@ -88,6 +115,9 @@ function fakeModule(log) {
   log.deliveredFetches = [];
   log.unmounts = [];
   log.ivarSets = [];
+  log.mountProps = [];
+  log.propSets = [];
+  log.failProps = false;
   log.components = new Set();
   log.failDispatch = new Set();
   log.errorText = "";
@@ -135,6 +165,16 @@ function fakeModule(log) {
       const instance = String(nextInstance++);
       log.components.add(instance);
       return instance;
+    },
+    _mochi_mount_component_props(namePointer, nameLength, jsonPointer, jsonLength) {
+      const json = decoder.decode(module.HEAPU8.slice(jsonPointer, jsonPointer + jsonLength));
+      log.mountProps.push(JSON.parse(json));
+      return module._mochi_mount_component();
+    },
+    _mochi_set_props_json(instance, jsonPointer, jsonLength) {
+      const json = decoder.decode(module.HEAPU8.slice(jsonPointer, jsonPointer + jsonLength));
+      log.propSets.push({ instance, props: JSON.parse(json) });
+      return log.failProps ? -1 : 0;
     },
     _mochi_unmount_component(instance) {
       log.unmounts.push(instance);
@@ -886,6 +926,182 @@ test("a parent attribute patch updates the mounted child instance without remoun
     assert.equal(childText.textContent, "");
     assert.equal(child._mochiInstance, childInstance);
     assert.equal(log.dispatched.length, dispatchedBefore);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("declared props mount as typed values and keep false, zero, and empty distinct", async () => {
+  const { log } = await setup([TYPED_COMPONENT]);
+  const element = document.createElement("typed-badge");
+  element.setAttribute("label", "");
+  element.setAttribute("count", "0");
+  element.setAttribute("flag", "false");
+  element.setAttribute("rows", '[{"id":1}]');
+  element.setAttribute("meta", '{"currency":"USD"}');
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.deepEqual(log.mountProps, [{
+    label: "",
+    count: 0,
+    flag: false,
+    rows: [{ id: 1 }],
+    meta: { currency: "USD" },
+  }]);
+  // Declared props never take the string-ivar path.
+  assert.deepEqual(log.ivarSets, []);
+  assert.deepEqual(log.propSets, []);
+});
+
+test("a string prop keeps JSON text and defers parent placeholders", async () => {
+  const { dom, log } = await setup([TYPED_COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+
+  try {
+    const literal = document.createElement("typed-badge");
+    literal.setAttribute("label", '{"a":1}');
+    document.body.appendChild(literal);
+    await literal._mochiReady;
+    assert.equal(log.mountProps[0].label, '{"a":1}');
+
+    const deferred = document.createElement("typed-badge");
+    deferred.setAttribute("label", "{parent_label}");
+    document.body.appendChild(deferred);
+    await deferred._mochiReady;
+    assert.deepEqual(log.mountProps[1], {});
+
+    deferred.setAttribute("label", "resolved");
+    await flushLifecycle();
+    assert.deepEqual(log.propSets.at(-1), {
+      instance: "2",
+      props: { label: "resolved" },
+    });
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("missing required prop fails before any instance is mounted", async () => {
+  const required = {
+    ...TYPED_COMPONENT,
+    props: [
+      { name: "label", type: "string", required: true, source: { file: "lib/required.rb", line: 4 } },
+    ],
+  };
+  const { log } = await setup([required]);
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+
+  const element = document.createElement("typed-badge");
+  document.body.appendChild(element);
+  await assert.rejects(element._mochiReady);
+
+  assert.equal(log.components.size, 0);
+  assert.deepEqual(log.mountProps, []);
+  assert.equal(details.length, 1);
+  assert.equal(details[0].phase, "mount");
+  assert.equal(details[0].tagName, "typed-badge");
+  assert.equal(details[0].property, "label");
+  assert.match(details[0].message, /prop "label" is required/);
+  assert.match(details[0].source, /lib\/required\.rb:4/);
+});
+
+test("typed prop updates are installed in one batch and flushed once", async () => {
+  const { dom, log } = await setup([TYPED_COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+
+  try {
+    const element = document.createElement("typed-badge");
+    element.setAttribute("label", "one");
+    element.setAttribute("count", "1");
+    document.body.appendChild(element);
+    await element._mochiReady;
+    const setsAfterMount = log.propSets.length;
+    const flushesAfterMount = log.flushes.length;
+
+    element.setAttribute("label", "two");
+    element.setAttribute("count", "2");
+    await flushLifecycle();
+
+    assert.equal(log.propSets.length, setsAfterMount + 1);
+    assert.deepEqual(log.propSets.at(-1), {
+      instance: "1",
+      props: { label: "two", count: 2 },
+    });
+    assert.equal(log.flushes.length, flushesAfterMount + 1);
+  } finally {
+    if (previousObserver === undefined) {
+      delete global.MutationObserver;
+    } else {
+      global.MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("a typed prop child disposes and remounts with a fresh instance", async () => {
+  const { log } = await setup([TYPED_COMPONENT]);
+
+  const element = document.createElement("typed-badge");
+  element.setAttribute("label", "before");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  assert.deepEqual(log.mountProps[0], { label: "before" });
+
+  element.remove();
+  await flushLifecycle();
+  assert.deepEqual(log.unmounts, ["1"]);
+  assert.equal(log.components.size, 0);
+
+  const replacement = document.createElement("typed-badge");
+  replacement.setAttribute("label", "after");
+  document.body.appendChild(replacement);
+  await replacement._mochiReady;
+  assert.deepEqual(log.mountProps[1], { label: "after" });
+  assert.notEqual(replacement._mochiInstance, element._mochiInstance);
+});
+
+test("invalid and removed declared props report source and send null on removal", async () => {
+  const { dom, log } = await setup([TYPED_COMPONENT]);
+  const previousObserver = global.MutationObserver;
+  global.MutationObserver = dom.window.MutationObserver;
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+
+  try {
+    const element = document.createElement("typed-badge");
+    element.setAttribute("label", "one");
+    element.setAttribute("note", "hello");
+    element.setAttribute("count", "1");
+    document.body.appendChild(element);
+    await element._mochiReady;
+
+    const setsAfterMount = log.propSets.length;
+    element.setAttribute("count", "many");
+    await flushLifecycle();
+    assert.equal(log.propSets.length, setsAfterMount);
+    assert.equal(details.length, 1);
+    assert.equal(details[0].property, "count");
+    assert.match(details[0].message, /expects an integer/);
+    assert.match(details[0].source, /lib\/badge\.rb:8/);
+
+    element.removeAttribute("note");
+    await flushLifecycle();
+    assert.equal(log.propSets.length, setsAfterMount + 1);
+    assert.deepEqual(log.propSets.at(-1), {
+      instance: "1",
+      props: { note: null },
+    });
   } finally {
     if (previousObserver === undefined) {
       delete global.MutationObserver;

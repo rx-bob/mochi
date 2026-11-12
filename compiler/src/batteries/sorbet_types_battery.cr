@@ -120,6 +120,13 @@ class SorbetTypesBat
           end
         end
       end
+
+      # Mochi component prop declaration. The compiler reads this metadata and
+      # removes the call before mrbc; the stub exists only for Sorbet.
+      class Class
+        def prop(name, type, required: false, default: nil)
+        end
+      end
     RUBY
   end
 

@@ -144,6 +144,13 @@
       source = binding.source;
       line = binding.source.line;
     }
+    // A declared prop carries its own declaration site. Point the report there
+    // instead of at the component class or the failing initialize method.
+    var propContext = error && error.mochiContext;
+    if (propContext && propContext.propSource && propContext.propSource.file) {
+      source = propContext.propSource;
+      line = propContext.propSource.line;
+    }
     var location = source && source.file
       ? source.file + (line > 0 ? ":" + line : "")
       : "";
@@ -164,6 +171,11 @@
     if (context) {
       if (context.attribute !== undefined) info.attribute = context.attribute;
       if (context.property !== undefined) info.property = context.property;
+    }
+    if (error && error.mochiContext) {
+      Object.keys(error.mochiContext).forEach(function (key) {
+        if (key !== "propSource") info[key] = error.mochiContext[key];
+      });
     }
     var reported = error instanceof Error ? error : new Error(info.message);
     reported.message = info.message;
@@ -778,6 +790,231 @@
     element._mochiAttributeValues[name] = value;
   }
 
+  function attributeNameForProp(name) {
+    return String(name || "").replace(/_/g, "-");
+  }
+
+  function propDescriptorFor(component, attrName) {
+    var props = component && component.props;
+    if (!props || !props.length || !attrName) return null;
+    var propName = String(attrName).replace(/-/g, "_");
+    for (var i = 0; i < props.length; i++) {
+      if (props[i] && props[i].name === propName) return props[i];
+    }
+    return null;
+  }
+
+  function hasDeclaredProps(component) {
+    return !!(component && component.props && component.props.length);
+  }
+
+  // A single `{expression}` is a generated parent binding, not a literal.
+  // Declared props wait for the first parent patch instead of mounting with
+  // the placeholder text or failing a type check against it.
+  function isBindingPlaceholder(text) {
+    if (typeof text !== "string" || !/^\{[^{}]*\}$/.test(text)) return false;
+    var inner = text.slice(1, -1).trim();
+    // A quoted first character is a JSON object key, not a Ruby expression.
+    return inner.length > 0 && inner[0] !== "\"" && inner[0] !== "'";
+  }
+
+  function propError(descriptor, detail, attribute) {
+    var error = new Error("mochi-loader: prop \"" + descriptor.name + "\" " + detail);
+    error.mochiContext = {
+      attribute: attribute === undefined ? attributeNameForProp(descriptor.name) : attribute,
+      property: descriptor.name,
+      propType: descriptor.type
+    };
+    if (descriptor.source && descriptor.source.file) {
+      error.mochiContext.propSource = {
+        file: descriptor.source.file,
+        line: Number(descriptor.source.line) || 0
+      };
+    }
+    return error;
+  }
+
+  function checkPropNumberRange(value, descriptor, attribute) {
+    if (typeof value === "number") {
+      if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+        throw propError(descriptor, "contains a number that is not a 32-bit integer", attribute);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(function (item) { checkPropNumberRange(item, descriptor, attribute); });
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.keys(value).forEach(function (key) {
+        checkPropNumberRange(value[key], descriptor, attribute);
+      });
+    }
+  }
+
+  // HTML attribute text -> typed Ruby value. Strings stay strings, booleans
+  // accept the HTML presence form, integers reject fractions and whitespace,
+  // and collections require valid JSON of the declared shape. Anything else is
+  // an explicit error instead of an ambiguous cast.
+  function readDeclaredProp(descriptor, raw, attribute) {
+    if (raw === null || raw === undefined) return { present: false, pending: false };
+    var text = String(raw);
+    // A JSON object literal also starts and ends with braces. Collections try
+    // JSON first; every other type treats a single brace expression as a
+    // parent binding that has not produced its first value yet.
+    if (descriptor.type !== "array" && descriptor.type !== "hash" &&
+        isBindingPlaceholder(text)) {
+      return { present: false, pending: true };
+    }
+
+    if (descriptor.type === "string") {
+      return { present: true, pending: false, value: text };
+    }
+    if (descriptor.type === "boolean") {
+      if (text === "true" || text === "") {
+        return { present: true, pending: false, value: true };
+      }
+      if (text === "false") {
+        return { present: true, pending: false, value: false };
+      }
+      throw propError(descriptor, "expects a boolean (true or false), got \"" + text + "\"", attribute);
+    }
+    if (descriptor.type === "integer") {
+      if (!/^-?\d+$/.test(text)) {
+        throw propError(descriptor, "expects an integer, got \"" + text + "\"", attribute);
+      }
+      var number = Number(text);
+      if (!Number.isSafeInteger(number) || number < -2147483648 || number > 2147483647) {
+        throw propError(descriptor, "integer is outside the VM's 32-bit range", attribute);
+      }
+      return { present: true, pending: false, value: number };
+    }
+    if (descriptor.type === "array" || descriptor.type === "hash") {
+      var parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (parseError) {
+        if (isBindingPlaceholder(text)) {
+          return { present: false, pending: true };
+        }
+        throw propError(descriptor, "expects JSON " + descriptor.type + " text", attribute);
+      }
+      if (descriptor.type === "array") {
+        if (!Array.isArray(parsed)) {
+          throw propError(descriptor, "expects a JSON array", attribute);
+        }
+      } else if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw propError(descriptor, "expects a JSON object", attribute);
+      }
+      checkPropNumberRange(parsed, descriptor, attribute);
+      return { present: true, pending: false, value: parsed };
+    }
+    throw propError(descriptor, "has unsupported declared type \"" + descriptor.type + "\"", attribute);
+  }
+
+  // Resolves all declared props before a mount allocates a VM instance.
+  // Required inputs and type failures therefore abort with no partial mount.
+  function resolveMountProps(component, element) {
+    if (!hasDeclaredProps(component) || !element || !element.attributes) return null;
+    var values = Object.create(null);
+    var present = Object.create(null);
+    var pending = Object.create(null);
+    var rawValues = [];
+
+    for (var i = 0; i < element.attributes.length; i++) {
+      var attr = element.attributes[i];
+      var descriptor = propDescriptorFor(component, attr.name);
+      if (!descriptor) continue;
+      var resolved = readDeclaredProp(descriptor, attr.value, attr.name);
+      if (resolved.pending) {
+        pending[descriptor.name] = true;
+        continue;
+      }
+      present[descriptor.name] = resolved.present;
+      if (resolved.present) values[descriptor.name] = resolved.value;
+      rawValues.push({ name: attr.name, value: attr.value });
+    }
+
+    for (var p = 0; p < component.props.length; p++) {
+      var prop = component.props[p];
+      if (present[prop.name] || pending[prop.name]) continue;
+      if (prop.required) {
+        throw propError(prop, "is required but no attribute was provided", attributeNameForProp(prop.name));
+      }
+    }
+
+    return { json: JSON.stringify(values), rawValues: rawValues, values: values };
+  }
+
+  // Collects one batch of changed declared props. The caller writes the whole
+  // batch with one VM entry and then flushes once, so related inputs never
+  // produce an intermediate render.
+  function collectDeclaredPropUpdates(component, element, names) {
+    if (!hasDeclaredProps(component) || !element || !element.attributes) return null;
+    var filter = null;
+    if (names) {
+      filter = Object.create(null);
+      names.forEach(function (name) { filter[name] = true; });
+    }
+
+    var updates = Object.create(null);
+    var rawValues = [];
+    var changed = false;
+    var seen = Object.create(null);
+
+    for (var i = 0; i < element.attributes.length; i++) {
+      var attr = element.attributes[i];
+      if (filter && !filter[attr.name]) continue;
+      var descriptor = propDescriptorFor(component, attr.name);
+      if (!descriptor) continue;
+      seen[descriptor.name] = true;
+      if (attributeValueIsCurrent(element, attr.name, attr.value)) continue;
+      var resolved = readDeclaredProp(descriptor, attr.value, attr.name);
+      if (resolved.pending) continue;
+      updates[descriptor.name] = resolved.present ? resolved.value : null;
+      rawValues.push({ name: attr.name, value: attr.value });
+      changed = true;
+    }
+
+    // A removed attribute is a nil update for a declared prop. The mount path
+    // never takes this branch because it only records attributes that exist.
+    if (names) {
+      names.forEach(function (name) {
+        var descriptor = propDescriptorFor(component, name);
+        if (!descriptor || seen[descriptor.name]) return;
+        if (descriptor.required) {
+          throw propError(descriptor, "is required but the attribute was removed", name);
+        }
+        if (attributeValueIsCurrent(element, name, null)) return;
+        updates[descriptor.name] = null;
+        rawValues.push({ name: name, value: null });
+        changed = true;
+      });
+    }
+
+    return { updates: updates, rawValues: rawValues, changed: changed };
+  }
+
+  function syncDeclaredProps(module, instance, element, names) {
+    var component = element && element._mochiComponent;
+    var collected = collectDeclaredPropUpdates(component, element, names);
+    if (!collected || !collected.changed) return false;
+    if (typeof module._mochi_set_props_json !== "function") {
+      throw new Error("mochi-loader: runtime does not support declared props");
+    }
+    var json = JSON.stringify(collected.updates);
+    var result = withUtf8(module, json, function (pointer, length) {
+      return module._mochi_set_props_json(instance, pointer, length);
+    });
+    if (result !== 0) {
+      throw new Error("mochi-loader: prop update failed: " + lastError(module));
+    }
+    collected.rawValues.forEach(function (entry) {
+      rememberAttributeValue(element, entry.name, entry.value);
+    });
+    return true;
+  }
+
   // Host attribute -> component prop ABI. `_mochi_set_ivar_string` returns 0 on
   // success and -1 on failure with the VM message read through lastError.
   // Removal arrives as a missing attribute and is written as the empty string,
@@ -787,6 +1024,8 @@
   function syncElementAttribute(module, instance, name, value, element) {
     if (!module || typeof module._mochi_set_ivar_string !== "function") return false;
     if (!name || name.indexOf("data-mochi-") === 0 || name.indexOf("on") === 0) return false;
+    // Declared props travel through the typed batch path.
+    if (propDescriptorFor(element && element._mochiComponent, name)) return false;
     var strVal = value === null || value === undefined ? "" : String(value);
     if (attributeValueIsCurrent(element, name, strVal)) return false;
     var result = withUtf8(module, name.replace(/-/g, "_"), function (nPtr, nLen) {
@@ -802,11 +1041,13 @@
     return true;
   }
 
-  // Re-reads every current host attribute. Returns true when any value changed;
-  // mount ignores the flag because the first binding flush follows immediately.
+  // Re-reads every current host attribute. Declared props go through one typed
+  // batch; undeclared attributes keep the historical string-ivar path. Returns
+  // true when any value changed; mount ignores the flag because the first
+  // binding flush follows immediately.
   function syncAllElementAttributes(module, instance, element) {
     if (!element || !element.attributes) return false;
-    var changed = false;
+    var changed = syncDeclaredProps(module, instance, element, null);
     for (var i = 0; i < element.attributes.length; i++) {
       var attr = element.attributes[i];
       if (syncElementAttribute(module, instance, attr.name, attr.value, element)) changed = true;
@@ -858,10 +1099,22 @@
       return { cancelled: true, mountToken: mountToken };
     }
 
+    var declared = resolveMountProps(component, element);
+    if (declared && typeof module._mochi_mount_component_props !== "function") {
+      throw new Error("mochi-loader: runtime does not support declared props");
+    }
+
     var instance;
 
     withUtf8(module, component.class_name, function (pointer, length) {
-      instance = module._mochi_mount_component(pointer, length);
+      if (declared) {
+        withUtf8(module, declared.json, function (jsonPointer, jsonLength) {
+          instance = module._mochi_mount_component_props(
+            pointer, length, jsonPointer, jsonLength);
+        });
+      } else {
+        instance = module._mochi_mount_component(pointer, length);
+      }
     });
 
     if (instance === 0 || instance === 0n) {
@@ -870,6 +1123,13 @@
 
     var mountedStarted = false;
     try {
+      if (declared) {
+        // The props were installed as part of the mount transaction. Recording
+        // the raw values keeps the immediate resync from writing them again.
+        declared.rawValues.forEach(function (entry) {
+          rememberAttributeValue(element, entry.name, entry.value);
+        });
+      }
       syncAllElementAttributes(module, instance, element);
 
       flattenBindings(component.bindings).forEach(function (binding) {
@@ -2158,8 +2418,16 @@
             var recordName = mutations[i].attributeName;
             if (recordName) names[recordName] = true;
           }
+          var attrNames = Object.keys(names);
           var changed = false;
-          Object.keys(names).forEach(function (attrName) {
+          try {
+            if (syncDeclaredProps(module, instance, element, attrNames)) changed = true;
+          } catch (error) {
+            reportError(element, "attribute",
+              error.mochiContext && error.mochiContext.property || "",
+              error, module);
+          }
+          attrNames.forEach(function (attrName) {
             try {
               if (syncElementAttribute(module, instance, attrName,
                 element.getAttribute(attrName), element)) {

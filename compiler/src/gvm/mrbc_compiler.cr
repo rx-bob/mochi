@@ -428,8 +428,33 @@ class MrbcCompiler
         end
       end
 
+      unless manifest.props.empty?
+        json.field "props" do
+          json.array do
+            manifest.props.each { |prop| write_prop(json, prop, manifest.source_file) }
+          end
+        end
+      end
+
       write_bindings(json, manifest.bindings)
       write_events(json, manifest.events)
+    end
+  end
+
+  private def write_prop(json : JSON::Builder, prop : PropDescriptor, fallback_file : String?) : Nil
+    json.object do
+      json.field "name", prop.name
+      json.field "type", prop.type
+      json.field "required", true if prop.required
+      json.field "default", true if prop.default
+      if file = prop.source_file || fallback_file
+        json.field "source" do
+          json.object do
+            json.field "file", file
+            json.field "line", prop.source_line
+          end
+        end
+      end
     end
   end
 

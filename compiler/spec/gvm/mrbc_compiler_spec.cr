@@ -136,6 +136,10 @@ RUBY
   manifest.source_file = "lib/my_counter.rb"
   manifest.source_line = 7
   manifest.method_lines = {"initialize" => 14, "increment" => 18}
+  manifest.props = [
+    PropDescriptor.new("label", "string", required: true, source_file: "lib/my_counter.rb", source_line: 8),
+    PropDescriptor.new("count", "integer", default: true, default_code: "0", source_file: "lib/my_counter.rb", source_line: 9),
+  ]
 
   MochiComponent.new(
     File.join(dir, "my_counter.rb"),
@@ -222,6 +226,17 @@ describe MrbcCompiler do
       component_json["source"].as_h["line"].as_i.should eq(7)
       component_json["methods"].as_h["initialize"].as_i.should eq(14)
       component_json["methods"].as_h["increment"].as_i.should eq(18)
+
+      props = component_json["props"].as_a
+      props.size.should eq(2)
+      props[0].as_h["name"].as_s.should eq("label")
+      props[0].as_h["type"].as_s.should eq("string")
+      props[0].as_h["required"].as_bool.should be_true
+      props[0].as_h["source"].as_h["line"].as_i.should eq(8)
+      props[0].as_h.has_key?("default_code").should be_false
+      props[1].as_h["name"].as_s.should eq("count")
+      props[1].as_h["default"].as_bool.should be_true
+      props[1].as_h["source"].as_h["file"].as_s.should eq("lib/my_counter.rb")
 
       bindings = component_json["bindings"].as_a
       bindings.first.as_h["id"].as_i.should eq(0)

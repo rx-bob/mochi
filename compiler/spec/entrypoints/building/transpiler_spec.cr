@@ -68,6 +68,58 @@ RUBY
       ruby.index("def __mochi_attr_cond_0").not_nil!.should be > increment_at
     end
 
+    it "extracts declared typed props and installs them around initialize" do
+      source = <<-RUBY
+class TypedBadge
+  @tag_name = "typed-badge"
+  prop :label, String, default: "unset"
+  prop :count, Integer, default: 0
+  prop :rows, Array, default: []
+
+  def initialize
+    @ready = @count
+  end
+
+  def html
+    %Q{<span>{@label}</span><span>{@count}</span><span>{@rows.length}</span>}
+  end
+end
+RUBY
+
+      component = transpile_source(source, "TypedBadge")
+      component.manifest.props.map(&.name).should eq(["label", "count", "rows"])
+      component.manifest.props[0].type.should eq("string")
+      component.manifest.props[0].default.should be_true
+      component.manifest.props[0].default_code.should eq(%("unset"))
+      component.manifest.props[1].default_code.should eq("0")
+      component.manifest.props[2].default_code.should eq("[]")
+
+      ruby = component.ruby_code
+      ruby.should contain("def __mochi_apply_props(__mochi_props, __mochi_initial)")
+      ruby.should contain(%(@label = __mochi_props["label"]))
+      ruby.should contain(%(@label = "unset"))
+      ruby.should contain("@count = 0")
+      ruby.should contain("@rows = []")
+    end
+
+    it "reports a prop declaration error with the component source line" do
+      source = <<-RUBY
+class BadProp
+  @tag_name = "bad-prop"
+  prop :label, Symbol
+
+  def html
+    %Q{<span>bad</span>}
+  end
+end
+RUBY
+
+      path = File.join(Dir.tempdir, "mochi_bad_prop_#{Random.rand(1_000_000)}.rb")
+      expect_raises(TreeSitter::PropertyExtractor::PropDeclarationError, /unsupported type Symbol/) do
+        Compiler.new.transpile_component(source, 1, path)
+      end
+    end
+
     it "compiles method-call bindings and direct ivar bindings" do
       source = <<-RUBY
 class MethodBindings

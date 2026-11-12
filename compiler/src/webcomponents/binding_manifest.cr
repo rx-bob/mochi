@@ -77,6 +77,32 @@ struct EventDescriptor
   end
 end
 
+# Compact runtime validation data for one declared Ruby prop. Only the value
+# type, required flag, default presence, and source location travel in the
+# manifest; the default expression itself stays in the component's Ruby code.
+struct PropDescriptor
+  property name : String
+  property type : String
+  property required : Bool
+  property default : Bool
+  # Ruby source for the default expression. It stays out of the manifest JSON
+  # and is only used when generating `__mochi_apply_props`.
+  property default_code : String?
+  property source_file : String?
+  property source_line : Int32
+
+  def initialize(
+    @name : String,
+    @type : String,
+    @required : Bool = false,
+    @default : Bool = false,
+    @default_code : String? = nil,
+    @source_file : String? = nil,
+    @source_line : Int32 = 0,
+  )
+  end
+end
+
 class ComponentManifest
   property tag_name : String
   property class_name : String
@@ -89,6 +115,7 @@ class ComponentManifest
   property source_file : String?
   property source_line : Int32
   property method_lines : Hash(String, Int32)
+  property props : Array(PropDescriptor)
 
   def initialize(
     @tag_name : String,
@@ -102,6 +129,7 @@ class ComponentManifest
     @source_file : String? = nil,
     @source_line : Int32 = 0,
     @method_lines : Hash(String, Int32) = {} of String => Int32,
+    @props : Array(PropDescriptor) = [] of PropDescriptor,
   )
   end
 

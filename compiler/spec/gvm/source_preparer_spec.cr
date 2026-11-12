@@ -25,6 +25,26 @@ RUBY
     result.should contain("    @count += 1")
   end
 
+  it "removes declared prop metadata but keeps generated prop installation" do
+    source = <<-RUBY
+class Badge
+  @tag_name = "badge"
+  prop :label, String, default: "unset"
+  prop :count, Integer
+
+  def __mochi_apply_props(__mochi_props, __mochi_initial)
+    @label = __mochi_props["label"]
+  end
+end
+RUBY
+
+    result = GvmSourcePreparer.strip_class_ivars(source)
+    result.should_not contain("prop :label")
+    result.should_not contain("prop :count")
+    result.should contain("def __mochi_apply_props")
+    result.should contain("    @label = __mochi_props[\"label\"]")
+  end
+
   it "leaves method-level instance variables in a class without metadata" do
     source = <<-RUBY
 class Plain

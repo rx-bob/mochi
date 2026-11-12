@@ -169,10 +169,9 @@ without replacing the input; `bind:checked` checks only for `true`, `"true"`,
 ### Live component attributes
 
 Attributes on a child component element are its props. The loader writes every
-current attribute into the child instance through the set-ivar ABI; a later
-change to the attribute, including one produced by a parent binding, updates
-the mounted child in place. The child keeps its Ruby instance, bindings, and
-DOM nodes.
+current attribute into the child instance; a later change to the attribute,
+including one produced by a parent binding, updates the mounted child in place.
+The child keeps its Ruby instance, bindings, and DOM nodes.
 
 ```ruby
 def html
@@ -184,9 +183,84 @@ The setter reports `0` for success and `-1` for failure. A failure is reported
 as a `mochi:error` with `phase: "attribute"` plus the failing `attribute` and
 `property`, instead of being treated as a successful no-op. Re-writing the
 current value is a successful no-op and produces no patch, so an observer that
-echoes the attribute cannot start an update loop. Removing the attribute writes
-an empty string; it does not re-run the child's `initialize`, so an explicit
-Ruby default applies only to a fresh mount.
+echoes the attribute cannot start an update loop.
+
+Attributes without a declaration keep the historical string behavior,
+including removal writing an empty string. Declare a prop to receive a real
+Ruby value instead.
+
+### Declared typed props
+
+Declare inputs in the component class body:
+
+```ruby
+class ChildBadge
+  @tag_name = "child-badge"
+  prop :label, String, default: "unset"
+  prop :count, Integer, default: 0
+  prop :enabled, Boolean, default: false
+  prop :note, String
+  prop :rows, Array, default: []
+  prop :meta, Hash, default: {}
+
+  def initialize
+    @summary = "#{@label}:#{@count}"   # defaults are already installed
+  end
+
+  def html
+    %Q{<span>{@label}</span><span>{@count}</span><span>{@rows.length}</span>}
+  end
+end
+```
+
+Supported types are `String`, `Integer`, `Boolean`, `Array`, and `Hash`. A
+declaration can be `required: true` or provide `default:`, but not both. Default
+expressions may be literals or constants. The compiler rejects unknown types,
+duplicate names, an unknown option, and a default whose literal type does not
+match the declaration.
+
+The loader resolves declared props before it creates the VM instance. A missing
+required input or a value that does not match its type aborts the mount with a
+`mochi:error` naming the prop, the component, and the declaration's source
+location. Nothing is partially mounted.
+
+HTML text maps to Ruby as follows:
+
+| Declared type | Attribute text | Ruby value |
+| --- | --- | --- |
+| `String` | any text | that string, including `""` |
+| `Integer` | `-?[0-9]+` inside the VM's 32-bit range | `Integer` |
+| `Boolean` | `true`, `false`, or `""` (HTML presence) | `true` or `false` |
+| `Array` | JSON array text | a new Ruby `Array` |
+| `Hash` | JSON object text | a new Ruby `Hash` |
+
+Absence is `nil`, distinct from `""`, `0`, and `false`. Removing a declared
+attribute installs `nil`; removing a required attribute is an error. A single
+`{expression}` attribute value is a parent binding that has not produced a value
+yet, so it is treated as pending rather than as literal text. Collection values
+are decoded with `JSON.parse` by the loader but arrive in Ruby as real arrays and
+hashes, so component code does not parse JSON.
+
+Declared props are read-only snapshots:
+
+- Defaults and supplied values are installed before `initialize`, so the
+  constructor can read them.
+- They are installed again after `initialize` from an independent copy. An
+  assignment or in-place collection mutation in `initialize` cannot overwrite
+  the parent's input. Put derived state in its own ivar.
+- Each replacement is a private deep copy. A child that mutates a passed array
+  or hash cannot change the parent's data. Send the new value back through an
+  event when the parent should change.
+- All changed declared props from one observer batch travel in one typed VM
+  entry and produce one patch flush, so two related inputs never expose an
+  intermediate inconsistent render.
+- Replacing a collection releases the previous snapshot through the VM's
+  normal reclamation; repeated parent updates stay bounded.
+
+Migration from undeclared attributes: add a `prop` declaration for each input
+the child reads, give it a default when absence should have one, then remove the
+child's `to_i`, boolean checks, and manual `JSON.parse`. Leave attributes that
+are deliberately string-only undeclared.
 
 ### Component lifecycle
 
