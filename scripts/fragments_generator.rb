@@ -46,6 +46,7 @@ items.push(Item.new("FetchConfig", "#{dir_fetcher}/fetch_config.rb", td_fetcher,
 items.push(Item.new("Fetcher", "#{dir_fetcher}/fetcher.rb", td_fetcher, "fetcher_rb.cr"))
 
 # -- BUILT_IN (BI) Components
+items.push(Item.new("IconBI", "#{dir_builtins}/icon.rb", td_builtins, "icon_rb.cr"))
 items.push(Item.new("FeatherIconBI", "#{dir_builtins}/feather_icon.rb", td_builtins, "feather_icon_rb.cr"))
 items.push(Item.new("RouteBI", "#{dir_router}/route.rb", td_router, "route_rb.cr"))
 items.push(Item.new("MochiRouterBI", "#{dir_router}/mochi_router.rb", td_router, "mochi_router_rb.cr"))

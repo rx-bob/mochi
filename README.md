@@ -74,6 +74,56 @@ end
 
 ```
 
+### Shared component styles
+
+A component `css` body still starts as one literal string. It may reference
+shared CSS files with build-time `@import` rules:
+
+```ruby
+def css
+  %Q{
+    @import "../styles/reset.css";
+    @import "../styles/controls.css";
+    :host { display: block; }
+    .btn { padding: 9px 14px; }
+  }
+end
+```
+
+Imports resolve relative to the component file, recursively, depth-first in
+source order. `@import` rules must come before local CSS. The component's own
+rules are applied last, so a local override wins. A shared fragment is emitted
+once by stable content identity even when several components import it; the
+manifest lists each component's ordered `style_resources` and stores each
+fragment once under `resources`.
+
+The compiler rejects missing fragments, import cycles, unclosed blocks,
+unclosed strings or comments, invalid import syntax, and `#{...}`
+interpolation with the component or fragment path and line. CSS is never
+executed or fetched at runtime. Shadow roots use constructable stylesheets when
+available and an ordered `<style>` fallback otherwise. CSS custom properties
+still inherit from the document into both paths.
+
+### Icons
+
+Put only the SVG assets the app may use in an `icons/` directory at the project
+root. Each file is a normal SVG with `id="mochi-icon"`. Render it from Ruby:
+
+```ruby
+def html
+  %Q{
+    <button>{Mochi.raw(MochiIcons.icon("settings"))} Settings</button>
+  }
+end
+```
+
+`MochiIcons.icon` returns inline `<svg><use ...></svg>` markup, so
+`currentColor` and inherited theme tokens keep working. The build emits only
+icons named by `MochiIcons.icon("...")` or a matching source string into
+`mochi-icons/`. Missing referenced assets fail the build with the component
+source location. No CDN or global Feather object is required. `Mochi.raw` is
+still required because ordinary template values stay text.
+
 ### Trusted markup
 
 Template values are text by default, whether they stand alone, sit inside a
@@ -86,7 +136,7 @@ markup, such as an inline SVG icon:
 ```ruby
 def html
   %Q{
-    <span class="icon">{Mochi.raw(IconLibrary.svg("settings"))}</span>
+    <span class="icon">{Mochi.raw(MochiIcons.icon("settings"))}</span>
     <span>Status: {@status}</span>
   }
 end

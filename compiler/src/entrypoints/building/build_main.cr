@@ -24,6 +24,10 @@ class BuildMain
 
     rb_rewriter = RubyRewriter.new
 
+    if all_rb_sources.includes?("MochiIcons.icon") || all_rb_sources.includes?("FeatherIcon") || all_rb_sources.includes?("feather-icon")
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_icon.rb", rb_rewriter.gen_builtin_icon)
+    end
+
     if all_rb_sources.includes?("feather-icon") || all_rb_sources.includes?("FeatherIcon")
       builtin_feather_icon_comp = rb_rewriter.gen_builtin_component_feather_icon
       File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_feathericon_comp.rb", builtin_feather_icon_comp)
@@ -98,7 +102,14 @@ class BuildMain
 
     mochi_comp_time = Time.measure do
       trace_slice(trace, "Transpiling", sequence_id, "build") do
-        transpiler.transpile_directory("#{builder_man.pre_tp_dir}/lib", output_dir, builder_man, trace, sequence_id)
+        transpiler.transpile_directory(
+          "#{builder_man.pre_tp_dir}/lib",
+          output_dir,
+          builder_man,
+          trace,
+          sequence_id,
+          builder_man.pre_tp_dir
+        )
       end
     end
     puts "> Compilation took #{mochi_comp_time.total_milliseconds.to_i}ms"

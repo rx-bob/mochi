@@ -2,6 +2,7 @@ require "json"
 require "file_utils"
 require "../mochi_cmp"
 require "../sorbet/type_stripper"
+require "../webcomponents/resource_manifest"
 require "./source_preparer"
 require "./rite_verifier"
 
@@ -39,6 +40,7 @@ class MrbcCompiler
     output_dir : String,
     prelude_code : String = "",
     helpers : Array(HelperUnit) = [] of HelperUnit,
+    resources : Array(PackageResource) = [] of PackageResource,
   ) : Nil
     @chi_paths.clear
     @helper_chi_paths.clear
@@ -93,8 +95,45 @@ class MrbcCompiler
       @warnings << "mochi-loader.js not found; set MOCHI_LOADER or add runtime/mochi-loader.js"
     end
 
+    package_resources = collect_resources(components, resources)
+    emit_resource_files(package_resources, output_dir)
+
     @manifest_path = File.join(output_dir, "mochi-manifest.json")
-    File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components))
+    File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components, package_resources))
+  end
+
+  private def collect_resources(
+    components : Array(MochiComponent),
+    extra : Array(PackageResource),
+  ) : Array(PackageResource)
+    resources = {} of String => PackageResource
+    (components.flat_map(&.manifest.style_resources) + extra).each do |resource|
+      if previous = resources[resource.id]?
+        if previous.kind != resource.kind || previous.text != resource.text ||
+           previous.output_file != resource.output_file
+          raise "conflicting package resource '#{resource.id}'"
+        end
+        next
+      end
+      resources[resource.id] = resource
+    end
+    resources.values.sort_by(&.id)
+  end
+
+  private def emit_resource_files(resources : Array(PackageResource), output_dir : String) : Nil
+    icon_root = File.join(output_dir, "mochi-icons")
+    FileUtils.rm_rf(icon_root) if File.directory?(icon_root)
+    resources.each do |resource|
+      file = resource.output_file
+      source = resource.source_path
+      next unless file
+      unless source && File.file?(source)
+        raise "package resource '#{resource.id}' has no source file"
+      end
+      destination = File.join(output_dir, file)
+      FileUtils.mkdir_p(File.dirname(destination))
+      FileUtils.cp(source, destination)
+    end
   end
 
   private def validate_component_inventory(components : Array(MochiComponent)) : Nil
@@ -380,11 +419,21 @@ class MrbcCompiler
     destination
   end
 
-  private def build_manifest_json(components : Array(MochiComponent)) : String
+  private def build_manifest_json(
+    components : Array(MochiComponent),
+    resources : Array(PackageResource),
+  ) : String
     JSON.build do |json|
       json.object do
         if prelude = @prelude_path
           json.field "prelude", File.basename(prelude)
+        end
+        unless resources.empty?
+          json.field "resources" do
+            json.object do
+              resources.each { |resource| write_resource(json, resource) }
+            end
+          end
         end
         json.field "components" do
           json.array do
@@ -400,6 +449,20 @@ class MrbcCompiler
     end
   end
 
+  private def write_resource(json : JSON::Builder, resource : PackageResource) : Nil
+    json.field resource.id do
+      json.object do
+        json.field "kind", resource.kind
+        if text = resource.text
+          json.field "text", text
+        end
+        if file = resource.output_file
+          json.field "file", file
+        end
+      end
+    end
+  end
+
   private def write_component(json : JSON::Builder, manifest : ComponentManifest) : Nil
     json.object do
       json.field "tag_name", manifest.tag_name
@@ -409,6 +472,13 @@ class MrbcCompiler
         json.field "helper_chi", helper_chi
       end
       json.field "html_template", manifest.html_template
+      unless manifest.style_resources.empty?
+        json.field "style_resources" do
+          json.array do
+            manifest.style_resource_ids.each { |id| json.string(id) }
+          end
+        end
+      end
       json.field "css", manifest.css
       if source_file = manifest.source_file
         json.field "source" do

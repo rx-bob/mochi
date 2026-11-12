@@ -2,6 +2,7 @@ require "digest/sha1"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
 require "./trace_helper"
 require "../../webcomponents/component_generator"
+require "../../webcomponents/style_composer"
 require "../../gvm/mrbc_compiler"
 require "../../tree-sitter/instance_var_analyzer"
 require "../../tree-sitter/source_slicer"
@@ -33,7 +34,14 @@ class Compiler
     @ruby_parser = TreeSitter::RubyParser.new
   end
 
-  def transpile_directory(input_dir : String, output_dir : String, builder_man : BuilderMan, trace : Pftrace::Trace? = nil, sequence_id : UInt32 = 1_u32)
+  def transpile_directory(
+    input_dir : String,
+    output_dir : String,
+    builder_man : BuilderMan,
+    trace : Pftrace::Trace? = nil,
+    sequence_id : UInt32 = 1_u32,
+    project_dir : String? = nil,
+  )
     puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'"
 
     components = [] of MochiComponent
@@ -77,9 +85,16 @@ class Compiler
     puts "Done with preparing components for transpilation (#{Time.monotonic})"
     prelude_code = prelude_files.sort_by(&.[0]).map(&.[1]).join("\n\n")
 
+    resources = if root = project_dir
+                  scan_paths = Dir.glob(Path[root, "**", "*.{rb,html,htm}"].to_s).select { |path| File.file?(path) }.sort
+                  IconAssetCollector.new(File.join(root, "icons")).collect(scan_paths)
+                else
+                  [] of PackageResource
+                end
+
     trace_slice(trace, "EmitBytecode", sequence_id) do
       compiler = MrbcCompiler.new
-      compiler.compile(components, output_dir, prelude_code, helpers)
+      compiler.compile(components, output_dir, prelude_code, helpers, resources)
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
       puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
     end
@@ -393,6 +408,8 @@ class Compiler
           else
             ""
           end
+    css_composition = StyleComposer.new(cls_name, absolute_path, source_path).compose(css)
+    css = css_composition.css
     html = html_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
     source_locator = TemplateSourceLocator.new(
       rb_file,
@@ -484,6 +501,7 @@ class Compiler
     manifest.helper_chi = helper_chi
     manifest.source_file = source_path
     manifest.source_line = declaration.line
+    manifest.style_resources = css_composition.resources
     manifest.method_lines = methods.transform_values(&.start_line)
 
     validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, declaration.attribute_readers)

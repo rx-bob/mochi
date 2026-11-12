@@ -30,6 +30,8 @@
     nextMountToken: 0,
     actionRouterInstalled: false,
     actionSupportCache: new Map(),
+    styleSheetCache: new Map(),
+    localStyleSheetCache: new WeakMap(),
     focusTrapDocument: null,
     lastEventTarget: null
   };
@@ -185,7 +187,11 @@
       });
     }
     var reported = error instanceof Error ? error : new Error(info.message);
-    reported.message = info.message;
+    try {
+      reported.message = info.message;
+    } catch (_) {
+      reported = new Error(info.message);
+    }
     reported.mochi = info;
     if (element) element.mochiError = reported;
     console.error("[mochi] " + (info.tagName || "loader") + " " + phase + " failed", reported);
@@ -2680,6 +2686,69 @@
     });
   }
 
+  function styleResourceText(id, tag) {
+    var resources = state.manifest && state.manifest.resources;
+    var resource = resources && resources[id];
+    if (!resource || resource.kind !== "style" || typeof resource.text !== "string") {
+      throw new Error(
+        (tag || "component") + " references missing style resource " + id
+      );
+    }
+    return resource.text;
+  }
+
+  function canAdoptStyleSheets(root) {
+    if (typeof global.CSSStyleSheet !== "function") return false;
+    if (typeof global.CSSStyleSheet.prototype.replaceSync !== "function") return false;
+    return "adoptedStyleSheets" in root;
+  }
+
+  function sharedStyleSheet(id, tag) {
+    if (state.styleSheetCache.has(id)) return state.styleSheetCache.get(id);
+    var sheet = new global.CSSStyleSheet();
+    sheet.replaceSync(styleResourceText(id, tag));
+    state.styleSheetCache.set(id, sheet);
+    return sheet;
+  }
+
+  function localStyleSheet(component) {
+    var cached = state.localStyleSheetCache.get(component);
+    if (cached) return cached;
+    var sheet = new global.CSSStyleSheet();
+    sheet.replaceSync(component.css || "");
+    state.localStyleSheetCache.set(component, sheet);
+    return sheet;
+  }
+
+  function appendStyleElement(root, text, resourceId) {
+    var style = global.document.createElement("style");
+    if (resourceId) style.setAttribute("data-mochi-style-resource", resourceId);
+    style.textContent = text;
+    root.appendChild(style);
+  }
+
+  function installComponentStyles(root, component) {
+    var ids = component.style_resources || [];
+    var localCss = component.css || "";
+    var tag = component.tag_name || component.class_name || "";
+    if (canAdoptStyleSheets(root)) {
+      var sheets = ids.map(function (id) {
+        return sharedStyleSheet(id, tag);
+      });
+      if (localCss) sheets.push(localStyleSheet(component));
+      root.adoptedStyleSheets = sheets;
+      return;
+    }
+
+    // Fallback for browsers without constructable stylesheets. Shared text is
+    // copied from the manifest, never fetched a second time. Local CSS comes
+    // last so its overrides win in both paths.
+    ids.forEach(function (id) {
+      appendStyleElement(root, styleResourceText(id, tag), id);
+    });
+    if (localCss) appendStyleElement(root, localCss, null);
+  }
+
   function defineComponent(component, manifestUrl) {
     var tag = component.tag_name;
     if (!tag || state.tags.has(tag) || global.customElements.get(tag)) return;
@@ -2776,9 +2845,13 @@
         this._mochiMountToken = ++state.nextMountToken;
         var mountToken = this._mochiMountToken;
 
-        var style = global.document.createElement("style");
-        style.textContent = component.css || "";
-        root.appendChild(style);
+        try {
+          installComponentStyles(root, component);
+        } catch (error) {
+          this._mochiMountState = "failed";
+          reportError(this, "style", "", error);
+          return;
+        }
 
         var fragment = template.content.cloneNode(true);
         try {

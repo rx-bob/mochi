@@ -141,6 +141,11 @@ class SorbetTypesBat
         def self.restore_focus
         end
       end
+
+      module MochiIcons
+        def self.icon(name)
+        end
+      end
     RUBY
   end
 end

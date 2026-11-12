@@ -118,9 +118,10 @@ const TYPED_COMPONENT = {
   ],
 };
 
-function manifest(components) {
+function manifest(components, resources) {
   return {
     components,
+    ...(resources ? { resources } : {}),
     wasm_file: "mochi-gvm.wasm",
     js_file: "mochi-gvm.js",
     loader_file: "mochi-loader.js",
@@ -355,9 +356,10 @@ async function setup(components, options) {
   global.Event = dom.window.Event;
   global.MouseEvent = dom.window.MouseEvent;
   global.CustomEvent = dom.window.CustomEvent;
+  global.CSSStyleSheet = dom.window.CSSStyleSheet;
 
   const log = { calls: [], fetches: [], loads: [], interned: [], bindings: [], dispatched: [], flushes: [] };
-  const body = manifest(components);
+  const body = manifest(components, options.resources);
   global.fetch = async (url, init) => {
     const target = String(url);
     log.fetches.push(target);
@@ -393,8 +395,12 @@ test("boot defines a custom element with a static shadow template and scoped sty
 
   const root = element.shadowRoot;
   assert.ok(root);
-  assert.equal(root.firstChild.tagName, "STYLE");
-  assert.equal(root.firstChild.textContent, COMPONENT.css);
+  if (root.adoptedStyleSheets && root.adoptedStyleSheets.length > 0) {
+    assert.equal(root.adoptedStyleSheets[0].cssRules.length, 2);
+  } else {
+    assert.equal(root.firstChild.tagName, "STYLE");
+    assert.equal(root.firstChild.textContent, COMPONENT.css);
+  }
   assert.equal(root.querySelector(".count").textContent, "Count: {@count}");
   assert.ok(root.querySelector("button"));
 
@@ -410,6 +416,68 @@ test("boot defines a custom element with a static shadow template and scoped sty
   assert.deepEqual(log.loads[0].slice(10), new Uint8Array([1, 2, 3, 4]));
   assert.equal(log.bindings.length, 2);
   assert.ok(log.interned.includes("mounted"));
+});
+
+test("shared style resources use one adopted sheet before the local override", async () => {
+  const sharedCss = ":host { display: block; } .control { padding: 4px; }";
+  const component = {
+    ...COMPONENT,
+    css: ".count { color: red; } .control { padding: 9px; }",
+    style_resources: ["css-reset"],
+  };
+  const { dom } = await setup([component], {
+    resources: { "css-reset": { kind: "style", text: sharedCss } },
+  });
+  const window = dom.window;
+  class FakeStyleSheet {
+    constructor() {
+      this.cssText = "";
+    }
+    replaceSync(text) {
+      this.cssText = text;
+    }
+  }
+  global.CSSStyleSheet = window.CSSStyleSheet = FakeStyleSheet;
+  Object.defineProperty(window.ShadowRoot.prototype, "adoptedStyleSheets", {
+    configurable: true,
+    get() { return this._mochiAdoptedSheets || []; },
+    set(value) { this._mochiAdoptedSheets = value; },
+  });
+
+  const first = document.createElement("my-counter");
+  const second = document.createElement("my-counter");
+  document.body.appendChild(first);
+  document.body.appendChild(second);
+  await Promise.all([first._mochiReady, second._mochiReady]);
+
+  assert.equal(first.shadowRoot.querySelectorAll("style").length, 0);
+  assert.equal(first.shadowRoot.adoptedStyleSheets.length, 2);
+  assert.equal(first.shadowRoot.adoptedStyleSheets[0].cssText, sharedCss);
+  assert.equal(first.shadowRoot.adoptedStyleSheets[1].cssText, component.css);
+  assert.equal(second.shadowRoot.adoptedStyleSheets[0], first.shadowRoot.adoptedStyleSheets[0]);
+});
+
+test("shared style resources fall back to ordered style elements", async () => {
+  const sharedCss = ":host { display: block; } .control { padding: 4px; }";
+  const component = {
+    ...COMPONENT,
+    css: ".control { padding: 9px; }",
+    style_resources: ["css-reset"],
+  };
+  await setup([component], {
+    resources: { "css-reset": { kind: "style", text: sharedCss } },
+  });
+  global.CSSStyleSheet = undefined;
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const styles = element.shadowRoot.querySelectorAll("style");
+  assert.equal(styles.length, 2);
+  assert.equal(styles[0].getAttribute("data-mochi-style-resource"), "css-reset");
+  assert.equal(styles[0].textContent, sharedCss);
+  assert.equal(styles[1].textContent, component.css);
 });
 
 test("delegated click and change events dispatch the interned Ruby method", async () => {
@@ -1935,7 +2003,10 @@ test("binding paths resolve through text nodes and comments exactly as emitted",
   assert.equal(element.bindingTargets[8].nodeType, 8);
   assert.equal(element.bindingTargets[9].nodeType, 1);
   assert.equal(element.bindingTargets[9].textContent, "x");
-  assert.equal(element.shadowRoot.querySelectorAll("style").length, 1);
+  const styleCount = element.shadowRoot.adoptedStyleSheets
+    ? element.shadowRoot.adoptedStyleSheets.length
+    : element.shadowRoot.querySelectorAll("style").length;
+  assert.equal(styleCount, 1);
   assert.equal(element.shadowRoot.querySelectorAll("template").length, 0);
   assert.equal(loader.components[0].tag_name, "path-check");
 });

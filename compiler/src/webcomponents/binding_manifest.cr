@@ -98,6 +98,8 @@ struct EventPayloadDescriptor
   end
 end
 
+require "./resource_manifest"
+
 # Compact runtime schema for a Ruby-declared child event. Only the event name,
 # payload contract, and source location travel in the manifest.
 struct ComponentEventDescriptor
@@ -155,6 +157,9 @@ class ComponentManifest
   property method_lines : Hash(String, Int32)
   property props : Array(PropDescriptor)
   property emits : Array(ComponentEventDescriptor)
+  # Shared build-time style resources, applied before the component-local css.
+  # The manifest serializes only their stable IDs.
+  property style_resources : Array(PackageResource)
 
   def initialize(
     @tag_name : String,
@@ -170,7 +175,12 @@ class ComponentManifest
     @method_lines : Hash(String, Int32) = {} of String => Int32,
     @props : Array(PropDescriptor) = [] of PropDescriptor,
     @emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
+    @style_resources : Array(PackageResource) = [] of PackageResource,
   )
+  end
+
+  def style_resource_ids : Array(String)
+    style_resources.map(&.id)
   end
 
   def binding_ids : Array(Int32)

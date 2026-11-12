@@ -408,6 +408,168 @@ end
   }
 });
 
+test("two components share emitted CSS and selected icons in adopted and fallback paths", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-styles-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib", "styles"), { recursive: true });
+  fs.mkdirSync(path.join(projectDir, "icons"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "styles", "reset.css"), `
+:host { display: block; }
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "styles", "controls.css"), `
+@import "reset.css";
+.control {
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  padding: 3px;
+}
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "StyleAlpha.rb"), `
+class StyleAlpha
+  @tag_name = "style-alpha"
+
+  def html
+    %Q{<button class="control alpha">{Mochi.raw(MochiIcons.icon("home"))}<span class="label">Alpha</span></button>}
+  end
+
+  def css
+    %Q{
+      @import "styles/controls.css";
+      .control { background: rgb(255, 0, 0); }
+    }
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "StyleBeta.rb"), `
+class StyleBeta
+  @tag_name = "style-beta"
+
+  def html
+    %Q{<button class="control beta">{Mochi.raw(MochiIcons.icon("home"))}<span class="label">Beta</span></button>}
+  end
+
+  def css
+    %Q{
+      @import "styles/controls.css";
+      .control { background: rgb(0, 0, 255); }
+    }
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "icons", "home.svg"),
+    '<svg id="mochi-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h18"/></svg>\n');
+  fs.writeFileSync(path.join(projectDir, "icons", "unused.svg"),
+    '<svg id="mochi-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></svg>\n');
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      :root { --ink: #112233; }
+      html[data-theme="dark"] { --ink: #aabbcc; }
+    </style>
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <style-alpha></style-alpha>
+    <style-beta></style-beta>
+    <div id="fallback-root"></div>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"));
+  const styleResources = Object.entries(manifest.resources as Record<string, any>)
+    .filter(([, resource]) => resource.kind === "style");
+  expect(styleResources).toHaveLength(2);
+  const alpha = (manifest.components as any[]).find((component) => component.tag_name === "style-alpha");
+  const beta = (manifest.components as any[]).find((component) => component.tag_name === "style-beta");
+  expect(alpha.style_resources).toEqual(beta.style_resources);
+  expect(alpha.style_resources).toHaveLength(2);
+  expect(fs.existsSync(path.join(bundleDir, "mochi-icons", "home.svg"))).toBe(true);
+  expect(fs.existsSync(path.join(bundleDir, "mochi-icons", "unused.svg"))).toBe(false);
+
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const alphaCard = page.locator("style-alpha");
+    const betaCard = page.locator("style-beta");
+    await expect(alphaCard.locator("button.control")).toBeVisible();
+    await expect(betaCard.locator("button.control")).toBeVisible();
+
+    const adopted = await page.evaluate(() => {
+      const first = (document.querySelector("style-alpha") as any).shadowRoot;
+      const second = (document.querySelector("style-beta") as any).shadowRoot;
+      return {
+        first: first.adoptedStyleSheets ? first.adoptedStyleSheets.length : 0,
+        second: second.adoptedStyleSheets ? second.adoptedStyleSheets.length : 0,
+        feather: typeof (window as any).feather,
+      };
+    });
+    expect(adopted.first).toBeGreaterThanOrEqual(3);
+    expect(adopted.second).toBe(adopted.first);
+    expect(adopted.feather).toBe("undefined");
+
+    await expect(alphaCard.locator("button.control")).toHaveCSS("background-color", "rgb(255, 0, 0)");
+    await expect(betaCard.locator("button.control")).toHaveCSS("background-color", "rgb(0, 0, 255)");
+    await expect(alphaCard.locator("button.control")).toHaveCSS("color", "rgb(17, 34, 51)");
+    await expect(alphaCard.locator("svg use")).toHaveAttribute("href", /mochi-icons\/home\.svg#mochi-icon$/);
+
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "dark";
+    });
+    await expect(alphaCard.locator("button.control")).toHaveCSS("color", "rgb(170, 187, 204)");
+    await expect(betaCard.locator("button.control")).toHaveCSS("color", "rgb(170, 187, 204)");
+
+    const fallback = await page.evaluate(async () => {
+      (window as any).CSSStyleSheet = undefined;
+      const host = document.getElementById("fallback-root")!;
+      const element = document.createElement("style-alpha");
+      element.className = "fallback";
+      host.appendChild(element);
+      await (element as any)._mochiReady;
+      const root = (element as any).shadowRoot;
+      return {
+        adopted: root.adoptedStyleSheets ? root.adoptedStyleSheets.length : 0,
+        styles: root.querySelectorAll("style").length,
+        shared: Array.from(root.querySelectorAll("style"))
+          .filter((style) => style.hasAttribute("data-mochi-style-resource")).length,
+      };
+    });
+    expect(fallback.adopted).toBe(0);
+    expect(fallback.shared).toBe(2);
+    expect(fallback.styles).toBe(3);
+
+    const fallbackCard = page.locator("style-alpha.fallback");
+    await expect(fallbackCard.locator("button.control")).toHaveCSS("background-color", "rgb(255, 0, 0)");
+    await expect(fallbackCard.locator("button.control")).toHaveCSS("color", "rgb(170, 187, 204)");
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.theme;
+    });
+    await expect(fallbackCard.locator("button.control")).toHaveCSS("color", "rgb(17, 34, 51)");
+
+    expect(requested.some((url) => url.includes("feather"))).toBe(false);
+    expect(requested.some((url) => url.includes("unused.svg"))).toBe(false);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 function screenComponentSource(tagName: string, className: string, bindingCount: number): string {
   const ivars = Array.from({ length: bindingCount }, (_, index) => `  @v${index}`).join("\n");
   const assignments = Array.from(
