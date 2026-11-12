@@ -411,3 +411,271 @@ test("Ruby-authored five-prop siblings survive controlled cold descriptor comple
   }
   expect(runtimeErrors).toEqual([]);
 });
+
+test("typed Hash and Array props compose through static, conditional, and nested row mounts", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  const mochiErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__groupedPropsErrors = [];
+    document.addEventListener("mochi:error", (event) => {
+      const detail = (event as CustomEvent).detail;
+      (window as any).__groupedPropsErrors.push(detail?.message || String(detail));
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("grouped-props-root");
+    const children = root.locator("grouped-props-child");
+    await expect(children).toHaveCount(4);
+    const rowA = root.locator('grouped-props-child[data-item="a"] .typed-child');
+    await expect(rowA).toHaveAttribute("data-label", "Alpha");
+    await expect(rowA).toHaveAttribute("data-count", "0");
+    await expect(rowA).toHaveAttribute("data-active", "false");
+    await expect(rowA.locator(".initial-note")).toHaveText("north-a");
+    await expect(rowA.locator(".note")).toHaveText("north-a");
+    await expect(rowA.locator(".first-value")).toHaveText("a-value");
+    await expect(rowA.locator(".summary")).toHaveText("Alpha:0");
+    await expect(rowA.locator(".default-count")).toHaveText("0");
+    await expect(rowA.locator(".setting-count")).toHaveText("0");
+    await expect(root.locator('grouped-props-child[data-item="static"] .first-value')).toHaveText("static-value");
+
+    await root.locator("button.open-inspector").click();
+    const inspector = root.locator("props-inspector .inspector");
+    const conditional = root.locator('grouped-props-child[data-item="conditional"] .typed-child');
+    await expect(conditional.locator(".initial-note")).toHaveText("inspection");
+    await expect(conditional).toHaveAttribute("data-count", "0");
+    await expect(conditional).toHaveAttribute("data-active", "false");
+    await expect(conditional.locator(".first-value")).toHaveText("static-value");
+    await expect(inspector).toHaveAttribute("data-note", "inspection");
+    await expect(inspector).toHaveAttribute("data-empty", "");
+    await expect(inspector).toHaveAttribute("data-count", "0");
+    await expect(inspector).toHaveAttribute("data-active", "false");
+
+    await rowA.locator(".summary").evaluate((node) => {
+      const changes: string[] = [];
+      new MutationObserver(() => changes.push(node.textContent || "")).observe(node, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      (window as any).__groupedSummaryChanges = changes;
+    });
+    await root.locator("button.update-pair").click();
+    await expect(rowA).toHaveAttribute("data-label", "Alpine");
+    await expect(rowA).toHaveAttribute("data-count", "4");
+    await expect(rowA.locator(".note")).toHaveText("updated");
+    await expect(rowA.locator(".summary")).toHaveText("Alpine:4");
+    expect(await page.evaluate(() => (window as any).__groupedSummaryChanges)).toEqual(["Alpine:4"]);
+    await expect(rowA.locator(".initial-note")).toHaveText("north-a");
+    await expect(root.locator(".parent-note")).toHaveText("updated");
+    await expect(inspector).toHaveAttribute("data-note", "updated-inspection");
+    await expect(conditional.locator(".note")).toHaveText("updated-inspection");
+
+    await rowA.locator("button.mutate").click();
+    await expect(rowA.locator(".note")).toHaveText("child-only");
+    await expect(rowA.locator(".first-value")).toHaveText("child-only");
+    await expect(rowA.locator(".default-count")).toHaveText("1");
+    await expect(rowA.locator(".setting-count")).toHaveText("1");
+    await expect(root.locator(".parent-note")).toHaveText("updated");
+    const rowB = root.locator('grouped-props-child[data-item="b"] .typed-child');
+    await expect(rowB.locator(".note")).toHaveText("north-b");
+    await expect(rowB.locator(".first-value")).toHaveText("b-value");
+    await expect(rowB.locator(".default-count")).toHaveText("0");
+    await expect(rowB.locator(".setting-count")).toHaveText("0");
+    await expect(root.locator('grouped-props-child[data-item="static"] .default-count')).toHaveText("0");
+
+    await root.locator("button.close-inspector").click();
+    await expect(root.locator("props-inspector")).toHaveCount(0);
+    const rowHost = root.locator('grouped-props-child[data-item="a"]');
+    const rowInstance = await rowHost.evaluate((element: any) => element._mochiInstance);
+    await rowHost.evaluate((element) => element.removeAttribute("label"));
+    await expect.poll(() => page.evaluate(() => (window as any).__groupedPropsErrors.length)).toBe(1);
+    await expect(rowHost.locator(".typed-child")).toHaveAttribute("data-label", "Alpine");
+    expect(await rowHost.evaluate((element: any) => element._mochiInstance)).toBe(rowInstance);
+    mochiErrors.push(...await page.evaluate(() => (window as any).__groupedPropsErrors.map((entry: any) => entry?.message || JSON.stringify(entry))));
+    expect(mochiErrors).toHaveLength(1);
+    expect(mochiErrors[0]).toContain("is required but the attribute was removed");
+    expect(mochiErrors[0]).toContain("GroupedPropsRoot.rb");
+  }, "<grouped-props-root></grouped-props-root>");
+
+  expect(runtimeErrors).toEqual([]);
+});
+
+test("a nested typed child removed during package loading never mounts later", async ({ page }) => {
+  let packageSeen!: () => void;
+  let releasePackage!: () => void;
+  const requested = new Promise<void>((resolve) => { packageSeen = resolve; });
+  const released = new Promise<void>((resolve) => { releasePackage = resolve; });
+  await page.route("**/components/grouped-props-child.json", async (route) => {
+    packageSeen();
+    await released;
+    await route.continue();
+  });
+
+  try {
+    await withFrameworkProject(async (baseURL) => {
+      await page.goto(`${baseURL}/index.html`);
+      await requested;
+      const root = page.locator("grouped-props-root");
+      await expect(root.locator("button.clear-groups")).toBeVisible();
+      const rowChildren = root.locator('grouped-props-child[data-item="a"], grouped-props-child[data-item="b"], grouped-props-child[data-item="c"]');
+      await expect(rowChildren).toHaveCount(3);
+      await rowChildren.evaluateAll((elements: any[]) => {
+        (window as any).__removedRowChildren = elements;
+      });
+      await root.locator("button.clear-groups").click();
+      await expect(rowChildren).toHaveCount(0);
+      releasePackage();
+      await expect(root.locator('grouped-props-child[data-item="static"] .typed-child')).toHaveAttribute("data-label", "Static");
+      const removedStates = await page.evaluate(async () => {
+        const elements = (window as any).__removedRowChildren as any[];
+        await Promise.allSettled(elements.map((element) => element._mochiReady));
+        return elements.map((element) => ({ state: element._mochiMountState, instance: element._mochiInstance }));
+      });
+      expect(removedStates).toEqual([
+        { state: "unmounted", instance: null },
+        { state: "unmounted", instance: null },
+        { state: "unmounted", instance: null },
+      ]);
+      await expect(rowChildren).toHaveCount(0);
+    }, "<grouped-props-root></grouped-props-root>");
+  } finally {
+    releasePackage();
+  }
+});
+
+test("a conditional child removed during descriptor loading stays unmounted", async ({ page }) => {
+  let descriptorSeen!: () => void;
+  let releaseDescriptor!: () => void;
+  const requested = new Promise<void>((resolve) => { descriptorSeen = resolve; });
+  const released = new Promise<void>((resolve) => { releaseDescriptor = resolve; });
+  await page.route("**/components/props-inspector.json", async (route) => {
+    descriptorSeen();
+    await released;
+    await route.continue();
+  });
+
+  try {
+    await withFrameworkProject(async (baseURL) => {
+      await page.goto(`${baseURL}/index.html`);
+      const root = page.locator("grouped-props-root");
+      await expect(root.locator("button.open-inspector")).toBeVisible();
+      await root.locator("button.open-inspector").click();
+      await requested;
+      const inspector = root.locator("props-inspector");
+      await expect(inspector).toHaveCount(1);
+      await inspector.evaluate((element: any) => { (window as any).__removedInspector = element; });
+      await root.locator("button.close-inspector").click();
+      await expect(inspector).toHaveCount(0);
+      releaseDescriptor();
+      const state = await page.evaluate(async () => {
+        const element = (window as any).__removedInspector;
+        await element._mochiReady;
+        return { state: element._mochiMountState, instance: element._mochiInstance, shadowChildren: element.shadowRoot.childNodes.length };
+      });
+      expect(state).toEqual({ state: "unmounted", instance: null, shadowChildren: 0 });
+    }, "<grouped-props-root></grouped-props-root>");
+  } finally {
+    releaseDescriptor();
+  }
+});
+
+test("keyed typed children keep local and editable state on moves, then release each mount", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("keyed-state-root");
+    const rows = root.locator("li.row");
+    await expect(rows).toHaveCount(2);
+    const originalA = root.locator('li[data-row="a"] keyed-state-child');
+    await expect(originalA.locator(".child-label")).toHaveText("Alpha");
+    await expect(originalA.locator(".local-count")).toHaveText("0");
+    await expect(originalA.locator(".mount-count")).toHaveText("1");
+    await originalA.evaluate((element: any) => { (window as any).__originalA = element; });
+    const input = originalA.locator("input.draft");
+    await input.fill("draft retained");
+    await input.evaluate((element: HTMLInputElement) => element.setSelectionRange(3, 9));
+    await input.focus();
+    await originalA.locator("button.increment").click();
+    await expect(originalA.locator(".local-count")).toHaveText("1");
+    await input.focus();
+    await input.evaluate((element: HTMLInputElement) => element.setSelectionRange(3, 9));
+    const originalInstance = await originalA.evaluate((element: any) => element._mochiInstance);
+
+    const activeBaseline = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+    expect(activeBaseline.components).toBe(3);
+    expect(activeBaseline.elements).toBe(3);
+
+    await root.evaluate((element: any) => element.shadowRoot.querySelector("button.prepend").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true })
+    ));
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1)).toHaveAttribute("data-row", "a");
+    await root.evaluate((element: any) => element.shadowRoot.querySelector("button.reverse").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true })
+    ));
+    await expect(rows.nth(1)).toHaveAttribute("data-row", "a");
+    await root.evaluate((element: any) => Promise.all(
+      Array.from(element.shadowRoot.querySelectorAll("keyed-state-child")).map((child: any) => child._mochiReady)
+    ));
+    const cycleBaseline = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+    expect(cycleBaseline.components).toBe(4);
+    expect(cycleBaseline.elements).toBe(4);
+    expect(cycleBaseline.routeSubscribers).toBeGreaterThan(0);
+    expect(cycleBaseline.storageSubscribers).toBeGreaterThan(0);
+    expect(cycleBaseline.storageSubscriptionKeys).toBeGreaterThan(0);
+    const movedA = root.locator('li[data-row="a"] keyed-state-child');
+    await expect(movedA.locator(".local-count")).toHaveText("1");
+    await expect(root.locator('li[data-row="c"] .mount-count')).toHaveText("1");
+    await expect(root.locator('li[data-row="b"] .mount-count')).toHaveText("1");
+    await expect(movedA.locator(".mount-count")).toHaveText("1");
+    expect(await movedA.evaluate((element: any) => element === (window as any).__originalA)).toBe(true);
+    expect(await movedA.evaluate((element: any) => element._mochiInstance)).toBe(originalInstance);
+    expect(await movedA.locator("input.draft").evaluate((element: HTMLInputElement) => ({
+      value: element.value,
+      focused: element.getRootNode() instanceof ShadowRoot && (element.getRootNode() as ShadowRoot).activeElement === element,
+      start: element.selectionStart,
+      end: element.selectionEnd,
+    }))).toEqual({ value: "draft retained", focused: true, start: 3, end: 9 });
+
+    let currentA = movedA;
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await currentA.evaluate((element: any) => { (window as any).__removedA = element; });
+      await root.locator("button.remove-a").click();
+      await expect(rows).toHaveCount(2);
+      await expect.poll(() => page.evaluate(() => (window as any).__removedA._mochiMountState)).toBe("unmounted");
+      const disposed = await page.evaluate(() => ({
+        ...((window as any).MochiLoader.debugStats()),
+        instance: (window as any).__removedA._mochiInstance,
+        bindingsCleared: Object.keys((window as any).__removedA.bindingTargets).length === 0,
+      }));
+      expect(disposed.components, JSON.stringify({ cycleBaseline, disposed })).toBe(cycleBaseline.components - 1);
+      expect(disposed.elements).toBe(cycleBaseline.elements - 1);
+      expect(disposed.bindings).toBeLessThan(cycleBaseline.bindings);
+      expect(disposed.instance).toBeNull();
+      expect(disposed.bindingsCleared).toBe(true);
+      expect(disposed.timers).toBe(cycleBaseline.timers);
+      expect(disposed.pendingHostRequests).toBe(cycleBaseline.pendingHostRequests);
+      expect(disposed.routeSubscribers).toBeLessThan(cycleBaseline.routeSubscribers);
+      expect(disposed.storageSubscribers).toBeLessThan(cycleBaseline.storageSubscribers);
+      expect(disposed.storageSubscriptionKeys).toBeLessThan(cycleBaseline.storageSubscriptionKeys);
+      expect(disposed.unmountedInstances).toBe(cycleBaseline.unmountedInstances);
+
+      await root.locator("button.reinsert-a").click();
+      currentA = root.locator('li[data-row="a"] keyed-state-child');
+      await expect(currentA.locator(".local-count")).toHaveText("0");
+      await expect(currentA.locator(".mount-count")).toHaveText("1");
+      await expect(currentA.locator(".child-label")).toHaveText("Alpha fresh");
+      const freshInstance = await currentA.evaluate((element: any) => element._mochiInstance);
+      expect(freshInstance).not.toBe(originalInstance);
+      const restored = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+      for (const key of ["components", "bindings", "elements", "timers", "pendingFetches", "activeFetches", "pendingHostRequests", "routeSubscribers", "storageSubscribers", "storageSubscriptionKeys", "unmountedInstances"]) {
+        expect(restored[key], `${key} after lifecycle cycle ${cycle + 1}`).toBe(cycleBaseline[key]);
+      }
+    }
+  }, "<keyed-state-root></keyed-state-root>");
+  expect(runtimeErrors).toEqual([]);
+});

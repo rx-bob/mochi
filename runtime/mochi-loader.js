@@ -972,6 +972,9 @@
         ? ""
         : String(entry.instance);
       if (!subscribeKey || !callback || !subscriber) return;
+      var storageElement = state.elements.get(subscriber);
+      if (!storageElement || storageElement._mochiDisconnected || storageElement._mochiUnmounted ||
+          String(storageElement._mochiInstance) !== subscriber) return;
       var bucket = state.storageSubscribers.get(subscribeKey);
       if (!bucket) {
         bucket = new Map();
@@ -1008,6 +1011,9 @@
         ? ""
         : String(entry.instance);
       if (!subscriber) return;
+      var routeElement = state.elements.get(subscriber);
+      if (!routeElement || routeElement._mochiDisconnected || routeElement._mochiUnmounted ||
+          String(routeElement._mochiInstance) !== subscriber) return;
       state.routeSubscribers.add(subscriber);
       deliverRouteTo(currentRouteInfo(), subscriber);
       return;
@@ -1062,6 +1068,8 @@
       var callbackName = String(entry.callback || "");
       if (!callbackName) return;
       var liveElement = state.elements.get(instanceKey);
+      if (!liveElement || liveElement._mochiDisconnected || liveElement._mochiUnmounted ||
+          String(liveElement._mochiInstance) !== instanceKey) return;
       var mountToken = liveElement ? liveElement._mochiMountToken : undefined;
 
       var invokeTimer = function () {
@@ -3572,23 +3580,37 @@
     });
   }
 
+  function composedContainsNode(host, node) {
+    var current = node;
+    while (current) {
+      if (current === host) return true;
+      if (current.parentNode) {
+        current = current.parentNode;
+        continue;
+      }
+      var root = current.getRootNode && current.getRootNode();
+      current = root && root.host ? root.host : null;
+    }
+    return false;
+  }
+
   function moveRowAfter(entry, reference) {
     var parent = reference.parentNode;
     if (!parent) return;
     var active = null;
     var selection = null;
     var root = entry.start.getRootNode && entry.start.getRootNode();
-    var focused = root && root.activeElement;
-    if (focused) {
-      if (parent === focused || (parent.contains && parent.contains(focused))) {
-        active = focused;
-        if (typeof focused.selectionStart === "number" && typeof focused.selectionEnd === "number") {
-          selection = {
-            start: focused.selectionStart,
-            end: focused.selectionEnd,
-            direction: focused.selectionDirection
-          };
-        }
+    var focused = root && deepActiveElement(root);
+    if (focused && rowRange(entry).some(function (node) {
+      return composedContainsNode(node, focused);
+    })) {
+      active = focused;
+      if (typeof focused.selectionStart === "number" && typeof focused.selectionEnd === "number") {
+        selection = {
+          start: focused.selectionStart,
+          end: focused.selectionEnd,
+          direction: focused.selectionDirection
+        };
       }
     }
     var anchor = reference.nextSibling;
@@ -3596,7 +3618,7 @@
       parent.insertBefore(node, anchor);
     });
     if (active && active.isConnected) {
-      try { active.focus({ preventScroll: true }); } catch (_) { active.focus(); }
+      focusNode(active);
       if (selection && typeof active.setSelectionRange === "function") {
         try { active.setSelectionRange(selection.start, selection.end, selection.direction || "none"); } catch (_) { }
       }
@@ -4196,8 +4218,9 @@
         });
         if (state.elements.get(key) === this) state.elements.delete(key);
         state.routeSubscribers.delete(key);
-        state.storageSubscribers.forEach(function (subscribers) {
+        state.storageSubscribers.forEach(function (subscribers, storageKey) {
           subscribers.delete(key);
+          if (subscribers.size === 0) state.storageSubscribers.delete(storageKey);
         });
 
         try {
@@ -4229,6 +4252,10 @@
         if (disposeError) {
           reportError(this, "unmount", "dispose", disposeError, module);
         }
+        // Tombstones protect the synchronous unmounted-hook/outbox drain. All
+        // owner work is canceled and drained before this point, so retaining
+        // one per historical instance would grow without bound.
+        state.unmountedInstances.delete(key);
 
         this._mochiModule = null;
         this._mochiInstance = null;
@@ -4494,6 +4521,12 @@
   // bridge; the rest describe loader bookkeeping that must also drain.
   function debugStats() {
     var module = state.activeModule;
+    var storageSubscriberCount = 0;
+    var storageSubscriptionKeys = 0;
+    state.storageSubscribers.forEach(function (subscribers) {
+      storageSubscriptionKeys += 1;
+      storageSubscriberCount += subscribers.size;
+    });
     return {
       bindings: module && typeof module._mochi_binding_count === "function"
         ? Number(module._mochi_binding_count()) : -1,
@@ -4504,6 +4537,9 @@
       pendingFetches: state.pendingFetches.length,
       activeFetches: state.activeFetches.size,
       pendingHostRequests: state.pendingHostRequests.size,
+      routeSubscribers: state.routeSubscribers.size,
+      storageSubscribers: storageSubscriberCount,
+      storageSubscriptionKeys: storageSubscriptionKeys,
       unmountedInstances: state.unmountedInstances.size,
       stateObjects: module && typeof module._mochi_state_object_count === "function"
         ? Number(module._mochi_state_object_count()) : -1,

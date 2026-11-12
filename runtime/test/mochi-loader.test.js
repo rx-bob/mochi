@@ -583,7 +583,7 @@ test("boot registers component identities without fetching templates or bytecode
 });
 
 test("route subscribers receive decoded params and query values once", async () => {
-  const { module, log, dom } = await setup([COMPONENT], {
+  const { loader, module, log, dom } = await setup([COMPONENT], {
     url: "http://localhost/logs/a%20b?level=warn&q=hello+world",
   });
 
@@ -613,6 +613,7 @@ test("route subscribers receive decoded params and query values once", async () 
   element._dispatchAction({ action: "increment" });
 
   assert.equal(log.dispatchedArgs.length, 1);
+  assert.equal(loader.debugStats().routeSubscribers, 1);
   assert.equal(log.dispatchedArgs[0].instance, element._mochiInstance);
   assert.deepEqual(log.dispatchedArgs[0].args, [log.routeInfos[0]]);
 
@@ -632,6 +633,11 @@ test("route subscribers receive decoded params and query values once", async () 
     hash: false,
     href: "http://localhost/costs?range=30d",
   }]);
+
+  element.remove();
+  observer.remove();
+  await flushLifecycle();
+  assert.equal(loader.debugStats().routeSubscribers, 0);
 });
 
 test("replace navigation rewrites history while push navigation appends", async () => {
@@ -788,7 +794,7 @@ test("storage delivers raw text so Ruby owns corrupt-value fallback", async () =
 });
 
 test("storage events update the VM, removals reach subscribers, and unmount unsubscribes", async () => {
-  const { module, log, dom } = await setup([COMPONENT]);
+  const { loader, module, log, dom } = await setup([COMPONENT]);
   dom.window.localStorage.setItem("cowboy_theme", "light");
   log.methods.add("on_theme");
   log.requiredArgs.set("on_theme", 1);
@@ -804,6 +810,8 @@ test("storage events update the VM, removals reach subscribers, and unmount unsu
   }) + "\n");
   element._dispatchAction({ action: "increment" });
   assert.equal(log.dispatchedArgs.length, 1);
+  assert.equal(loader.debugStats().storageSubscribers, 1);
+  assert.equal(loader.debugStats().storageSubscriptionKeys, 1);
 
   dom.window.localStorage.setItem("cowboy_theme", "dark");
   dom.window.dispatchEvent(new dom.window.StorageEvent("storage", {
@@ -830,6 +838,8 @@ test("storage events update the VM, removals reach subscribers, and unmount unsu
 
   element.remove();
   await flushLifecycle();
+  assert.equal(loader.debugStats().storageSubscribers, 0);
+  assert.equal(loader.debugStats().storageSubscriptionKeys, 0);
   dom.window.dispatchEvent(new dom.window.StorageEvent("storage", {
     key: "cowboy_theme",
     oldValue: null,
@@ -1603,6 +1613,38 @@ test("disconnect disposes VM registrations once and clears binding caches", asyn
     log.dispatched.filter((entry) => entry.methodSymbol === unmountedSymbol).length,
     1,
   );
+});
+
+test("unmount releases the owner's timer and route and storage subscriptions", async () => {
+  const { loader, module, log } = await setup([COMPONENT]);
+  log.methods.add("on_route");
+  log.methods.add("on_theme");
+  log.requiredArgs.set("on_route", 1);
+  log.requiredArgs.set("on_theme", 1);
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const instance = String(element._mochiInstance);
+  module.queueEmit([
+    { __host: "timer", id: 731, kind: "every", ms: 60000, instance, callback: "increment" },
+    { __host: "route_subscribe", instance },
+    { __host: "storage_subscribe", key: "owned-theme", instance, callback: "on_theme" },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(loader.debugStats().timers, 1);
+  assert.equal(loader.debugStats().routeSubscribers, 1);
+  assert.equal(loader.debugStats().storageSubscribers, 1);
+  assert.equal(loader.debugStats().storageSubscriptionKeys, 1);
+
+  element.remove();
+  await flushLifecycle();
+  assert.equal(loader.debugStats().timers, 0);
+  assert.equal(loader.debugStats().routeSubscribers, 0);
+  assert.equal(loader.debugStats().storageSubscribers, 0);
+  assert.equal(loader.debugStats().storageSubscriptionKeys, 0);
+  assert.equal(loader.debugStats().unmountedInstances, 0);
 });
 
 test("unmounted hook failure still removes VM registrations", async () => {

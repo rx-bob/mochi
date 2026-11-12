@@ -178,6 +178,47 @@ When no explicit key is given, the loader uses an item `key` field, then an
 `id` field, and otherwise uses the row position as identity. Duplicate keys
 fail with a source-located error before the list changes.
 
+Rows can own typed child components directly. Keep the key on the row, and pass
+Ruby values through declared attributes:
+
+```ruby
+class EventRow
+  @tag_name = "event-row"
+  prop :id, String, required: true
+  prop :label, String, required: true
+  @expanded
+
+  def initialize
+    @expanded = false
+  end
+
+  def toggle
+    @expanded = !@expanded
+  end
+
+  def html
+    %Q{
+      <article data-id="{@id}">
+        <button onclick="{toggle}">{@label}</button>
+        {if @expanded}<p>Details</p>{end}
+      </article>
+    }
+  end
+end
+
+def html
+  %Q{
+    {each @events as event, key: event["id"]}
+      <event-row id="{event["id"]}" label="{event["label"]}"></event-row>
+    {end}
+  }
+end
+```
+
+When migrating child markup assembled from strings or `Mochi.raw` to pass row
+values, declare typed child props and write the child tag in the row template.
+Keyed rows then retain the child instance and its local state while they move.
+
 ### Attributes and form state
 
 Interpolated attributes evaluate their Ruby expression in the VM. Attribute
