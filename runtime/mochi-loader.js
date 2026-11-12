@@ -2408,6 +2408,40 @@
     return false;
   }
 
+  function validateBindingPlaceholder(element, node, binding, context) {
+    // Conditional and each bindings target comment anchors. Their expressions
+    // describe branch/row state, not literal placeholders on the anchor.
+    if (["text", "text_html", "html", "attr", "prop"].indexOf(binding.kind) === -1) return;
+    if (typeof binding.template_start !== "number" ||
+        typeof binding.template_end !== "number" ||
+        binding.template_end <= binding.template_start) return;
+    if (typeof binding.template_text !== "string") {
+      throw new Error("mochi-loader: missing compiler placeholder source for " +
+        bindingContext(element, binding, context));
+    }
+
+    var start = byteOffsetToIndex(binding.template_text, binding.template_start);
+    var end = byteOffsetToIndex(binding.template_text, binding.template_end);
+    var placeholder = binding.template_text.slice(start, end);
+    if (placeholder.length < 2 || placeholder.charAt(0) !== "{" ||
+        placeholder.charAt(placeholder.length - 1) !== "}") {
+      throw new Error("mochi-loader: invalid compiler placeholder range for " +
+        bindingContext(element, binding, context));
+    }
+
+    var targetText;
+    if (binding.kind === "attr" || binding.kind === "prop") {
+      targetText = binding.attr_name && node && typeof node.getAttribute === "function"
+        ? node.getAttribute(binding.attr_name) : null;
+    } else {
+      targetText = node && typeof node.textContent === "string" ? node.textContent : null;
+    }
+    if (typeof targetText !== "string" || targetText.indexOf(placeholder) === -1) {
+      throw new Error("mochi-loader: compiler placeholder " + JSON.stringify(placeholder) +
+        " is missing from its resolved target for " + bindingContext(element, binding, context));
+    }
+  }
+
   function installBindingTarget(element, root, binding, context) {
     var path = binding.path || [];
     var node = resolveTarget(root, path);
@@ -2418,6 +2452,7 @@
     if (bindingTargetTypeError(node, binding)) {
       throw new Error("mochi-loader: invalid " + binding.kind + " binding target (DOM node type " + node.nodeType + ") at path [" + path.join(", ") + "] for " + description);
     }
+    validateBindingPlaceholder(element, node, binding, context);
 
     if ((binding.kind === "html" || binding.kind === "text_html") && node.nodeType === 3) {
       var span = global.document.createElement("span");

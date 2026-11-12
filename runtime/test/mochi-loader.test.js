@@ -1528,6 +1528,62 @@ test("compiler binding target node type mismatches fail before VM registration",
   assert.deepEqual(log.bindings, []);
 });
 
+test("compiler binding placeholder validation rejects same-kind path mismatch and accepts literal braces", async () => {
+  const { log } = await setup([{
+    ...COMPONENT,
+    tag_name: "placeholder-check",
+    class_name: "PlaceholderCheck",
+    html_template: '<span>{literal}</span><em>{@label}</em>',
+    bindings: [{
+      id: 12,
+      // Valid text node, wrong target: must not silently leave the compiled
+      // placeholder in the actual expression node.
+      path: [0, 0],
+      kind: "text",
+      template_text: "{@label}",
+      template_start: 0,
+      template_end: 8,
+      source: { file: "app/components/placeholder_check.rb", line: 11, column: 7 },
+    }],
+  }]);
+  const element = document.createElement("placeholder-check");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady, (error) => {
+    assert.match(error.message, /compiler placeholder "\{@label\}" is missing from its resolved target/);
+    assert.match(error.message, /placeholder-check \(PlaceholderCheck\), binding 12, kind text/);
+    assert.match(error.message, /app\/components\/placeholder_check\.rb:11:7/);
+    return true;
+  });
+  assert.equal(element._mochiMountState, "failed");
+  assert.equal(element.shadowRoot.childNodes.length, 0);
+  assert.equal(log.components.size, 0);
+  assert.deepEqual(log.bindings, []);
+
+  const valid = {
+    ...COMPONENT,
+    tag_name: "literal-brace-check",
+    class_name: "LiteralBraceCheck",
+    html_template: '<span>{literal}</span><em>{@label}</em>',
+    bindings: [{
+      id: 13,
+      path: [1, 0],
+      kind: "text",
+      template_text: "{@label}",
+      template_start: 0,
+      template_end: 8,
+      getter_sym: "__mochi_bind_13",
+    }],
+  };
+  const { log: validLog } = await setup([valid]);
+  const validElement = document.createElement("literal-brace-check");
+  document.body.appendChild(validElement);
+  await validElement._mochiReady;
+  assert.equal(validElement.shadowRoot.querySelector("span").textContent, "{literal}");
+  assert.equal(validElement._mochiMountState, "mounted");
+  assert.equal(validLog.components.size, 1);
+});
+
 test("failed mount reconnect reuses one delegated listener and installs bindings once", async () => {
   const { log } = await setup([COMPONENT]);
   const rootListeners = [];

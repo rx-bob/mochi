@@ -546,6 +546,57 @@ test("a nested typed child removed during package loading never mounts later", a
   }
 });
 
+test("delayed nested child mounts use latest first-render props across rows and conditional branches", async ({ page }) => {
+  let descriptorSeen!: () => void;
+  let releaseDescriptor!: () => void;
+  const requested = new Promise<void>((resolve) => { descriptorSeen = resolve; });
+  const released = new Promise<void>((resolve) => { releaseDescriptor = resolve; });
+  const runtimeErrors: string[] = [];
+  const mochiErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__delayedGroupedErrors = [];
+    document.addEventListener("mochi:error", (event) => {
+      const detail = (event as CustomEvent).detail;
+      (window as any).__delayedGroupedErrors.push(detail?.message || String(detail));
+    });
+  });
+  await page.route("**/components/grouped-props-child.json", async (route) => {
+    descriptorSeen();
+    await released;
+    await route.continue();
+  });
+
+  try {
+    await withFrameworkProject(async (baseURL) => {
+      await page.goto(`${baseURL}/index.html`);
+      await requested;
+      const root = page.locator("grouped-props-root");
+      await expect(root.locator("button.update-pair")).toBeVisible();
+      await root.locator("button.update-pair").click();
+      await root.locator("button.open-inspector").click();
+      const pendingRow = root.locator('grouped-props-child[data-item="a"]');
+      const pendingConditional = root.locator('grouped-props-child[data-item="conditional"]');
+      await expect(pendingRow).toHaveAttribute("label", "Alpine");
+      await expect(pendingRow).toHaveAttribute("count", "4");
+      await expect(pendingConditional).toHaveAttribute("metadata", /updated-inspection/);
+
+      releaseDescriptor();
+      await expect(pendingRow.locator(".typed-child")).toHaveAttribute("data-label", "Alpine");
+      await expect(pendingRow.locator(".typed-child")).toHaveAttribute("data-count", "4");
+      await expect(pendingRow.locator(".initial-note")).toHaveText("updated");
+      await expect(pendingConditional.locator(".initial-note")).toHaveText("updated-inspection");
+      await expect(pendingConditional.locator(".note")).toHaveText("updated-inspection");
+      await expect(root.locator("props-inspector .inspector")).toHaveAttribute("data-note", "updated-inspection");
+      mochiErrors.push(...await page.evaluate(() => (window as any).__delayedGroupedErrors));
+      expect(mochiErrors).toEqual([]);
+    }, "<grouped-props-root></grouped-props-root>");
+  } finally {
+    releaseDescriptor();
+  }
+  expect(runtimeErrors).toEqual([]);
+});
+
 test("a conditional child removed during descriptor loading stays unmounted", async ({ page }) => {
   let descriptorSeen!: () => void;
   let releaseDescriptor!: () => void;
