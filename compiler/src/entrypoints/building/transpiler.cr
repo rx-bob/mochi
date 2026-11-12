@@ -17,6 +17,7 @@ require "../../ruby/attribute_hash_generator"
 require "../../ruby/conditional_method_generator"
 require "../../ruby/each_method_generator"
 require "../../ruby/prop_method_generator"
+require "../../ruby/component_event_method_generator"
 
 record TranspileFileResult, components : Array(MochiComponent), helper : HelperUnit?
 
@@ -373,6 +374,19 @@ class Compiler
       )
     end
 
+    event_declarations = TreeSitter::PropertyExtractor.extract_events_from_class(declaration.node, source_path)
+    if !event_declarations.empty? && methods.has_key?("emit")
+      raise "Component '#{cls_name}' declares child events and cannot define a method named emit at #{declaration.location(source_path)}"
+    end
+    emits = event_declarations.map do |event|
+      ComponentEventDescriptor.new(
+        event.name,
+        event.payload.map { |field| EventPayloadDescriptor.new(field.name, field.type) },
+        source_path,
+        event.line
+      )
+    end
+
     imports = RubyUnderstander.get_imports(root)
     css = if css_method = methods["css"]?
             css_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(css_method.body, "css")
@@ -464,7 +478,8 @@ class Compiler
       each_result.each_blocks,
       methods.keys,
       source_locator,
-      props
+      props,
+      emits
     )
     manifest.helper_chi = helper_chi
     manifest.source_file = source_path
@@ -484,6 +499,12 @@ class Compiler
       amped_ruby_code,
       cls_name,
       props
+    )
+
+    amped_ruby_code = ComponentEventMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      emits
     )
 
     rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(

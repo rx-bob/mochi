@@ -436,6 +436,14 @@ class MrbcCompiler
         end
       end
 
+      unless manifest.emits.empty?
+        json.field "emits" do
+          json.array do
+            manifest.emits.each { |event| write_emit(json, event, manifest.source_file) }
+          end
+        end
+      end
+
       write_bindings(json, manifest.bindings)
       write_events(json, manifest.events)
     end
@@ -452,6 +460,30 @@ class MrbcCompiler
           json.object do
             json.field "file", file
             json.field "line", prop.source_line
+          end
+        end
+      end
+    end
+  end
+
+  private def write_emit(json : JSON::Builder, event : ComponentEventDescriptor, fallback_file : String?) : Nil
+    json.object do
+      json.field "name", event.name
+      json.field "payload" do
+        json.array do
+          event.payload.each do |field|
+            json.object do
+              json.field "name", field.name
+              json.field "type", field.type
+            end
+          end
+        end
+      end
+      if file = event.source_file || fallback_file
+        json.field "source" do
+          json.object do
+            json.field "file", file
+            json.field "line", event.source_line
           end
         end
       end
@@ -583,6 +615,7 @@ class MrbcCompiler
             end
             json.field "event", event.event
             json.field "method_sym", event.method_sym
+            json.field "component", true if event.component
             json.field "args" do
               json.array do
                 event.args.each do |arg|

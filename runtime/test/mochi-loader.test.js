@@ -38,6 +38,59 @@ const LOGS_COMPONENT = {
   chi_file: "my-logs.chi",
 };
 
+const EMITTER_COMPONENT = {
+  tag_name: "event-emitter",
+  class_name: "EventEmitter",
+  chi_file: "event-emitter.chi",
+  html_template: [
+    '<button class="choose" data-mochi-click="choose">Choose</button>',
+    '<button class="choose-bad" data-mochi-click="choose_bad">Bad</button>',
+  ].join(""),
+  css: "",
+  bindings: [],
+  events: [
+    { path: [0], event: "click", method_sym: "choose", args: [] },
+    { path: [1], event: "click", method_sym: "choose_bad", args: [] },
+  ],
+  emits: [
+    {
+      name: "select",
+      payload: [
+        { name: "id", type: "integer" },
+        { name: "label", type: "string" },
+        { name: "active", type: "boolean" },
+        { name: "tags", type: "array" },
+        { name: "meta", type: "hash" },
+      ],
+      source: { file: "lib/event_row.rb", line: 3 },
+    },
+    {
+      name: "opened",
+      payload: [],
+      source: { file: "lib/event_row.rb", line: 4 },
+    },
+  ],
+};
+
+const EVENT_PARENT_COMPONENT = {
+  tag_name: "event-parent",
+  class_name: "EventParent",
+  chi_file: "event-parent.chi",
+  html_template: [
+    '<div class="wrap">',
+    '<event-emitter data-mochi-select="row_selected"></event-emitter>',
+    '<button class="refresh" data-mochi-click="refresh">Refresh</button>',
+    "</div>",
+  ].join(""),
+  css: "",
+  bindings: [],
+  events: [
+    { path: [0, 0], event: "select", method_sym: "row_selected", args: [], component: true },
+    { path: [0, 1], event: "click", method_sym: "refresh", args: [] },
+  ],
+  emits: [],
+};
+
 const TYPED_COMPONENT = {
   tag_name: "typed-badge",
   class_name: "TypedBadge",
@@ -1328,6 +1381,176 @@ test("action payloads reach one-argument handlers and target tags filter sibling
   assert.equal(
     log.dispatched.filter((entry) => entry.methodSymbol === selectSymbol).length,
     0
+  );
+});
+
+test("child events route to their exact parent instance with typed payloads", async () => {
+  const { module, log } = await setup([EVENT_PARENT_COMPONENT, EMITTER_COMPONENT]);
+  log.methods.add("choose");
+  log.methods.add("choose_bad");
+  log.methods.add("row_selected");
+  log.methods.add("refresh");
+  log.requiredArgs.set("row_selected", 1);
+
+  const parents = [document.createElement("event-parent"), document.createElement("event-parent")];
+  parents.forEach((parent) => document.body.appendChild(parent));
+  await Promise.all(parents.map((parent) => parent._mochiReady));
+  const children = parents.map((parent) => parent.shadowRoot.querySelector("event-emitter"));
+  await Promise.all(children.map((child) => child._mochiReady));
+
+  let actionEvents = 0;
+  let escapedSelects = 0;
+  document.addEventListener("mochi:action", () => { actionEvents += 1; });
+  document.body.addEventListener("select", () => { escapedSelects += 1; });
+  log.onDispatch = (name, instance) => {
+    if (name !== "choose") return;
+    module.queueEmit(JSON.stringify({
+      __child_event: "select",
+      instance,
+      payload: {
+        id: Number(instance),
+        label: "row-" + instance,
+        active: true,
+        tags: ["a", "b"],
+        meta: { currency: "USD" },
+      },
+    }) + "\n");
+  };
+
+  const payloadFor = (instance) => ({
+    id: Number(instance),
+    label: "row-" + instance,
+    active: true,
+    tags: ["a", "b"],
+    meta: { currency: "USD" },
+  });
+
+  children[0].shadowRoot.querySelector("button.choose").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const selectSymbol = log.symbols.get("row_selected");
+  assert.ok(selectSymbol);
+  assert.deepEqual(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
+    [{ instance: parents[0]._mochiInstance, methodSymbol: selectSymbol, args: [payloadFor(children[0]._mochiInstance)] }],
+  );
+
+  children[1].shadowRoot.querySelector("button.choose").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
+    [
+      { instance: parents[0]._mochiInstance, methodSymbol: selectSymbol, args: [payloadFor(children[0]._mochiInstance)] },
+      { instance: parents[1]._mochiInstance, methodSymbol: selectSymbol, args: [payloadFor(children[1]._mochiInstance)] },
+    ],
+  );
+  // A scoped child event is not a document-wide action broadcast, and it does
+  // not escape the connected parent's shadow tree.
+  assert.equal(actionEvents, 0);
+  assert.equal(escapedSelects, 0);
+});
+
+test("invalid child event payloads report the declared contract and stop delivery", async () => {
+  const { module, log } = await setup([EVENT_PARENT_COMPONENT, EMITTER_COMPONENT]);
+  log.methods.add("choose");
+  log.methods.add("choose_bad");
+  log.methods.add("row_selected");
+  log.methods.add("refresh");
+  log.requiredArgs.set("row_selected", 1);
+
+  const parent = document.createElement("event-parent");
+  document.body.appendChild(parent);
+  await parent._mochiReady;
+  const child = parent.shadowRoot.querySelector("event-emitter");
+  await child._mochiReady;
+
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+  const instance = child._mochiInstance;
+  const base = { id: 1, label: "row", active: true, tags: [], meta: {} };
+  const invalidPayloads = [
+    { label: "row", active: true, tags: [], meta: {} },
+    { ...base, extra: true },
+    { ...base, id: "not-an-integer" },
+    { ...base, id: 2147483648 },
+  ];
+  module.queueEmit(invalidPayloads.map((payload) => JSON.stringify({
+    __child_event: "select",
+    instance,
+    payload,
+  })).join("\n") + "\n");
+
+  const selectSymbol = log.symbols.get("row_selected");
+  const before = log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol).length;
+  parent.shadowRoot.querySelector("button.refresh").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(details.length, 4);
+  assert.equal(details[0].phase, "event");
+  assert.equal(details[0].tagName, "event-emitter");
+  assert.equal(details[0].event, "select");
+  assert.equal(details[0].payloadKey, "id");
+  assert.match(details[0].message, /requires payload field "id"/);
+  assert.match(details[1].message, /does not declare payload field "extra"/);
+  assert.equal(details[1].payloadKey, undefined);
+  assert.equal(details[2].payloadKey, "id");
+  assert.equal(details[2].eventType, "integer");
+  assert.match(details[2].message, /expects integer, got string/);
+  assert.match(details[3].message, /not a 32-bit integer/);
+  details.forEach((detail) => {
+    assert.match(detail.source, /lib\/event_row\.rb:3/);
+  });
+  assert.equal(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol).length,
+    before,
+  );
+});
+
+test("a stale child event cannot reach a replacement instance", async () => {
+  const { module, log } = await setup([EVENT_PARENT_COMPONENT, EMITTER_COMPONENT]);
+  log.methods.add("choose");
+  log.methods.add("choose_bad");
+  log.methods.add("row_selected");
+  log.methods.add("refresh");
+  log.requiredArgs.set("row_selected", 1);
+
+  const parent = document.createElement("event-parent");
+  document.body.appendChild(parent);
+  await parent._mochiReady;
+  const oldChild = parent.shadowRoot.querySelector("event-emitter");
+  await oldChild._mochiReady;
+  const oldInstance = oldChild._mochiInstance;
+
+  oldChild.remove();
+  await flushLifecycle();
+
+  const replacement = document.createElement("event-emitter");
+  replacement.setAttribute("data-mochi-select", "row_selected");
+  parent.shadowRoot.querySelector(".wrap").appendChild(replacement);
+  await replacement._mochiReady;
+  assert.notEqual(replacement._mochiInstance, oldInstance);
+
+  module.queueEmit(JSON.stringify({
+    __child_event: "select",
+    instance: oldInstance,
+    payload: {
+      id: 99,
+      label: "stale",
+      active: false,
+      tags: [],
+      meta: {},
+    },
+  }) + "\n");
+
+  const selectSymbol = log.symbols.get("row_selected");
+  const before = log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol).length;
+  parent.shadowRoot.querySelector("button.refresh").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol).length,
+    before,
   );
 });
 

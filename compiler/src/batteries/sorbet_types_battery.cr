@@ -126,6 +126,16 @@ class SorbetTypesBat
       class Class
         def prop(name, type, required: false, default: nil)
         end
+
+        def event(name, **payload)
+        end
+      end
+
+      # Generated child-event emitters call this bridge. The loader owns the
+      # payload contract, so the Sorbet stub accepts any Hash.
+      module Mochi
+        def self.emit_child(name, payload = {})
+        end
       end
     RUBY
   end

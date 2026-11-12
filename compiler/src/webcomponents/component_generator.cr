@@ -55,6 +55,7 @@ class ComponentGenerator
     method_names : Array(String) = [] of String,
     source_locator : TemplateSourceLocator? = nil,
     props : Array(PropDescriptor) = [] of PropDescriptor,
+    emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
   ) : ComponentManifest
     @mochi_cmp_name = mochi_cmp_name
     @conditionals = conditionals
@@ -85,7 +86,8 @@ class ComponentGenerator
       css,
       bindings,
       events,
-      props: props
+      props: props,
+      emits: emits
     )
 
     validate_event_handlers(mochi_cmp_name, manifest.all_events, method_names)
@@ -207,7 +209,13 @@ class ComponentGenerator
       row = EachRowCompiler.compile(block, @expression_parser)
       @each_row_templates << row
       row.all_events.each do |event|
-        events << EventDescriptor.new(path, event.event, event.handler, event.args)
+        events << EventDescriptor.new(
+          path,
+          event.event,
+          event.handler,
+          event.args,
+          component: event.component
+        )
       end
 
       loop_meta = if idx = block.loop_def.index_name
@@ -273,6 +281,24 @@ class ComponentGenerator
         end
       elsif name.starts_with?("data-mochi-")
         next
+      elsif name.starts_with?("on:")
+        event_name = name[3..]
+        next if event_name.empty?
+
+        if expression = @expression_parser.scan(value, "event").first?
+          method_name = expression.source.split("(").first.strip
+          additions << {"data-mochi-#{event_name}", method_name}
+          removals << name
+          args = event_args(attrs, event_name)
+          events << EventDescriptor.new(
+            path,
+            event_name,
+            method_name,
+            args,
+            component: true
+          )
+          args.each { |arg| add_event_expression_binding(path, arg, bindings) }
+        end
       elsif name.starts_with?("on")
         event_name = name[2..]
         next if event_name.empty?

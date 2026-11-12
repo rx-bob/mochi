@@ -48,6 +48,7 @@ struct EachRowEventDescriptor
   getter args : Array(EventArgumentDescriptor)
   getter scope : Array(EachRowScope)
   getter span : TemplateSourceSpan?
+  getter component : Bool
 
   def initialize(
     @event : String,
@@ -56,6 +57,7 @@ struct EachRowEventDescriptor
     @args : Array(EventArgumentDescriptor),
     @scope : Array(EachRowScope) = [] of EachRowScope,
     @span : TemplateSourceSpan? = nil,
+    @component : Bool = false,
   )
   end
 end

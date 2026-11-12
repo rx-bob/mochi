@@ -19,12 +19,24 @@ struct EventCall
   end
 
   def event : String
-    event_name.starts_with?("on") ? event_name[2..] : event_name
+    if event_name.starts_with?("on:")
+      event_name[3..]
+    elsif event_name.starts_with?("on")
+      event_name[2..]
+    else
+      event_name
+    end
+  end
+
+  # `on:<event>` is a compiled parent/child connection. `on<event>` retains
+  # the native DOM event behavior.
+  def component? : Bool
+    event_name.starts_with?("on:")
   end
 end
 
 class EventArgumentExtractor
-  EVENT_START = /(on[a-z]+)\s*=\s*(["'])?\{/
+  EVENT_START = /(on:?[a-z][a-z0-9_-]*)\s*=\s*(["'])?\{/
 
   # Rewrites event attributes with call arguments into a plain method name plus
   # a JSON descriptor list. Keeping the descriptors on the element lets the

@@ -99,6 +99,58 @@ class OtherListener
 end
 `);
 
+  fs.writeFileSync(path.join(projectDir, "lib", "EventRow.rb"), `
+class EventRow
+  @tag_name = "event-row"
+  event :select, id: Integer, label: String
+
+  def html
+    %Q{
+      <button class="choose" onclick="{choose}">Choose row</button>
+      <button class="bad" onclick="{bad}">Bad row</button>
+    }
+  end
+
+  def choose
+    emit :select, id: 42, label: "row"
+  end
+
+  def bad
+    emit :select, id: "not-a-number", label: "row"
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "lib", "EventBoard.rb"), `
+class EventBoard
+  @tag_name = "event-board"
+  @picked
+  @label
+  @updates
+
+  def initialize
+    @picked = "none"
+    @label = "none"
+    @updates = 0
+  end
+
+  def html
+    %Q{
+      <event-row on:select="{row_selected($event)}"></event-row>
+      <p class="picked">{@picked}</p>
+      <p class="label">{@label}</p>
+      <p class="updates">{@updates}</p>
+    }
+  end
+
+  def row_selected(payload)
+    @picked = payload[:id]
+    @label = payload[:label]
+    @updates = @updates + 1
+  end
+end
+`);
+
   fs.writeFileSync(path.join(projectDir, "lib", "FetchProbe.rb"), `
 class FetchProbe
   @tag_name = "fetch-probe"
@@ -161,6 +213,8 @@ end
     <emit-source></emit-source>
     <emit-listener></emit-listener>
     <other-listener></other-listener>
+    <event-board></event-board>
+    <event-board></event-board>
     <fetch-probe></fetch-probe>
   </body>
 </html>
@@ -245,6 +299,43 @@ test("Mochi.emit delivers plain and Hash payloads and filters target tags", asyn
   await expect(listener.locator("p.selected")).toHaveText("tr_9f2a");
   await expect(listener.locator("p.targeted")).toHaveText("tr_7");
   await expect(page.locator("other-listener").locator("p.targeted")).toHaveText("none");
+  expect(errors).toEqual([]);
+});
+
+test("declared child events stay scoped to their connected parent and preserve types", async ({ page }) => {
+  setupConsoleLogging(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.goto(`${baseURL}/index.html`);
+  const boards = page.locator("event-board");
+  await expect(boards).toHaveCount(2);
+  await expect(boards.nth(0).locator("p.picked")).toHaveText("none");
+  await expect(boards.nth(1).locator("p.picked")).toHaveText("none");
+
+  await page.evaluate(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+
+  await boards.nth(0).locator("event-row").locator("button.choose").click();
+  await expect(boards.nth(0).locator("p.picked")).toHaveText("42");
+  await expect(boards.nth(0).locator("p.label")).toHaveText("row");
+  await expect(boards.nth(0).locator("p.updates")).toHaveText("1");
+  await expect(boards.nth(1).locator("p.picked")).toHaveText("none");
+  await expect(boards.nth(1).locator("p.updates")).toHaveText("0");
+
+  await boards.nth(0).locator("button.bad").click();
+  await expect(boards.nth(0).locator("p.updates")).toHaveText("1");
+  const error = await page.evaluate(() => (window as any).__mochiErrors[0]);
+  expect(error.phase).toBe("event");
+  expect(error.tagName).toBe("event-row");
+  expect(error.event).toBe("select");
+  expect(error.payloadKey).toBe("id");
+  expect(error.eventType).toBe("integer");
+  expect(error.source).toContain("EventRow.rb:4");
   expect(errors).toEqual([]);
 });
 

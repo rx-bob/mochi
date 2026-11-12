@@ -45,6 +45,24 @@ RUBY
     result.should contain("    @label = __mochi_props[\"label\"]")
   end
 
+  it "removes child event declarations but keeps the generated emitter" do
+    source = <<-RUBY
+class EventRow
+  @tag_name = "event-row"
+  event :select, id: Integer, label: String
+
+  def emit(__mochi_event, __mochi_payload = {})
+    Mochi.emit_child(__mochi_event.to_s, __mochi_payload)
+  end
+end
+RUBY
+
+    result = GvmSourcePreparer.strip_class_ivars(source)
+    result.should_not contain("event :select")
+    result.should contain("def emit")
+    result.should contain("Mochi.emit_child")
+  end
+
   it "leaves method-level instance variables in a class without metadata" do
     source = <<-RUBY
 class Plain

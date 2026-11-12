@@ -39,6 +39,33 @@ module TreeSitter
       end
     end
 
+    # One `event :name, field: Type` declaration from a component class body.
+    # The payload is a fixed contract: every listed field is required and any
+    # other key is a mismatch.
+    struct EventDeclaration
+      property name : String
+      property payload : Array(EventPayloadField)
+      property line : Int32
+      property column : Int32
+
+      def initialize(
+        @name : String,
+        @payload : Array(EventPayloadField),
+        @line : Int32,
+        @column : Int32,
+      )
+      end
+    end
+
+    struct EventPayloadField
+      property name : String
+      property type : String
+      property type_name : String
+
+      def initialize(@name : String, @type : String, @type_name : String)
+      end
+    end
+
     PROP_TYPES = {
       "String"  => "string",
       "Integer" => "integer",
@@ -48,6 +75,14 @@ module TreeSitter
     }
 
     class PropDeclarationError < Exception
+      getter line : Int32
+
+      def initialize(message : String, @line : Int32)
+        super(message)
+      end
+    end
+
+    class EventDeclarationError < Exception
       getter line : Int32
 
       def initialize(message : String, @line : Int32)
@@ -88,6 +123,135 @@ module TreeSitter
 
       node.each_named_child do |child|
         visit_props(child, declarations, file)
+      end
+    end
+
+    # Reads child-event declarations from the outermost class body. Payload
+    # fields use the same supported types as props; the loader validates the
+    # emitted Hash against this compact schema.
+    def self.extract_events(source : String, file : String = "") : Array(EventDeclaration)
+      parser = RubyParser.new
+      tree = parser.parse(source)
+      declarations = [] of EventDeclaration
+      visit_events(tree.root_node, declarations, file)
+      declarations
+    end
+
+    def self.extract_events_from_class(class_node : Node, file : String = "") : Array(EventDeclaration)
+      body = class_node.child_by_field_name("body")
+      return [] of EventDeclaration unless body
+
+      declarations = [] of EventDeclaration
+      body.each_named_child do |child|
+        if declaration = event_declaration(child, file)
+          declarations << declaration
+        end
+      end
+      validate_events(declarations)
+      declarations
+    end
+
+    private def self.visit_events(node : Node, declarations : Array(EventDeclaration), file : String) : Nil
+      if node.type == "class"
+        declarations.concat(extract_events_from_class(node, file))
+        return
+      end
+
+      node.each_named_child do |child|
+        visit_events(child, declarations, file)
+      end
+    end
+
+    private def self.event_declaration(node : Node, file : String) : EventDeclaration?
+      return nil unless node.type == "call" || node.type == "command"
+      return nil if node.child_by_field_name("receiver")
+
+      method = node.child_by_field_name("method")
+      return nil unless method && method.text == "event"
+
+      arguments = node.child_by_field_name("arguments")
+      return nil unless arguments
+
+      names = [] of Node
+      arguments.each_named_child do |argument|
+        names << argument
+      end
+      return nil if names.empty?
+
+      line = node.start_point.row.to_i + 1
+      column = node.start_point.column.to_i + 1
+      location = file.empty? ? "line #{line}" : "#{file}:#{line}"
+
+      name_node = names[0]
+      unless name_node.type == "simple_symbol" || name_node.type == "delimited_symbol"
+        raise EventDeclarationError.new("event name must be a symbol, got #{name_node.text}", line)
+      end
+      name = name_node.text.lchop(':').strip('"')
+      unless name.matches?(/\A[a-z_][a-z0-9_]*\z/)
+        raise EventDeclarationError.new("invalid event name #{name_node.text} at #{location}; use lower_snake_case", line)
+      end
+
+      payload = [] of EventPayloadField
+      seen_fields = {} of String => Int32
+      names[1..].each do |option|
+        unless option.type == "pair"
+          raise EventDeclarationError.new(
+            "event :#{name} at #{location} payload fields must use name: Type",
+            line
+          )
+        end
+
+        key_node = option.child_by_field_name("key")
+        value_node = option.child_by_field_name("value")
+        unless key_node && value_node
+          raise EventDeclarationError.new("event :#{name} at #{location} has an invalid payload field", line)
+        end
+
+        field_name = key_node.text.lchop(':').strip('"')
+        unless field_name.matches?(/\A[a-z_][a-z0-9_]*\z/)
+          raise EventDeclarationError.new(
+            "invalid payload field #{key_node.text} on event :#{name} at #{location}; use lower_snake_case",
+            line
+          )
+        end
+        if first = seen_fields[field_name]?
+          raise EventDeclarationError.new(
+            "event :#{name} at #{location} declares payload field :#{field_name} twice (first at line #{first})",
+            line
+          )
+        end
+        seen_fields[field_name] = line
+
+        unless value_node.type == "constant"
+          raise EventDeclarationError.new(
+            "event :#{name} at #{location} payload field :#{field_name} must declare String, Integer, Boolean, Array, or Hash",
+            line
+          )
+        end
+        type_name = value_node.text
+        type = PROP_TYPES[type_name]?
+        unless type
+          raise EventDeclarationError.new(
+            "event :#{name} at #{location} payload field :#{field_name} uses unsupported type #{type_name}",
+            line
+          )
+        end
+        payload << EventPayloadField.new(field_name, type, type_name)
+      end
+
+      EventDeclaration.new(name, payload, line, column)
+    end
+
+    private def self.validate_events(declarations : Array(EventDeclaration)) : Nil
+      seen = {} of String => Int32
+      declarations.each do |declaration|
+        if first = seen[declaration.name]?
+          raise EventDeclarationError.new(
+            "event :#{declaration.name} is declared twice (first at line #{first})",
+            declaration.line
+          )
+        end
+        seen[declaration.name] = declaration.line
       end
     end
 

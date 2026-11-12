@@ -82,6 +82,22 @@ describe EventArgumentExtractor do
     args[2]["value"].as_s.should eq("a,b")
   end
 
+  it "extracts component event bindings and keeps their payload arguments" do
+    html = %Q(<event-row on:select="{row_selected($event, 7)}"></event-row>)
+    _result, calls = EventArgumentExtractor.rewrite(html) do |call|
+      %(on:#{call.event}="{#{call.method_name}}")
+    end
+
+    calls.size.should eq 1
+    calls[0].component?.should be_true
+    calls[0].event.should eq "select"
+
+    processed = EventArgumentExtractor.process(html)
+    processed.should contain(%Q(on:select="{row_selected}"))
+    args = event_arguments(processed, "select")
+    args.map { |arg| arg["kind"].as_s }.should eq(["event", "literal"])
+  end
+
   it "finds event attributes after multibyte text" do
     html = %Q[<p>café</p><button onclick="{delete_item(item.id, "}")}">Delete</button>]
     result = EventArgumentExtractor.process(html)

@@ -140,6 +140,14 @@ RUBY
     PropDescriptor.new("label", "string", required: true, source_file: "lib/my_counter.rb", source_line: 8),
     PropDescriptor.new("count", "integer", default: true, default_code: "0", source_file: "lib/my_counter.rb", source_line: 9),
   ]
+  manifest.emits = [
+    ComponentEventDescriptor.new(
+      "select",
+      [EventPayloadDescriptor.new("id", "integer")],
+      "lib/my_counter.rb",
+      10
+    ),
+  ]
 
   MochiComponent.new(
     File.join(dir, "my_counter.rb"),
@@ -237,6 +245,13 @@ describe MrbcCompiler do
       props[1].as_h["name"].as_s.should eq("count")
       props[1].as_h["default"].as_bool.should be_true
       props[1].as_h["source"].as_h["file"].as_s.should eq("lib/my_counter.rb")
+
+      emits = component_json["emits"].as_a
+      emits.size.should eq(1)
+      emits[0].as_h["name"].as_s.should eq("select")
+      emits[0].as_h["payload"].as_a[0].as_h["name"].as_s.should eq("id")
+      emits[0].as_h["payload"].as_a[0].as_h["type"].as_s.should eq("integer")
+      emits[0].as_h["source"].as_h["line"].as_i.should eq(10)
 
       bindings = component_json["bindings"].as_a
       bindings.first.as_h["id"].as_i.should eq(0)

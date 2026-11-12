@@ -102,6 +102,84 @@ RUBY
       ruby.should contain("@rows = []")
     end
 
+    it "extracts declared child events and injects the emit bridge" do
+      source = <<-RUBY
+class EventRow
+  @tag_name = "event-row"
+  event :select, id: Integer, label: String
+
+  def html
+    %Q{<button onclick="{choose}">Choose</button>}
+  end
+
+  def choose
+    emit :select, id: 7, label: "Seven"
+  end
+end
+RUBY
+
+      component = transpile_source(source, "EventRow")
+      component.manifest.emits.map(&.name).should eq(["select"])
+      component.manifest.emits[0].payload.map(&.name).should eq(["id", "label"])
+      component.manifest.emits[0].payload.map(&.type).should eq(["integer", "string"])
+      component.manifest.emits[0].source_line.should eq(3)
+
+      ruby = component.ruby_code
+      ruby.should contain("def emit(__mochi_event, __mochi_payload = {})")
+      ruby.should contain("Mochi.emit_child(__mochi_event.to_s, __mochi_payload)")
+      ruby.should contain("def choose")
+    end
+
+    it "compiles on: child event bindings as component connections" do
+      source = <<-RUBY
+class EventParent
+  @tag_name = "event-parent"
+  @selected
+
+  def html
+    %Q{<event-row on:select="{row_selected($event)}"></event-row>}
+  end
+
+  def row_selected(payload)
+    @selected = payload[:id]
+  end
+end
+RUBY
+
+      component = transpile_source(source, "EventParent")
+      event = component.manifest.events.find! { |candidate| candidate.event == "select" }
+      event.component.should be_true
+      event.method_sym.should eq("row_selected")
+      event.args.size.should eq(1)
+      event.args[0].kind.should eq("event")
+
+      component.manifest.html_template.should contain(%Q(data-mochi-select="row_selected"))
+      component.manifest.html_template.should contain("data-mochi-args-select=")
+      component.manifest.html_template.should_not contain("on:select")
+    end
+
+    it "rejects a user emit method when child events are declared" do
+      source = <<-RUBY
+class BadEmitter
+  @tag_name = "bad-emitter"
+  event :select, id: Integer
+
+  def html
+    %Q{<span>bad</span>}
+  end
+
+  def emit
+    nil
+  end
+end
+RUBY
+
+      path = File.join(Dir.tempdir, "mochi_bad_emit_#{Random.rand(1_000_000)}.rb")
+      expect_raises(Exception, /cannot define a method named emit/) do
+        Compiler.new.transpile_component(source, 1, path)
+      end
+    end
+
     it "reports a prop declaration error with the component source line" do
       source = <<-RUBY
 class BadProp

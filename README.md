@@ -262,6 +262,58 @@ the child reads, give it a default when absence should have one, then remove the
 child's `to_i`, boolean checks, and manual `JSON.parse`. Leave attributes that
 are deliberately string-only undeclared.
 
+### Scoped child events
+
+A reusable child declares the events it can emit in the class body:
+
+```ruby
+class EventRow
+  @tag_name = "event-row"
+  event :select, id: Integer, label: String
+  event :opened
+
+  def html
+    %Q{<button onclick="{choose}">Choose</button>}
+  end
+
+  def choose
+    emit :select, id: 7, label: "Seven"
+  end
+end
+```
+
+Payload fields use `lower_snake_case` and support `String`, `Integer`,
+`Boolean`, `Array`, and `Hash`. Integer fields use the VM's 32-bit range. The
+payload is a fixed contract: every declared
+field is required, unknown fields are rejected, and values are checked against
+the declaration. `emit :opened` sends an empty payload. A component with
+declared events cannot define its own `emit`.
+
+A parent binds the connection with `on:<event>`, not a DOM `on<event>`
+attribute:
+
+```html
+<event-row on:select="{row_selected($event)}"></event-row>
+```
+
+The compiler records the connection and emits `data-mochi-select` on the child
+element. The loader routes the emitted event to the exact mounted child
+instance that emitted it, then the parent's generated handler runs. Two
+`<event-row>` instances with the same tag can bind to different parents or
+handlers. `$event` is the typed payload; if the handler takes one argument, the
+payload is passed automatically.
+
+Removing a child or row cancels queued deliveries for that instance. A stale
+event from a removed instance is dropped rather than delivered to a
+replacement. Payload contract failures are reported as `mochi:error` with
+`phase: "event"`, `event`, `payloadKey`, and the `event` declaration's source
+location; the parent handler does not run.
+
+`Mochi.emit(action, payload)` remains the explicit application-wide broadcast.
+It sends a `mochi:action` to every mounted component implementing `action`;
+pass `target:` to limit it to components with that tag. Use it for genuinely
+app-wide notifications, not for ordinary parent/child communication.
+
 ### Component lifecycle
 
 Moving a connected component between positions in the same turn preserves its Ruby instance, state, timers, and event handlers; `unmounted` and `mounted` do not run again. If the element stays disconnected through that turn, the loader disposes it once and runs `unmounted`. Reinserting it afterwards performs a fresh mount from `initialize`, rebuilding props, bindings, and handlers.

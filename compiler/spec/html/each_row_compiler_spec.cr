@@ -61,6 +61,22 @@ describe EachRowCompiler do
     child.template.should_not contain("data-mochi-args")
   end
 
+  it "marks child component events inside list rows" do
+    row = compile_row_template(%Q{
+      {each @rows as row}
+        <event-row on:select="{pick($event)}"></event-row>
+      {end}
+    })
+
+    event = row.events.first
+    event.event.should eq("select")
+    event.component.should be_true
+    event.handler.should eq("pick")
+    event.args.map(&.kind).should eq(["event"])
+    row.template.should contain(%Q{data-mochi-select="__mochi_each_0_ev_1"})
+    row.template.should_not contain("on:select")
+  end
+
   it "keeps separate arguments for repeated events in one row" do
     row = compile_row_template(%Q{
       {each @items as item}

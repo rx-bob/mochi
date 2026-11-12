@@ -63,17 +63,50 @@ struct EventDescriptor
   property event : String
   property method_sym : String
   property args : Array(EventArgumentDescriptor)
+  # True for a parent binding written as `on:<event>`. The compiled output is
+  # still an ordinary delegated DOM event, but the marker records that this
+  # connection targets a child component event instead of a native browser
+  # event.
+  property component : Bool
 
   def initialize(
     @path : Array(Int32),
     @event : String,
     @method_sym : String,
     @args : Array(EventArgumentDescriptor) = [] of EventArgumentDescriptor,
+    @component : Bool = false,
   )
   end
 
   def method_name : String
     method_sym
+  end
+end
+
+# One field in a declared child-event payload. The type names match the prop
+# schema so the loader can validate values before they reach the parent.
+struct EventPayloadDescriptor
+  property name : String
+  property type : String
+
+  def initialize(@name : String, @type : String)
+  end
+end
+
+# Compact runtime schema for a Ruby-declared child event. Only the event name,
+# payload contract, and source location travel in the manifest.
+struct ComponentEventDescriptor
+  property name : String
+  property payload : Array(EventPayloadDescriptor)
+  property source_file : String?
+  property source_line : Int32
+
+  def initialize(
+    @name : String,
+    @payload : Array(EventPayloadDescriptor) = [] of EventPayloadDescriptor,
+    @source_file : String? = nil,
+    @source_line : Int32 = 0,
+  )
   end
 end
 
@@ -116,6 +149,7 @@ class ComponentManifest
   property source_line : Int32
   property method_lines : Hash(String, Int32)
   property props : Array(PropDescriptor)
+  property emits : Array(ComponentEventDescriptor)
 
   def initialize(
     @tag_name : String,
@@ -130,6 +164,7 @@ class ComponentManifest
     @source_line : Int32 = 0,
     @method_lines : Hash(String, Int32) = {} of String => Int32,
     @props : Array(PropDescriptor) = [] of PropDescriptor,
+    @emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
   )
   end
 

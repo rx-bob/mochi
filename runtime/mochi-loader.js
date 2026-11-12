@@ -144,12 +144,13 @@
       source = binding.source;
       line = binding.source.line;
     }
-    // A declared prop carries its own declaration site. Point the report there
-    // instead of at the component class or the failing initialize method.
-    var propContext = error && error.mochiContext;
-    if (propContext && propContext.propSource && propContext.propSource.file) {
-      source = propContext.propSource;
-      line = propContext.propSource.line;
+    // A declared prop or child event carries its own declaration site. Point
+    // the report there instead of at the component class or handler.
+    var context = error && error.mochiContext;
+    var declarationSource = context && (context.propSource || context.eventSource);
+    if (declarationSource && declarationSource.file) {
+      source = declarationSource;
+      line = declarationSource.line;
     }
     var location = source && source.file
       ? source.file + (line > 0 ? ":" + line : "")
@@ -174,7 +175,9 @@
     }
     if (error && error.mochiContext) {
       Object.keys(error.mochiContext).forEach(function (key) {
-        if (key !== "propSource") info[key] = error.mochiContext[key];
+        if (key !== "propSource" && key !== "eventSource") {
+          info[key] = error.mochiContext[key];
+        }
       });
     }
     var reported = error instanceof Error ? error : new Error(info.message);
@@ -313,6 +316,7 @@
     if (typeof parsed === "string") return { action: parsed };
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { action: line };
     if (typeof parsed.__host === "string") return parsed;
+    if (typeof parsed.__child_event === "string") return parsed;
     if (typeof parsed.action !== "string") return null;
     return parsed;
   }
@@ -611,7 +615,183 @@
     }
   }
 
-  // Drains Ruby `Mochi.emit` and `Mochi.*` host calls.
+  function childEventDescriptor(component, eventName) {
+    var emits = component && component.emits;
+    if (!emits || !emits.length) return null;
+    for (var i = 0; i < emits.length; i++) {
+      if (emits[i] && emits[i].name === eventName) return emits[i];
+    }
+    return null;
+  }
+
+  function childEventError(eventName, descriptor, detail, field) {
+    var error = new Error("mochi-loader: event \"" + eventName + "\" " + detail);
+    error.mochiContext = { event: eventName };
+    if (field) {
+      error.mochiContext.payloadKey = field.name;
+      error.mochiContext.eventType = field.type;
+    }
+    if (descriptor && descriptor.source && descriptor.source.file) {
+      error.mochiContext.eventSource = {
+        file: descriptor.source.file,
+        line: Number(descriptor.source.line) || 0
+      };
+    }
+    return error;
+  }
+
+  function eventValueKind(value) {
+    if (value === null) return "null";
+    if (Array.isArray(value)) return "array";
+    return typeof value;
+  }
+
+  function checkEventNumberRange(value, eventName, descriptor, field) {
+    if (typeof value === "number") {
+      if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+        throw childEventError(
+          eventName,
+          descriptor,
+          "payload field \"" + field.name + "\" contains a number that is not a 32-bit integer",
+          field
+        );
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(function (item) {
+        checkEventNumberRange(item, eventName, descriptor, field);
+      });
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.keys(value).forEach(function (key) {
+        checkEventNumberRange(value[key], eventName, descriptor, field);
+      });
+    }
+  }
+
+  function checkEventValue(value, eventName, descriptor, field) {
+    var type = field.type;
+    var valid = false;
+    if (type === "string") {
+      valid = typeof value === "string";
+    } else if (type === "integer") {
+      valid = typeof value === "number" && Number.isInteger(value);
+      if (valid) checkEventNumberRange(value, eventName, descriptor, field);
+    } else if (type === "boolean") {
+      valid = value === true || value === false;
+    } else if (type === "array") {
+      valid = Array.isArray(value);
+    } else if (type === "hash") {
+      valid = !!value && typeof value === "object" && !Array.isArray(value);
+    }
+    if (!valid) {
+      throw childEventError(
+        eventName,
+        descriptor,
+        "payload field \"" + field.name + "\" expects " + type +
+          ", got " + eventValueKind(value),
+        field
+      );
+    }
+    if (type === "array" || type === "hash") {
+      checkEventNumberRange(value, eventName, descriptor, field);
+    }
+  }
+
+  function validateChildEventPayload(component, eventName, payload) {
+    var descriptor = childEventDescriptor(component, eventName);
+    if (!descriptor) {
+      throw childEventError(
+        eventName,
+        null,
+        "is not declared by this component"
+      );
+    }
+    var body = payload === undefined || payload === null ? {} : payload;
+    if (typeof body !== "object" || Array.isArray(body)) {
+      throw childEventError(eventName, descriptor, "expects an object payload");
+    }
+
+    var fields = descriptor.payload || [];
+    var known = Object.create(null);
+    fields.forEach(function (field) {
+      known[field.name] = field;
+    });
+    Object.keys(body).forEach(function (key) {
+      if (!known[key]) {
+        throw childEventError(
+          eventName,
+          descriptor,
+          "does not declare payload field \"" + key + "\""
+        );
+      }
+    });
+    fields.forEach(function (field) {
+      if (!Object.prototype.hasOwnProperty.call(body, field.name)) {
+        throw childEventError(
+          eventName,
+          descriptor,
+          "requires payload field \"" + field.name + "\"",
+          field
+        );
+      }
+      checkEventValue(body[field.name], eventName, descriptor, field);
+    });
+    return body;
+  }
+
+  // Delivers a child event to the exact mounted child that emitted it. The
+  // resulting DOM CustomEvent bubbles through the parent's shadow root, so the
+  // compiler-generated `data-mochi-<event>` binding on that child decides which
+  // parent method runs. A stale line is dropped instead of reaching a
+  // replacement that reused an instance slot.
+  function deliverChildEvent(module, entry) {
+    var eventName = entry.__child_event;
+    if (!eventName) return false;
+    var instanceKey = entry.instance === undefined || entry.instance === null
+      ? ""
+      : String(entry.instance);
+    var child = instanceKey ? state.elements.get(instanceKey) : null;
+    if (!child || child._mochiDisconnected || child._mochiUnmounted ||
+        child._mochiInstance === null || child._mochiInstance === undefined ||
+        String(child._mochiInstance) !== instanceKey ||
+        state.unmountedInstances.has(instanceKey)) {
+      return false;
+    }
+
+    var payload;
+    try {
+      payload = validateChildEventPayload(
+        child._mochiComponent,
+        eventName,
+        entry.payload
+      );
+    } catch (error) {
+      reportError(child, "event", eventName, error, child._mochiModule || module);
+      return false;
+    }
+
+    try {
+      // Keep the event inside the connected parent's shadow tree. A composed
+      // event would also cross into ancestor shadow roots, where an unrelated
+      // component listening for the same event name could route it again.
+      var event = new global.CustomEvent(eventName, {
+        bubbles: true,
+        composed: false,
+        detail: payload
+      });
+      event.__mochiChildEvent = true;
+      child.dispatchEvent(event);
+    } catch (error) {
+      reportError(child, "event", eventName, error, child._mochiModule || module);
+      return false;
+    }
+    return true;
+  }
+
+  // Drains Ruby `Mochi.emit`, `Mochi.emit_child`, and `Mochi.*` host calls.
   function drainEmits(module) {
     if (!module || !module._mochi_emit_outbox_offset ||
         !module._mochi_emit_outbox_len || !module._mochi_emit_outbox_clear) {
@@ -629,6 +809,10 @@
       if (!entry) return;
       if (typeof entry.__host === "string") {
         handleHostCommand(module, entry);
+        return;
+      }
+      if (typeof entry.__child_event === "string") {
+        deliverChildEvent(module, entry);
         return;
       }
       if (!entry.action || !global.document) return;
@@ -1238,6 +1422,9 @@
   }
 
   function eventPayload(target, event) {
+    if (event && event.__mochiChildEvent) {
+      return event.detail === undefined || event.detail === null ? {} : event.detail;
+    }
     var source = event && event.target && event.target.nodeType === 1 ? event.target : target;
     var dataset = {};
     if (source && source.dataset) {
@@ -2633,7 +2820,7 @@
         var payload = eventPayload(target, event);
         var eachContexts = findEachContexts(target, this.shadowRoot);
         var nearestEachContext = eachContexts.length > 0 ? eachContexts[eachContexts.length - 1] : null;
-        if (nearestEachContext) {
+        if (nearestEachContext && !(event && event.__mochiChildEvent)) {
           payload.item = nearestEachContext.item;
           payload.index = nearestEachContext.index;
         }
@@ -2653,6 +2840,10 @@
               mountToken !== element._mochiMountToken) {
             return;
           }
+          // A child event is dispatched on its emitting element. If that row
+          // or child is removed before the queued handler runs, never deliver
+          // it to a replacement element or parent state.
+          if (!target || target._mochiUnmounted || !target.isConnected) return;
           var symbol = intern(mounted.module, method);
           var dispatched;
 

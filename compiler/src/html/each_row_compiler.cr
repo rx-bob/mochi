@@ -14,7 +14,7 @@ class EachRowCompiler
   SENTINEL_START   = "\u{E002}"
   SENTINEL_END     = "\u{E003}"
   SENTINEL_PATTERN = Regex.new(SENTINEL_START + "([0-9]+)" + SENTINEL_END)
-  EVENT_WITH_ARGS  = /(on[a-z]+)="\{([a-zA-Z0-9_!?]+)\}"\s+data-mochi-args-[a-zA-Z0-9_-]+="([^"]*)"/m
+  EVENT_WITH_ARGS  = /(on:?[a-z][a-z0-9_-]*)="\{([a-zA-Z0-9_!?]+)\}"\s+data-mochi-args-[a-zA-Z0-9_-]+="([^"]*)"/m
   ARG_MARKER       = /\A__mochi_row_args_(\d+)__(.*)\z/m
   CONTROL_PREFIXES = ["if ", "unless ", "elsif ", "each "]
   CONTROL_KEYWORDS = ["else", "end"]
@@ -82,7 +82,8 @@ class EachRowCompiler
           wrapper,
           arguments,
           scope.dup,
-          call.span
+          call.span,
+          call.component?
         )
         %(data-mochi-#{call.event}="#{wrapper}")
       else
