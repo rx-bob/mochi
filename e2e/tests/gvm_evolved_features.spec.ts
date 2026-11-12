@@ -2129,6 +2129,7 @@ end
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
   expect(numericManifest.prelude).toBeUndefined();
+  expect(numericManifest.format_host).toBeUndefined();
 
   const { server, baseURL } = await startStaticServer(bundleDir);
   const errors: string[] = [];
@@ -2405,6 +2406,8 @@ end
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
   expect(moneyManifest.prelude).toBe("prelude.chi");
+  expect(moneyManifest.format_host).toBeUndefined();
+  expect(moneyManifest.components[0].formatting).toBeUndefined();
 
   const { server, baseURL } = await startStaticServer(bundleDir);
   const errors: string[] = [];
@@ -2464,6 +2467,347 @@ end
     expect(moneyError.phase).toBe("event");
     expect(moneyError.message).toMatch(/integer overflow/);
     expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("GVM formatting helpers use browser Intl from initialize, bindings, and each rows", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-format-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "FormatScreen.rb"), `
+class FormatScreen
+  @tag_name = "format-screen"
+  @rows
+  @decimal
+  @currency
+  @compact
+  @percent
+  @date_short
+  @date_zone
+  @exact
+  @money
+
+  def initialize
+    @rows = [
+      {"name" => "alpha", "value" => 1234.5},
+      {"name" => "beta", "value" => 9876.5}
+    ]
+    @decimal = MochiFormat.decimal(1234567.89, "en-US", {"maximum_fraction_digits" => 2})
+    @currency = MochiFormat.currency(123456, "USD", "en-US", 2)
+    @compact = MochiFormat.compact(1234567, "en-US")
+    @percent = MochiFormat.percent(0.42, "en-US")
+    @date_short = MochiFormat.date("2026-10-11", "en-US", "UTC", {"month" => "short", "day" => "numeric"})
+    @date_zone = MochiFormat.date("2026-11-09T23:30:00Z", "en-US", "Asia/Tokyo", {"date_style" => "medium", "time_style" => "short"})
+    @exact = MochiFormat.decimal(9223372036854775807, "en-US")
+    cost = MochiMoney.ledger
+    MochiMoney.add_ratio(cost, 202_000 * 300, 1_000_000)
+    @money = MochiFormat.currency(MochiMoney.round_half_up(cost), "USD", "en-US", 2)
+  end
+
+  def row_label(value)
+    MochiFormat.decimal(value, "de-DE")
+  end
+
+  def bad_locale
+    MochiFormat.decimal(1, "en_US")
+  end
+
+  def html
+    %Q{
+      <p class="decimal">{@decimal}</p>
+      <p class="currency">{@currency}</p>
+      <p class="compact">{@compact}</p>
+      <p class="percent">{@percent}</p>
+      <p class="date-short">{@date_short}</p>
+      <p class="date-zone">{@date_zone}</p>
+      <p class="exact">{@exact}</p>
+      <p class="money">{@money}</p>
+      <p class="binding">{MochiFormat.compact(1234567, "en-US")}</p>
+      <ul class="rows">
+        {each @rows as row}
+          <li class="row">{row_label(row["value"])}</li>
+        {end}
+      </ul>
+      <button class="bad" onclick="{bad_locale}">Bad locale</button>
+    }
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <format-screen></format-screen>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const formatManifest = JSON.parse(
+    fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
+  );
+  expect(formatManifest.prelude).toBe("prelude.chi");
+  expect(formatManifest.format_host).toBe("mochi-format.js");
+  expect(formatManifest.components[0].formatting).toBe(true);
+  expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(true);
+
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const host = page.locator("format-screen");
+
+    await expect(host.locator("p.decimal")).toHaveText("1,234,567.89");
+    await expect(host.locator("p.currency")).toHaveText("$1,234.56");
+    await expect(host.locator("p.compact")).toHaveText("1.2M");
+    await expect(host.locator("p.percent")).toHaveText("42%");
+    await expect(host.locator("p.date-short")).toHaveText("Oct 11");
+    await expect(host.locator("p.date-zone")).toHaveText("Nov 10, 2026, 8:30 AM");
+    await expect(host.locator("p.exact")).toHaveText("9,223,372,036,854,775,807");
+    await expect(host.locator("p.money")).toHaveText("$0.61");
+    await expect(host.locator("p.binding")).toHaveText("1.2M");
+    await expect(host.locator("li.row")).toHaveCount(2);
+    await expect(host.locator("li.row").nth(0)).toHaveText("1.234,5");
+    await expect(host.locator("li.row").nth(1)).toHaveText("9.876,5");
+
+    const formatRequests = requested.filter((url) => url.endsWith("/mochi-format.js"));
+    expect(formatRequests).toHaveLength(1);
+
+    await page.evaluate(() => {
+      (window as any).__mochiFormatErrors = [];
+      document.addEventListener("mochi:error", (event: any) => {
+        (window as any).__mochiFormatErrors.push(event.detail);
+      });
+    });
+    await host.locator("button.bad").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiFormatErrors.length,
+    )).toBe(1);
+    const formatError = await page.evaluate(() => (window as any).__mochiFormatErrors[0]);
+    expect(formatError.phase).toBe("event");
+    expect(formatError.message).toMatch(/invalid locale/);
+    expect(formatError.message).toMatch(/en_US/);
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("GVM formatting host loads only when a formatting component mounts", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-format-lazy-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "PlainPanel.rb"), `
+class PlainPanel
+  @tag_name = "plain-panel"
+  def initialize
+  end
+  def html
+    %Q{<p class="plain">plain</p>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "LazyFormat.rb"), `
+class LazyFormat
+  @tag_name = "lazy-format"
+  def initialize
+  end
+  def html
+    %Q{<p class="lazy">{MochiFormat.decimal(1234.5, "en-US")}</p>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <plain-panel></plain-panel>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const lazyManifest = JSON.parse(
+    fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
+  );
+  expect(lazyManifest.format_host).toBe("mochi-format.js");
+  const plain = lazyManifest.components.find((component: any) =>
+    component.tag_name === "plain-panel");
+  const lazy = lazyManifest.components.find((component: any) =>
+    component.tag_name === "lazy-format");
+  expect(plain.formatting).toBeUndefined();
+  expect(lazy.formatting).toBe(true);
+
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await expect(page.locator("plain-panel").locator("p.plain")).toHaveText("plain");
+    expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(0);
+
+    await page.evaluate(() => {
+      document.body.appendChild(document.createElement("lazy-format"));
+    });
+    await expect(page.locator("lazy-format").locator("p.lazy")).toHaveText("1,234.5");
+    expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("GVM formatting works from a shared helper in the same Ruby file", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-format-helper-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "HelperFormat.rb"), `
+class SharedFormat
+  def self.label(value)
+    MochiFormat.currency(value, "USD", "en-US", 2)
+  end
+end
+
+class HelperFormatPanel
+  @tag_name = "helper-format-panel"
+
+  def initialize
+  end
+
+  def html
+    %Q{<p class="label">{SharedFormat.label(123456)}</p>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <helper-format-panel></helper-format-panel>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const helperManifest = JSON.parse(
+    fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
+  );
+  expect(helperManifest.format_host).toBe("mochi-format.js");
+  expect(helperManifest.components[0].formatting).toBe(true);
+  expect(helperManifest.components[0].helper_chi).toMatch(/^mochi-helpers-/);
+
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await expect(page.locator("helper-format-panel").locator("p.label"))
+      .toHaveText("$1,234.56");
+    expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("GVM formatting host load failure reports an actionable mount error", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-format-fail-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "FormatFail.rb"), `
+class FormatFail
+  @tag_name = "format-fail"
+  def initialize
+  end
+  def html
+    %Q{<p class="value">{MochiFormat.decimal(1, "en-US")}</p>}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <format-fail></format-fail>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  await page.route("**/mochi-format.js", (route) => {
+    route.fulfill({ status: 404, contentType: "text/plain", body: "missing" });
+  });
+  await page.addInitScript(() => {
+    (window as any).__mochiFormatFailures = [];
+    document.addEventListener("mochi:error", (event: any) => {
+      (window as any).__mochiFormatFailures.push(event.detail);
+    });
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiFormatFailures.length,
+    )).toBe(1);
+    const failure = await page.evaluate(
+      () => (window as any).__mochiFormatFailures[0],
+    );
+    expect(failure.phase).toBe("mount");
+    expect(failure.message).toMatch(/failed to load formatting host/);
+    expect(failure.message).toMatch(/mochi-format\.js/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(projectDir, { recursive: true, force: true });

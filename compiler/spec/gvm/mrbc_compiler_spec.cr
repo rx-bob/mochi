@@ -420,5 +420,58 @@ RUBY
         FileUtils.rm_rf(dir)
       end
     end
+
+    it "ships and marks the optional formatting host only when requested" do
+      dir = File.join(Dir.tempdir, "mochi_format_mrbc_spec_#{Random.rand(1_000_000)}")
+      Dir.mkdir_p(dir)
+
+      begin
+        format_source = File.read(File.join(__DIR__, "../../../fragments/batteries/format.rb"))
+        host_source = File.join(dir, "format-host.js")
+        File.write(host_source, "global.MochiFormatHost = { format: function () { return '1'; } };\n")
+        component = build_mrbc_fixture(dir)
+        component.manifest.formatting = true
+        output = File.join(dir, "out")
+        compiler = MrbcCompiler.new(
+          mrbc_path: real_mrbc,
+          wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
+          loader_source: File.join(dir, "missing.js"),
+          format_host_source: host_source
+        )
+
+        compiler.compile(
+          [component],
+          output,
+          format_source,
+          [] of HelperUnit,
+          [] of PackageResource,
+          true
+        )
+
+        compiler.format_host_path.should_not be_nil
+        File.exists?(File.join(output, "mochi-format.js")).should be_true
+        manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+        manifest["format_host"].as_s.should eq("mochi-format.js")
+        manifest["components"][0]["formatting"].as_bool.should be_true
+
+        plain_output = File.join(dir, "plain")
+        plain = MrbcCompiler.new(
+          mrbc_path: real_mrbc,
+          wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
+          loader_source: File.join(dir, "missing.js")
+        )
+        plain.compile([component], plain_output)
+        plain.format_host_path.should be_nil
+        plain_manifest = JSON.parse(File.read(File.join(plain_output, "mochi-manifest.json")))
+        plain_manifest["format_host"]?.should be_nil
+        File.write(File.join(plain_output, "mochi-format.js"), "stale")
+        plain.compile([component], plain_output)
+        File.exists?(File.join(plain_output, "mochi-format.js")).should be_false
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
   end
 end

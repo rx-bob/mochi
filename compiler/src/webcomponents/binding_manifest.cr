@@ -160,6 +160,9 @@ class ComponentManifest
   # Shared build-time style resources, applied before the component-local css.
   # The manifest serializes only their stable IDs.
   property style_resources : Array(PackageResource)
+  # True when this component's Ruby mentions MochiFormat. The loader only
+  # requests the optional formatting host for components that need it.
+  property formatting : Bool
 
   def initialize(
     @tag_name : String,
@@ -176,6 +179,7 @@ class ComponentManifest
     @props : Array(PropDescriptor) = [] of PropDescriptor,
     @emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
     @style_resources : Array(PackageResource) = [] of PackageResource,
+    @formatting : Bool = false,
   )
   end
 

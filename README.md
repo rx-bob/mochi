@@ -309,7 +309,7 @@ ordinary JSON numbers on the JavaScript side. Floats render with Ruby's
 shortest round-trip spelling, including a `.0` mantissa; locale-aware decimal
 formatting belongs to the component, not the numeric core. For exact multi-step
 money work, use the [money helpers](#money-helpers) and round once at display
-time.
+time. For locale-aware labels, use the [formatting helpers](#number-and-date-formatting).
 
 Absence is `nil`, distinct from `""`, `0`, and `false`. Removing a declared
 attribute installs `nil`; removing a required attribute is an error. A single
@@ -399,6 +399,75 @@ locale lookup. Format the integer returned by a `round_*` method in your
 component. Applications that do not use `MochiMoney` pay no prelude bytes for
 it; E6 will attach the helper to the components that depend on it instead of
 the shared prelude.
+
+### Number and date formatting
+
+`MochiFormat` formats numbers and dates from ordinary Ruby. It works in
+`initialize`, component methods, binding expressions, event handlers, and each
+rows. Application authors do not write JavaScript and do not choose a
+formatter library.
+
+```ruby
+MochiFormat.decimal(1_234_567.89, "en-US", {"maximum_fraction_digits" => 2})
+# "1,234,567.89"
+
+MochiFormat.decimal(1234.5, "de-DE")
+# "1.234,5"
+
+MochiFormat.currency(123_456, "USD", "en-US", 2)
+# "$1,234.56"
+
+MochiFormat.compact(1_234_567, "en-US")
+# "1.2M"
+
+MochiFormat.percent(0.42, "en-US")
+# "42%"
+
+MochiFormat.date("2026-10-11", "en-US", "UTC", {"month" => "short", "day" => "numeric"})
+# "Oct 11"
+
+MochiFormat.date("2026-11-09T23:30:00Z", "en-US", "Asia/Tokyo",
+                {"date_style" => "medium", "time_style" => "short"})
+# "Nov 10, 2026, 8:30 AM"
+```
+
+The signatures are:
+
+| Helper | Arguments |
+| --- | --- |
+| `number(value, locale = "en-US", options = {})` | grouped decimal number |
+| `decimal(value, locale = "en-US", options = {})` | alias for `number` |
+| `currency(minor_units, currency = "USD", locale = "en-US", scale = 2, options = {})` | exact integer minor units |
+| `compact(value, locale = "en-US", options = {})` | short labels such as `1.2M` |
+| `percent(value, locale = "en-US", options = {})` | ratio, so `0.42` becomes `42%` |
+| `date(iso, locale = "en-US", timezone = "UTC", options = {})` | ISO date or timestamp |
+
+Arguments are positional. `options` is an ordinary Ruby `Hash`; its keys are
+the `Intl` option names written in snake case, such as
+`maximum_fraction_digits` or `date_style`. Unsupported keys, invalid locales,
+and invalid option values stop the entry with a `mochi:error` that names the
+Ruby helper and the offending value. The default location for a timestamp is
+UTC. A date-only value such as `2026-10-11` is a calendar date and must use UTC;
+pass a full timestamp to format another timezone. Locale and timezone defaults
+are fixed so a label does not change with the machine's settings.
+
+`currency` takes an exact number of minor units and divides by `10^scale` at
+the display boundary. It accepts values up to
+1,000,000,000,000,000 minor units; larger values report an error instead of
+silently returning an imprecise JavaScript number. Use the
+[money helpers](#money-helpers) for multi-step arithmetic and pass the rounded
+minor-unit total to `currency`.
+
+Formatting uses the browser's built-in `Intl` facilities through an optional
+host module. The compiler writes `mochi-format.js` and records `format_host` in
+`mochi-manifest.json` only when a source mentions `MochiFormat`. The loader
+requests that module before mounting a component that declares `formatting`;
+a component or application that does not use formatting neither ships nor
+requests it. The bundle contains no locale database. If the host module is
+missing or fails to load, the mount fails with a Ruby-facing `mochi:error`
+instead of an unknown-method failure. Formatter instances are cached by locale
+and options, with a bounded cache so a long-lived application cannot grow it
+without limit.
 
 ### Synchronous event modifiers and focus
 
@@ -528,7 +597,7 @@ cd mochi
 task run
 ```
 
-The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file per component, and a shared `prelude.chi` when helper-only Ruby or an optional helper such as `MochiMoney` is present. It does not generate component-specific JavaScript.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file per component, and a shared `prelude.chi` when helper-only Ruby or an optional helper such as `MochiMoney` or `MochiFormat` is present. It also writes `mochi-format.js` only when a source uses `MochiFormat`. It does not generate component-specific JavaScript.
 
 ### Compiler Tasks
 

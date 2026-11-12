@@ -92,9 +92,13 @@ class Compiler
                   [] of PackageResource
                 end
 
+    uses_format = prelude_code.includes?("MochiFormat") ||
+                  components.any? { |component| component.ruby_code.includes?("MochiFormat") } ||
+                  helpers.any? { |helper| helper.source.includes?("MochiFormat") }
+
     trace_slice(trace, "EmitBytecode", sequence_id) do
       compiler = MrbcCompiler.new
-      compiler.compile(components, output_dir, prelude_code, helpers, resources)
+      compiler.compile(components, output_dir, prelude_code, helpers, resources, uses_format)
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
       puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
     end
@@ -148,6 +152,7 @@ class Compiler
       helper = build_helper(helper_source, absolute_path, display_path)
     end
 
+    helper_formatting = helper.try { |unit| unit.source.includes?("MochiFormat") } || false
     components = component_decls.map do |declaration|
       source = legacy_source ? rb_file : component_source_for(
         rb_file,
@@ -163,7 +168,8 @@ class Compiler
         absolute_path,
         display_path,
         legacy_source ? 1 : source_line_for(rb_file, declaration.wrapper_start_byte),
-        i
+        i,
+        helper_formatting
       )
     end
 
@@ -359,6 +365,7 @@ class Compiler
     source_path : String,
     source_line_offset : Int32,
     i : Int32,
+    helper_formatting : Bool = false,
   ) : MochiComponent
     cls_name = declaration.name
     print_cmp_start_separator(cls_name, i)
@@ -499,6 +506,7 @@ class Compiler
       emits
     )
     manifest.helper_chi = helper_chi
+    manifest.formatting = helper_formatting || component_source.includes?("MochiFormat")
     manifest.source_file = source_path
     manifest.source_line = declaration.line
     manifest.style_resources = css_composition.resources

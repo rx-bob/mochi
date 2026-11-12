@@ -69,6 +69,8 @@ function assertBundleOutput(): void {
   expect(manifest.wasm_file).toBe("mochi-gvm.wasm");
   expect(manifest.js_file).toBe("mochi-gvm.js");
   expect(manifest.loader_file).toBe("mochi-loader.js");
+  expect(manifest.format_host).toBeUndefined();
+  expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(false);
   expect(manifest.components.map((component: { tag_name: string }) => component.tag_name)).toContain("my-counter");
 }
 

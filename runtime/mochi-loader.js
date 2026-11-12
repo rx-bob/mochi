@@ -21,6 +21,7 @@
     activeModule: null,
     loadChain: Promise.resolve(),
     irepPromises: new Map(),
+    hostModulePromises: new Map(),
     internCache: new Map(),
     tags: new Set(),
     elements: new Map(),
@@ -1084,7 +1085,43 @@
     return promise;
   }
 
+  // Optional host adapters must be registered before a component can call them
+  // from initialize or its first binding. The manifest names the adapter; the
+  // promise map keeps concurrent mounts to one request.
+  function ensureFormatHost(manifest, manifestUrl) {
+    if (!manifest || !manifest.format_host) return Promise.resolve();
+    var url = absoluteUrl(manifest.format_host, manifestUrl);
+    var existing = state.hostModulePromises.get(url);
+    if (existing) return existing;
+
+    var promise = loadRuntime(manifest, manifestUrl).then(function (module) {
+      if (module.__mochiFormatHost) return module;
+      if (global.MochiFormatHost) {
+        module.__mochiFormatHost = global.MochiFormatHost;
+        return module;
+      }
+      var load = loader.hostModuleFactory
+        ? Promise.resolve(loader.hostModuleFactory(url))
+        : loadScript(url);
+      return load.then(function () {
+        if (!global.MochiFormatHost || typeof global.MochiFormatHost.format !== "function") {
+          throw new Error("formatting host did not register");
+        }
+        module.__mochiFormatHost = global.MochiFormatHost;
+        return module;
+      });
+    }).catch(function (error) {
+      state.hostModulePromises.delete(url);
+      throw new Error("mochi-loader: failed to load formatting host " + url + ": " +
+        (error && error.message ? error.message : String(error)));
+    });
+
+    state.hostModulePromises.set(url, promise);
+    return promise;
+  }
+
   async function loadComponentClass(component, manifest, manifestUrl) {
+    if (component.formatting) await ensureFormatHost(manifest, manifestUrl);
     if (manifest && manifest.prelude) {
       var preludeUrl = chiUrl(manifest.prelude, manifestUrl);
       await loadIrepUrl(preludeUrl, "prelude", manifest, manifestUrl);
@@ -3392,6 +3429,7 @@
     installFocusTrap();
     options = options || {};
     if (options.moduleFactory) loader.moduleFactory = options.moduleFactory;
+    if (options.hostModuleFactory) loader.hostModuleFactory = options.hostModuleFactory;
 
     var manifestUrl = absoluteUrl(url || DEFAULT_MANIFEST, global.document.baseURI);
     if (state.manifestUrl === manifestUrl && state.manifest) return state.manifest;
@@ -3439,6 +3477,7 @@
   var loader = {
     boot: boot,
     moduleFactory: null,
+    hostModuleFactory: null,
     applyPatches: applyPatches,
     debugStats: debugStats,
     onError: null,

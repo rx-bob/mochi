@@ -17,6 +17,7 @@ class MrbcCompiler
   getter wasm_path : String?
   getter js_path : String?
   getter loader_path : String?
+  getter format_host_path : String?
   getter warnings : Array(String)
 
   def initialize(
@@ -24,6 +25,7 @@ class MrbcCompiler
     @wasm_source : String? = ENV["MOCHI_GVM_WASM"]?,
     @loader_source : String? = ENV["MOCHI_LOADER"]?,
     @js_source : String? = ENV["MOCHI_GVM_JS"]?,
+    @format_host_source : String? = ENV["MOCHI_FORMAT_HOST"]?,
   )
     @manifest_path = nil
     @chi_paths = [] of String
@@ -32,6 +34,7 @@ class MrbcCompiler
     @wasm_path = nil
     @js_path = nil
     @loader_path = nil
+    @format_host_path = nil
     @warnings = [] of String
   end
 
@@ -41,10 +44,12 @@ class MrbcCompiler
     prelude_code : String = "",
     helpers : Array(HelperUnit) = [] of HelperUnit,
     resources : Array(PackageResource) = [] of PackageResource,
+    format_host : Bool = false,
   ) : Nil
     @chi_paths.clear
     @helper_chi_paths.clear
     @prelude_path = nil
+    @format_host_path = nil
     @warnings.clear
     validate_component_inventory(components)
     Dir.mkdir_p(output_dir)
@@ -84,6 +89,15 @@ class MrbcCompiler
     @wasm_path = copy_asset(resolved_wasm_source, output_dir, "mochi-gvm.wasm")
     @js_path = copy_asset(resolved_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
+    if format_host
+      @format_host_path = copy_asset(resolved_format_host_source, output_dir, "mochi-format.js")
+      if @format_host_path.nil?
+        @warnings << "mochi-format.js not found; set MOCHI_FORMAT_HOST or add runtime/mochi-format.js"
+      end
+    else
+      stale_format_host = File.join(output_dir, "mochi-format.js")
+      File.delete(stale_format_host) if File.exists?(stale_format_host)
+    end
 
     if @wasm_path.nil?
       @warnings << "mochi-gvm.wasm not found; set MOCHI_GVM_WASM or place ../mochi-gvm/dist/mochi-gvm.wasm"
@@ -321,6 +335,10 @@ class MrbcCompiler
     @loader_source || self.class.find_loader
   end
 
+  private def resolved_format_host_source : String?
+    @format_host_source || self.class.find_format_host
+  end
+
   private def self.search_roots : Array(String)
     roots = [Dir.current]
     if exe = Process.executable_path
@@ -339,6 +357,8 @@ class MrbcCompiler
   @@js_resolved : Bool = false
   @@cached_loader : String?
   @@loader_resolved : Bool = false
+  @@cached_format_host : String?
+  @@format_host_resolved : Bool = false
 
   def self.find_mrbc : String?
     return @@cached_mrbc if @@mrbc_resolved
@@ -403,6 +423,22 @@ class MrbcCompiler
     @@cached_loader = first_existing_file(candidates)
   end
 
+  def self.find_format_host : String?
+    return @@cached_format_host if @@format_host_resolved
+    @@format_host_resolved = true
+
+    candidates = [] of String
+    search_roots.each do |root|
+      candidates << File.join(root, "runtime", "mochi-format.js")
+      candidates << File.join(root, "..", "runtime", "mochi-format.js")
+      candidates << File.join(root, "..", "..", "runtime", "mochi-format.js")
+      candidates << File.join(root, "..", "mochi-gvm", "runtime", "mochi-format.js")
+      candidates << File.join(root, "..", "..", "mochi-gvm", "runtime", "mochi-format.js")
+    end
+
+    @@cached_format_host = first_existing_file(candidates)
+  end
+
   private def self.first_existing_file(candidates : Array(String)) : String?
     candidates.find { |path| File.file?(path) }
   end
@@ -427,6 +463,9 @@ class MrbcCompiler
       json.object do
         if prelude = @prelude_path
           json.field "prelude", File.basename(prelude)
+        end
+        if format_host = @format_host_path
+          json.field "format_host", File.basename(format_host)
         end
         unless resources.empty?
           json.field "resources" do
@@ -470,6 +509,9 @@ class MrbcCompiler
       json.field "chi_file", manifest.chi_file
       if helper_chi = manifest.helper_chi
         json.field "helper_chi", helper_chi
+      end
+      if manifest.formatting
+        json.field "formatting", true
       end
       json.field "html_template", manifest.html_template
       unless manifest.style_resources.empty?

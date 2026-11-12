@@ -3,6 +3,7 @@ require "file"
 require "file_utils"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
 require "../../generated/money_rb"
+require "../../generated/format_rb"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
 
@@ -47,6 +48,12 @@ class BuildMain
     # dependency instead of placing it in the shared prelude.
     if all_rb_sources.includes?("MochiMoney")
       File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_money.rb", MochiMoneyRbFragment.get_ruby_code)
+    end
+
+    # Browser-backed formatting is optional Ruby bytecode plus a host adapter.
+    # The adapter is copied and requested only when a source names MochiFormat.
+    if all_rb_sources.includes?("MochiFormat")
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_format.rb", MochiFormatRbFragment.get_ruby_code)
     end
 
     print_separator

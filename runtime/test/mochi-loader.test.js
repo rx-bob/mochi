@@ -119,10 +119,11 @@ const TYPED_COMPONENT = {
   ],
 };
 
-function manifest(components, resources) {
+function manifest(components, resources, formatHost) {
   return {
     components,
     ...(resources ? { resources } : {}),
+    ...(formatHost ? { format_host: formatHost } : {}),
     wasm_file: "mochi-gvm.wasm",
     js_file: "mochi-gvm.js",
     loader_file: "mochi-loader.js",
@@ -359,8 +360,12 @@ async function setup(components, options) {
   global.CustomEvent = dom.window.CustomEvent;
   global.CSSStyleSheet = dom.window.CSSStyleSheet;
 
-  const log = { calls: [], fetches: [], loads: [], interned: [], bindings: [], dispatched: [], flushes: [] };
-  const body = manifest(components, options.resources);
+  delete global.MochiFormatHost;
+  const log = {
+    calls: [], fetches: [], loads: [], interned: [], bindings: [],
+    dispatched: [], flushes: [], hostUrls: [],
+  };
+  const body = manifest(components, options.resources, options.formatHost);
   global.fetch = async (url, init) => {
     const target = String(url);
     log.fetches.push(target);
@@ -380,6 +385,7 @@ async function setup(components, options) {
   const loader = require(LOADER_PATH);
   const module = fakeModule(log);
   loader.moduleFactory = async () => module;
+  if (options.hostModuleFactory) loader.hostModuleFactory = options.hostModuleFactory;
 
   await loader.boot("mochi-manifest.json");
   return { dom, loader, module, log };
@@ -4217,4 +4223,102 @@ test("bind:checked updates the checkbox property from Ruby and sends checked sta
   loader.applyPatches(element);
   assert.equal(input.checked, false);
   assert.equal(element.bindingTargets[0], input);
+});
+
+const FORMAT_COMPONENT = {
+  tag_name: "format-panel",
+  class_name: "FormatPanel",
+  chi_file: "format-panel.chi",
+  html_template: '<p class="value">format</p>',
+  css: "",
+  bindings: [],
+  events: [],
+  formatting: true,
+};
+
+test("formatting components load the optional host before mounting", async () => {
+  const hostModule = { format: () => "1" };
+  const { loader, module, log } = await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async (url) => {
+      log.hostUrls.push(url);
+      global.MochiFormatHost = hostModule;
+    },
+  });
+
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(log.hostUrls.length, 1);
+  assert.ok(log.hostUrls[0].endsWith("/mochi-format.js"));
+  assert.equal(module.__mochiFormatHost, hostModule);
+});
+
+test("concurrent formatting components share one host request", async () => {
+  let calls = 0;
+  const hostModule = { format: () => "1" };
+  const { module } = await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => {
+      calls += 1;
+      global.MochiFormatHost = hostModule;
+    },
+  });
+
+  const first = document.createElement("format-panel");
+  const second = document.createElement("format-panel");
+  document.body.append(first, second);
+  await Promise.all([first._mochiReady, second._mochiReady]);
+
+  assert.equal(calls, 1);
+  assert.equal(module.__mochiFormatHost, hostModule);
+});
+
+test("components without formatting never request the optional host", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async (url) => {
+      log.hostUrls.push(url);
+      global.MochiFormatHost = { format: () => "1" };
+    },
+  });
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(log.hostUrls.length, 0);
+  assert.equal(module.__mochiFormatHost, undefined);
+});
+
+test("formatting host failure rejects the mount with an actionable error", async () => {
+  await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => {
+      throw new Error("network down");
+    },
+  });
+
+  const failures = [];
+  document.addEventListener("mochi:error", (event) => failures.push(event.detail));
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady, /failed to load formatting host .*network down/);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].phase, "mount");
+  assert.match(failures[0].message, /mochi-format\.js/);
+});
+
+test("formatting host must register before a component mounts", async () => {
+  await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => {},
+  });
+
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+
+  await assert.rejects(element._mochiReady, /formatting host did not register/);
 });
