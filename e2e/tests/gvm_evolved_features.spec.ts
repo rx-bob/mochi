@@ -756,9 +756,11 @@ end
     expect(failures.missing.message).toContain("BrokenHelper");
     expect(failures.missing.message).toContain("__mochi_bind_0");
     expect(failures.missing.message).toContain("unknown method");
+    expect(failures.missing.message).toContain("lib/BrokenHelper.rb:");
     expect(failures.arity.message).toContain("WrongArityHelper");
     expect(failures.arity.message).toContain("__mochi_bind_0");
     expect(failures.arity.message).toContain("wrong number of arguments");
+    expect(failures.arity.message).toContain("lib/WrongArityHelper.rb:");
     expect(failures.missing.state).toBe("failed");
     expect(failures.arity.state).toBe("failed");
     expect(failures.missing.instance).toBeNull();

@@ -270,6 +270,62 @@ RUBY
       end
     end
 
+    it "rejects backtick commands in method bodies with the original file and method" do
+      source = <<-RUBY
+class BadShell
+  @tag_name = "x-bad-shell"
+
+  def refresh
+    `echo hi`
+  end
+
+  def html
+    %Q{<div>hi</div>}
+  end
+end
+RUBY
+
+      path = File.join(Dir.tempdir, "mochi_backtick_#{Random.rand(1_000_000)}.rb")
+      error = expect_raises(Exception) do
+        Compiler.new.transpile_file(source, path, 1, "lib/bad_shell.rb")
+      end
+      error.message.to_s.should match(/lib\/bad_shell\.rb:5.*method 'refresh'/)
+      error.message.to_s.should contain("backtick command execution is not supported")
+    end
+
+    it "reports Ruby paths relative to the build's temporary source tree" do
+      Compiler.source_display_path(
+        "/repo/build/pre_tp/lib/screens/counter.rb",
+        "/repo/build/pre_tp/lib"
+      ).should eq("lib/screens/counter.rb")
+      Compiler.source_display_path("/elsewhere/plain.rb", "/repo/build/pre_tp/lib")
+        .should eq("/elsewhere/plain.rb")
+    end
+
+    it "records the source file, class line, and method lines in the manifest" do
+      source = <<-RUBY
+class SourceMap
+  @tag_name = "x-source-map"
+
+  def html
+    %Q{<p>hi</p>}
+  end
+
+  def increment
+    @count = 1
+  end
+end
+RUBY
+
+      path = File.join(Dir.tempdir, "mochi_source_map_#{Random.rand(1_000_000)}.rb")
+      component = Compiler.new.transpile_component(source, 1, path, "lib/source_map.rb").not_nil!
+      component.source_path.should eq("lib/source_map.rb")
+      component.manifest.source_file.should eq("lib/source_map.rb")
+      component.manifest.source_line.should eq(1)
+      component.manifest.method_lines["html"].should eq(4)
+      component.manifest.method_lines["increment"].should eq(8)
+    end
+
     it "raises when a component exceeds the GVM instance variable limit" do
       assignments = (0...257).map { |index| "    @v#{index} = 0\n" }.join
 

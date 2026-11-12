@@ -13,6 +13,11 @@ class MochiComponent
   property html : String
   property css : String
   property class_line : Int32
+  # Path shown to developers. It stays stable after the build removes its
+  # temporary pre-transpile copy.
+  property source_path : String
+  # Line in the original file that generated source line 1 maps to.
+  property source_line_offset : Int32
 
   def initialize(
     @absolute_path : String,
@@ -23,7 +28,11 @@ class MochiComponent
     @html : String,
     @css : String,
     @class_line : Int32 = 0,
+    source_path : String? = nil,
+    source_line_offset : Int32 = 1,
   )
+    @source_path = source_path || @absolute_path
+    @source_line_offset = source_line_offset
   end
 
   def to_s(io : IO)

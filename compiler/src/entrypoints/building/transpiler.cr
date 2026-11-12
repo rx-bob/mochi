@@ -50,7 +50,8 @@ class Compiler
           absolute_path = Path[path].expand.to_s
 
           rb_file = File.read(absolute_path)
-          result = transpile_file(rb_file, absolute_path, i)
+          display_path = self.class.source_display_path(path, input_dir)
+          result = transpile_file(rb_file, absolute_path, i, display_path)
 
           i += 1
           if result.components.empty?
@@ -84,22 +85,41 @@ class Compiler
     puts "Transpilation finished"
   end
 
-  def transpile_component(rb_file : String, i : Int32, absolute_path : String)
-    transpile_file(rb_file, absolute_path, i).components.first?
+  def transpile_component(rb_file : String, i : Int32, absolute_path : String, source_path : String? = nil)
+    transpile_file(rb_file, absolute_path, i, source_path).components.first?
+  end
+
+  # Reports the path a developer wrote, not the temporary pre-transpile copy
+  # that disappears once the build finishes.
+  def self.source_display_path(path : String, input_dir : String) : String
+    expanded_input = Path[input_dir].expand.to_s
+    expanded_path = Path[path].expand.to_s
+    prefix = expanded_input + "/"
+    return expanded_path unless expanded_path.starts_with?(prefix)
+
+    File.join(File.basename(expanded_input), expanded_path[prefix.size..])
   end
 
   # Discovers every component in one Ruby file. A file can hold a screen, its
   # row component, and helpers; each component owns only its own class body.
-  def transpile_file(rb_file : String, absolute_path : String, i : Int32 = 1) : TranspileFileResult
+  def transpile_file(
+    rb_file : String,
+    absolute_path : String,
+    i : Int32 = 1,
+    source_path : String? = nil,
+  ) : TranspileFileResult
     tree = @ruby_parser.parse(rb_file)
     root = tree.root_node
+    display_path = source_path || absolute_path
+
+    validate_supported_ruby!(root, rb_file, display_path)
 
     declarations = TreeSitter::ClassExtractor.extract_class_decls(root)
     class_declarations = declarations.select(&.class?)
-    component_decls = discover_component_declarations(class_declarations, absolute_path)
+    component_decls = discover_component_declarations(class_declarations, display_path)
     return TranspileFileResult.new([] of MochiComponent, nil) if component_decls.empty?
 
-    validate_component_declarations(component_decls, class_declarations, absolute_path)
+    validate_component_declarations(component_decls, class_declarations, display_path)
 
     legacy_source = legacy_single_source?(component_decls, class_declarations)
     helper = nil
@@ -108,7 +128,7 @@ class Compiler
         rb_file,
         component_decls.map(&.range)
       )
-      helper = build_helper(helper_source, absolute_path)
+      helper = build_helper(helper_source, absolute_path, display_path)
     end
 
     components = component_decls.map do |declaration|
@@ -124,11 +144,38 @@ class Compiler
         root,
         rb_file,
         absolute_path,
+        display_path,
+        legacy_source ? 1 : source_line_for(rb_file, declaration.wrapper_start_byte),
         i
       )
     end
 
     TranspileFileResult.new(components, helper)
+  end
+
+  # The GVM has no host process, so backticks cannot run. Reject them before
+  # mrbc turns the call into an opaque `NoMethod` failure at mount time.
+  private def validate_supported_ruby!(
+    node : TreeSitter::Node,
+    source : String,
+    source_path : String,
+    method_name : String? = nil,
+  ) : Nil
+    current_method = method_name
+    if node.type == "method" || node.type == "singleton_method"
+      current_method = node.child_by_field_name("name").try(&.text) || method_name
+    end
+
+    if node.type == "subshell"
+      location = "#{source_path}:#{node.start_point.row.to_i + 1}"
+      context = current_method ? " inside method '#{current_method}'" : ""
+      snippet = source.byte_slice(node.start_byte, Math.min(node.end_byte - node.start_byte, 40)).inspect
+      raise "Ruby backtick command execution is not supported at #{location}#{context}: #{snippet}; the browser VM cannot start a shell process"
+    end
+
+    node.each_named_child do |child|
+      validate_supported_ruby!(child, source, source_path, current_method)
+    end
   end
 
   private def discover_component_declarations(
@@ -229,10 +276,14 @@ class Compiler
     end
   end
 
-  private def component_location(component : MochiComponent) : String
-    return component.absolute_path if component.class_line <= 0
+  private def source_line_for(source : String, byte_offset : Int32) : Int32
+    source.byte_slice(0, byte_offset).count('\n') + 1
+  end
 
-    "#{component.absolute_path}:#{component.class_line}"
+  private def component_location(component : MochiComponent) : String
+    return component.source_path if component.class_line <= 0
+
+    "#{component.source_path}:#{component.class_line}"
   end
 
   private def component_source_for(
@@ -260,11 +311,15 @@ class Compiler
     TreeSitter::SourceSlicer.remove_ranges(source, removals)
   end
 
-  private def build_helper(source : String, absolute_path : String) : HelperUnit?
+  private def build_helper(
+    source : String,
+    absolute_path : String,
+    source_path : String = absolute_path,
+  ) : HelperUnit?
     return nil if source.strip.empty?
 
     digest = Digest::SHA1.hexdigest(absolute_path)[0, 12]
-    HelperUnit.new("mochi-helpers-#{digest}.chi", source, absolute_path)
+    HelperUnit.new("mochi-helpers-#{digest}.chi", source, source_path)
   end
 
   private def same_declaration?(left : TreeSitter::ClassDecl, right : TreeSitter::ClassDecl) : Bool
@@ -284,6 +339,8 @@ class Compiler
     root : TreeSitter::Node,
     rb_file : String,
     absolute_path : String,
+    source_path : String,
+    source_line_offset : Int32,
     i : Int32,
   ) : MochiComponent
     cls_name = declaration.name
@@ -299,7 +356,7 @@ class Compiler
     html_method = methods["html"]?
 
     if html_method.nil?
-      raise "Component '#{cls_name}' defines @tag_name but no html method at #{declaration.location(absolute_path)}"
+      raise "Component '#{cls_name}' defines @tag_name but no html method at #{declaration.location(source_path)}"
     end
 
     imports = RubyUnderstander.get_imports(root)
@@ -311,7 +368,7 @@ class Compiler
     html = html_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
     source_locator = TemplateSourceLocator.new(
       rb_file,
-      absolute_path,
+      source_path,
       html_method.raw_string_start || 0,
       html_method.raw_string_end || rb_file.bytesize
     )
@@ -395,6 +452,9 @@ class Compiler
       source_locator
     )
     manifest.helper_chi = helper_chi
+    manifest.source_file = source_path
+    manifest.source_line = declaration.line
+    manifest.method_lines = methods.transform_values(&.start_line)
 
     validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, declaration.attribute_readers)
     validate_row_expressions(cls_name, generator.each_row_templates, methods.keys, declaration.attribute_readers)
@@ -421,7 +481,9 @@ class Compiler
       manifest,
       manifest.html_template,
       css,
-      declaration.line
+      declaration.line,
+      source_path,
+      source_line_offset
     )
   end
 

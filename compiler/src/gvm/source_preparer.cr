@@ -21,6 +21,15 @@ class GvmSourcePreparer
     ranges.each do |(start_byte, end_byte)|
       next if end_byte <= cursor
       builder << source.byte_slice(cursor, start_byte - cursor) if start_byte > cursor
+      # Keep newlines so mrbc line numbers still match the original file.
+      removed = source.byte_slice(start_byte, end_byte - start_byte)
+      removed.each_byte do |byte|
+        if byte == 10_u8
+          builder << '\n'
+        else
+          builder << ' '
+        end
+      end
       cursor = end_byte
     end
     builder << source.byte_slice(cursor, source.bytesize - cursor) if cursor < source.bytesize

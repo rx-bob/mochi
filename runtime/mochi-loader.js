@@ -84,11 +84,90 @@
   }
 
   function lastError(module) {
-    if (!module._mochi_last_error_offset || !module._mochi_last_error_len) return "";
+    if (!module || !module._mochi_last_error_offset || !module._mochi_last_error_len) return "";
     var offset = module._mochi_last_error_offset();
     var length = module._mochi_last_error_len();
     if (!offset || length <= 0) return "";
     return decode(module.HEAPU8.subarray(offset, offset + length));
+  }
+
+  // One failure shape for every runtime entry point. The VM text is kept even
+  // when the JS layer already has an error, because only the VM knows which
+  // Ruby method failed.
+  function methodFromError(error, fallback) {
+    var match = error && error.message ? /#([A-Za-z_][A-Za-z0-9_?!]*)/.exec(error.message) : null;
+    return match ? match[1] : fallback;
+  }
+
+  function bindingForMethod(element, method) {
+    if (!element || !element.bindingData || !method) return null;
+    var ids = Object.keys(element.bindingData);
+    for (var i = 0; i < ids.length; i += 1) {
+      var binding = element.bindingData[ids[i]];
+      if (binding && (binding.getter_sym === method || binding.setter_sym === method)) {
+        return binding;
+      }
+    }
+    return null;
+  }
+
+  function describeError(component, phase, method, error, module, element) {
+    var detail = error && error.message ? error.message : String(error || "");
+    var vmText = lastError(module);
+    if (vmText && detail.indexOf(vmText) === -1) {
+      detail = detail ? detail + ": " + vmText : vmText;
+    }
+    if (!detail) detail = phase + " failed";
+    var source = component && component.source;
+    var line = source && source.line;
+    if (source && component.methods && method) {
+      var mapped = Number(component.methods[method]);
+      if (mapped > 0) line = mapped;
+    }
+    // Generated getters are not user methods. Point at the template
+    // expression that produced the getter instead of the class declaration.
+    var binding = bindingForMethod(element, method);
+    if (binding && binding.source && binding.source.file) {
+      source = binding.source;
+      line = binding.source.line;
+    }
+    var location = source && source.file
+      ? source.file + (line > 0 ? ":" + line : "")
+      : "";
+    return {
+      phase: phase,
+      tagName: component && component.tag_name || "",
+      className: component && component.class_name || "",
+      method: method || "",
+      source: location,
+      vmText: vmText,
+      message: location ? detail + " at " + location : detail
+    };
+  }
+
+  function reportError(element, phase, method, error, module) {
+    var component = element && element._mochiComponent;
+    var info = describeError(component, phase, method, error, module, element);
+    var reported = error instanceof Error ? error : new Error(info.message);
+    reported.message = info.message;
+    reported.mochi = info;
+    if (element) element.mochiError = reported;
+    console.error("[mochi] " + (info.tagName || "loader") + " " + phase + " failed", reported);
+    try {
+      if (global.document && typeof global.CustomEvent === "function") {
+        global.document.dispatchEvent(new global.CustomEvent("mochi:error", { detail: info }));
+      }
+    } catch (dispatchError) {
+      console.error("[mochi] error event dispatch failed", dispatchError);
+    }
+    if (typeof loader !== "undefined" && typeof loader.onError === "function") {
+      try {
+        loader.onError(info, reported);
+      } catch (hookError) {
+        console.error("[mochi] onError hook failed", hookError);
+      }
+    }
+    return reported;
   }
 
   function hasMethod(module, instance, methodName) {
@@ -341,8 +420,7 @@
         drainFetches(module);
       }
     } catch (error) {
-      element.mochiError = error;
-      console.error("[mochi] " + (element._mochiComponent || {}).tag_name + " fetch failed", error);
+      reportError(element, "fetch", request && request.callback, error, module);
     }
   }
 
@@ -431,7 +509,9 @@
         if (global.localStorage && typeof entry.key === "string") {
           global.localStorage.setItem(entry.key, String(entry.value !== undefined ? entry.value : ""));
         }
-      } catch (error) {}
+      } catch (error) {
+        reportError(null, "storage", "storage_set", error);
+      }
       return;
     }
     if (hostKind === "storage_remove") {
@@ -439,7 +519,9 @@
         if (global.localStorage && typeof entry.key === "string") {
           global.localStorage.removeItem(entry.key);
         }
-      } catch (error) {}
+      } catch (error) {
+        reportError(null, "storage", "storage_remove", error);
+      }
       return;
     }
     if (hostKind === "set_route") {
@@ -449,7 +531,9 @@
           var targetUrl = path.charAt(0) === "#" || path.charAt(0) === "/" ? path : "#" + path;
           global.history.pushState(null, "", targetUrl);
         }
-      } catch (error) {}
+      } catch (error) {
+        reportError(null, "route", "set_route", error);
+      }
       notifyRouteChange(path);
       return;
     }
@@ -481,8 +565,7 @@
           drainEmits(module);
           drainFetches(module);
         } catch (error) {
-          element.mochiError = error;
-          console.error("[mochi] timer callback failed", error);
+          reportError(element, "timer", callbackName, error, module);
         }
       };
 
@@ -1588,6 +1671,7 @@
         }
 
         this._mochiMountState = "mounting";
+        this.mochiError = undefined;
         this._mochiDisconnected = false;
         this._mochiDisposalScheduled = false;
         this._mochiUnmounted = false;
@@ -1608,8 +1692,14 @@
         root.appendChild(style);
 
         var fragment = template.content.cloneNode(true);
-        this._resolveBindings(fragment);
-        root.appendChild(fragment);
+        try {
+          this._resolveBindings(fragment);
+          root.appendChild(fragment);
+        } catch (error) {
+          this._mochiMountState = "failed";
+          reportError(this, "binding", "", error);
+          return;
+        }
         // The retained shadow root outlives every mount, so one delegated
         // listener per event serves all lifecycles of this element.
         if (!this._mochiEventsAttached) {
@@ -1634,6 +1724,7 @@
 
             element._mochiModule = mounted.module;
             element._mochiInstance = mounted.instance;
+            element.mochiError = undefined;
 
             if (element._mochiDisconnected || element._mochiUnmounted) {
               element._unmount(mounted.module, mounted.instance, mounted.mountToken);
@@ -1659,9 +1750,12 @@
           }).catch(function (error) {
             if (mountToken === element._mochiMountToken) {
               element._mochiMountState = "failed";
-              element.mochiError = error;
+              throw reportError(
+                element, "mount", methodFromError(error, "initialize"),
+                error, element._mochiModule
+              );
             }
-            console.error("[mochi] " + tag + " mount failed", error);
+            console.error("[mochi] " + tag + " stale mount failed", error);
             throw error;
           });
       }
@@ -1677,18 +1771,22 @@
         var element = this;
         this._mochiAttrObserver = new global.MutationObserver(function (mutations) {
           if (element._mochiDisconnected || element._mochiUnmounted) return;
-          var changed = false;
-          for (var i = 0; i < mutations.length; i++) {
-            var attrName = mutations[i].attributeName;
-            if (!attrName) continue;
-            if (syncElementAttribute(module, instance, attrName, element.getAttribute(attrName))) {
-              changed = true;
+          try {
+            var changed = false;
+            for (var i = 0; i < mutations.length; i++) {
+              var attrName = mutations[i].attributeName;
+              if (!attrName) continue;
+              if (syncElementAttribute(module, instance, attrName, element.getAttribute(attrName))) {
+                changed = true;
+              }
             }
-          }
-          if (changed) {
-            applyPatches(element, module);
-            drainEmits(module);
-            drainFetches(module);
+            if (changed) {
+              applyPatches(element, module);
+              drainEmits(module);
+              drainFetches(module);
+            }
+          } catch (error) {
+            reportError(element, "attribute", "attribute_changed", error, module);
           }
         });
         this._mochiAttrObserver.observe(this, { attributes: true });
@@ -1820,8 +1918,7 @@
             }
           }
         } catch (error) {
-          this.mochiError = error;
-          console.error("[mochi] " + tag + " unmount failed", error);
+          reportError(this, "unmount", "unmounted", error, module);
         }
 
         // Host drains run even when the hook failed. Consuming the fetch outbox
@@ -1830,20 +1927,17 @@
         try {
           drainEmits(module);
         } catch (error) {
-          this.mochiError = this.mochiError || error;
-          console.error("[mochi] " + tag + " unmount emit drain failed", error);
+          reportError(this, "unmount", "emit", error, module);
         }
         try {
           drainFetches(module);
         } catch (error) {
-          this.mochiError = this.mochiError || error;
-          console.error("[mochi] " + tag + " unmount fetch drain failed", error);
+          reportError(this, "unmount", "fetch", error, module);
         }
 
         var disposeError = disposeVmInstance(module, instance);
         if (disposeError) {
-          this.mochiError = this.mochiError || disposeError;
-          console.error("[mochi] " + tag + " VM cleanup failed", disposeError);
+          reportError(this, "unmount", "dispose", disposeError, module);
         }
 
         this._mochiModule = null;
@@ -1886,8 +1980,7 @@
         try {
           descriptors = eventArguments(target, event.type);
         } catch (error) {
-          element.mochiError = error;
-          console.error("[mochi] " + tag + " event failed", error);
+          reportError(element, "event", method, error);
           return;
         }
 
@@ -1930,8 +2023,7 @@
           drainEmits(mounted.module);
           drainFetches(mounted.module);
         }).catch(function (error) {
-          element.mochiError = error;
-          console.error("[mochi] " + tag + " event failed", error);
+          reportError(element, "event", method, error, element._mochiModule);
         });
       }
 
@@ -1977,8 +2069,7 @@
             drainFetches(module);
           }
         } catch (error) {
-          this.mochiError = error;
-          console.error("[mochi] " + tag + " action failed", error);
+          reportError(this, "action", action, error, module);
         }
       }
     };
@@ -2039,6 +2130,7 @@
     moduleFactory: null,
     applyPatches: applyPatches,
     debugStats: debugStats,
+    onError: null,
     get manifest() { return state.manifest; },
     get components() { return state.manifest ? state.manifest.components : []; }
   };
@@ -2052,7 +2144,7 @@
       var manifestPath = script.dataset.mochiManifest || DEFAULT_MANIFEST;
       var start = function () {
         boot(manifestPath).catch(function (error) {
-          console.error("[mochi] loader boot failed", error);
+          reportError(null, "boot", "", error);
         });
       };
       if (global.document.readyState === "loading") {

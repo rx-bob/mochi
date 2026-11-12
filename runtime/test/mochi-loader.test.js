@@ -88,6 +88,7 @@ function fakeModule(log) {
   log.ivarSets = [];
   log.components = new Set();
   log.failDispatch = new Set();
+  log.errorText = "";
   log.requiredArgs = new Map();
   log.methods = new Set(["mounted", "increment", "reset"]);
   let nextSymbol = 100;
@@ -188,10 +189,13 @@ function fakeModule(log) {
       return patchLength;
     },
     _mochi_last_error_offset() {
-      return 0;
+      return log.errorText ? 60000 : 0;
     },
     _mochi_last_error_len() {
-      return 0;
+      if (!log.errorText) return 0;
+      const bytes = new TextEncoder().encode(log.errorText);
+      module.HEAPU8.set(bytes, 60000);
+      return bytes.length;
     },
     _mochi_emit_outbox_offset() {
       return emitOffset;
@@ -332,6 +336,43 @@ test("delegated click and change events dispatch the interned Ruby method", asyn
   const resetSymbol = log.symbols.get("reset");
   assert.ok(resetSymbol);
   assert.deepEqual(log.dispatched.at(-1), { instance: "1", methodSymbol: resetSymbol });
+});
+
+test("runtime failures report one source-mapped error and clear on remount", async () => {
+  const component = {
+    ...COMPONENT,
+    source: { file: "lib/counter.rb", line: 3 },
+    methods: { initialize: 8, increment: 12 },
+  };
+  const { log } = await setup([component]);
+  const details = [];
+  document.addEventListener("mochi:error", (error) => details.push(error.detail));
+
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  log.errorText = "MyCounter#increment: unknown method";
+  log.failDispatch.add("increment");
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(element.mochiError);
+  assert.match(element.mochiError.message, /event dispatch failed for increment/);
+  assert.match(element.mochiError.message, /lib\/counter\.rb:12/);
+  assert.equal(details.length, 1);
+  assert.equal(details[0].phase, "event");
+  assert.equal(details[0].method, "increment");
+  assert.equal(details[0].source, "lib/counter.rb:12");
+  assert.match(details[0].vmText, /MyCounter#increment: unknown method/);
+
+  element.remove();
+  await flushLifecycle();
+  log.failDispatch.delete("increment");
+  log.errorText = "";
+  document.body.appendChild(element);
+  await element._mochiReady;
+  assert.equal(element.mochiError, undefined);
 });
 
 test("disconnect dispatches unmounted and stops routing actions", async () => {

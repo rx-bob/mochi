@@ -81,6 +81,9 @@ class ComponentManifest
   property bindings : Array(BindingDescriptor)
   property events : Array(EventDescriptor)
   property helper_chi : String?
+  property source_file : String?
+  property source_line : Int32
+  property method_lines : Hash(String, Int32)
 
   def initialize(
     @tag_name : String,
@@ -91,6 +94,9 @@ class ComponentManifest
     @bindings : Array(BindingDescriptor),
     @events : Array(EventDescriptor) = [] of EventDescriptor,
     @helper_chi : String? = nil,
+    @source_file : String? = nil,
+    @source_line : Int32 = 0,
+    @method_lines : Hash(String, Int32) = {} of String => Int32,
   )
   end
 

@@ -170,16 +170,28 @@ class MrbcCompiler
 
   private def compile_helper(helper : HelperUnit, components_dir : String) : String
     chi_path = File.join(components_dir, helper.key)
-    compile_ruby_source(helper.source, chi_path, helper.key)
+    compile_ruby_source(helper.source, chi_path, helper.key, helper.origin)
   end
 
   private def compile_component(component : MochiComponent, components_dir : String) : String
     manifest = component.manifest
     chi_path = File.join(components_dir, manifest.chi_file)
-    compile_ruby_source(component.ruby_code, chi_path, manifest.tag_name)
+    compile_ruby_source(
+      component.ruby_code,
+      chi_path,
+      manifest.tag_name,
+      manifest.source_file,
+      component.source_line_offset
+    )
   end
 
-  private def compile_ruby_source(ruby_code : String, chi_path : String, label : String) : String
+  private def compile_ruby_source(
+    ruby_code : String,
+    chi_path : String,
+    label : String,
+    source_path : String? = nil,
+    source_line_offset : Int32 = 1,
+  ) : String
     source = SorbetTypeStripper.strip(ruby_code)
     source = GvmSourcePreparer.strip_class_ivars(source)
 
@@ -192,10 +204,11 @@ class MrbcCompiler
       ruby_file.close
       mrb_file.close
 
-      run_mrbc(ruby_file.path, mrb_file.path)
+      run_mrbc(ruby_file.path, mrb_file.path, source_path, source_line_offset)
 
       bytecode = File.read(mrb_file.path).to_slice
-      RiteVerifier.verify!(bytecode, label)
+      verify_context = source_path ? "#{label} (#{source_path})" : label
+      RiteVerifier.verify!(bytecode, verify_context)
       body = strip_rite_header(bytecode, label)
 
       File.write(chi_path, body)
@@ -206,7 +219,12 @@ class MrbcCompiler
     end
   end
 
-  private def run_mrbc(ruby_path : String, output_path : String) : Nil
+  private def run_mrbc(
+    ruby_path : String,
+    output_path : String,
+    source_path : String? = nil,
+    source_line_offset : Int32 = 1,
+  ) : Nil
     mrbc = resolved_mrbc_path
     stdout = IO::Memory.new
     stderr = IO::Memory.new
@@ -221,6 +239,14 @@ class MrbcCompiler
 
     message = stderr.to_s
     message = stdout.to_s if message.empty?
+    if source_path
+      # mrbc names the temporary file it read and counts from the start of
+      # the component slice. Translate both before the tempfile disappears.
+      message = message.gsub(ruby_path, source_path)
+      message = message.gsub(/#{Regex.escape(source_path)}:(\d+)/) do
+        "#{source_path}:#{$1.to_i + source_line_offset - 1}"
+      end
+    end
     raise "mrbc exited with #{status.exit_code}: #{message.strip}"
   end
 
@@ -384,6 +410,23 @@ class MrbcCompiler
       end
       json.field "html_template", manifest.html_template
       json.field "css", manifest.css
+      if source_file = manifest.source_file
+        json.field "source" do
+          json.object do
+            json.field "file", source_file
+            json.field "line", manifest.source_line
+          end
+        end
+        unless manifest.method_lines.empty?
+          json.field "methods" do
+            json.object do
+              manifest.method_lines.to_a.sort_by(&.[0]).each do |name, line|
+                json.field name, line
+              end
+            end
+          end
+        end
+      end
 
       write_bindings(json, manifest.bindings)
       write_events(json, manifest.events)

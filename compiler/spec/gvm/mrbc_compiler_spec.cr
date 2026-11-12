@@ -118,6 +118,9 @@ RUBY
     bindings,
     events
   )
+  manifest.source_file = "lib/my_counter.rb"
+  manifest.source_line = 7
+  manifest.method_lines = {"initialize" => 14, "increment" => 18}
 
   MochiComponent.new(
     File.join(dir, "my_counter.rb"),
@@ -126,7 +129,10 @@ RUBY
     ruby_source,
     manifest,
     manifest.html_template,
-    manifest.css
+    manifest.css,
+    7,
+    "lib/my_counter.rb",
+    10
   )
 end
 
@@ -197,6 +203,10 @@ describe MrbcCompiler do
       component_json["chi_file"].as_s.should eq("my-counter.chi")
       component_json["html_template"].as_s.should contain("Count: {count}")
       component_json["css"].as_s.should eq("h1 { color: red; }")
+      component_json["source"].as_h["file"].as_s.should eq("lib/my_counter.rb")
+      component_json["source"].as_h["line"].as_i.should eq(7)
+      component_json["methods"].as_h["initialize"].as_i.should eq(14)
+      component_json["methods"].as_h["increment"].as_i.should eq(18)
 
       bindings = component_json["bindings"].as_a
       bindings.first.as_h["id"].as_i.should eq(0)
@@ -243,6 +253,41 @@ describe MrbcCompiler do
       args[1].as_h["literal_type"].as_s.should eq("number")
       args[1].as_h["value"].as_s.should eq("1")
       args[2].as_h["kind"].as_s.should eq("event")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  it "maps mrbc tempfile lines back to the original Ruby file" do
+    dir = File.join(Dir.tempdir, "mochi_mrbc_error_spec_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(dir)
+
+    begin
+      mrbc = File.join(dir, "failing_mrbc")
+      script = <<-SH
+#!/bin/sh
+input=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2;;
+    *) input="$1"; shift;;
+  esac
+done
+echo "$input:5: syntax error, unexpected end" >&2
+exit 1
+SH
+      File.write(mrbc, script)
+      File.chmod(mrbc, File::Permissions.new(0o755))
+
+      component = build_mrbc_fixture(dir)
+      compiler = MrbcCompiler.new(mrbc_path: mrbc)
+      error = expect_raises(Exception) do
+        compiler.compile([component], File.join(dir, "out"))
+      end
+      message = error.message.to_s
+      message.should contain("lib/my_counter.rb:14")
+      message.should_not contain("mochi-my-counter")
+      message.should contain("syntax error")
     ensure
       FileUtils.rm_rf(dir)
     end

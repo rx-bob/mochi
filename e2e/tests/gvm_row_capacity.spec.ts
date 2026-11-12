@@ -348,6 +348,7 @@ test("oversized retained rows report the exhausted scratch resource and keep the
     expect(oversized.message).toContain("scratch objects exhausted");
     expect(oversized.message).toContain("requested 1");
     expect(oversized.message).toContain("used 2048 of 2048");
+    expect(oversized.message).toContain("lib/OversizedMount.rb:");
     expect(oversized.message).not.toContain("component mount failed");
 
     await page.evaluate(async () => {

@@ -196,7 +196,8 @@ module TreeSitter
         parameters,
         raw_string,
         raw_range.try(&.[0]),
-        raw_range.try(&.[1])
+        raw_range.try(&.[1]),
+        method_node.start_point.row.to_i + 1
       )
     end
 
