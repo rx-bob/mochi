@@ -2,6 +2,7 @@ require "json"
 require "file_utils"
 require "digest/sha1"
 require "../mochi_cmp"
+require "../tooling/installation_paths"
 require "../sorbet/type_stripper"
 require "../webcomponents/resource_manifest"
 require "./package_graph"
@@ -9,8 +10,8 @@ require "./source_preparer"
 require "./rite_verifier"
 
 class MrbcCompiler
-  RITE_HEADER    = "RITE0400\u0000\u0000"
-  COMPONENTS_DIR = "components"
+  RITE_HEADER     = "RITE0400\u0000\u0000"
+  COMPONENTS_DIR  = "components"
   COMPILE_WORKERS = 4
 
   getter manifest_path : String?
@@ -46,6 +47,12 @@ class MrbcCompiler
     @host_adapter_paths = {} of String => String
     @package_graph = nil
     @warnings = [] of String
+  end
+
+  def validate_emitted_resources! : Nil
+    return if @warnings.empty?
+    details = @warnings.map { |warning| "- #{warning}" }.join("\n")
+    raise "Mochi setup: build resources are incomplete:\n#{details}"
   end
 
   def compile(
@@ -421,11 +428,11 @@ class MrbcCompiler
   end
 
   private def resolved_mrbc_path : String
-    @mrbc_path || self.class.find_mrbc || raise "mrbc not found; set MRBC to the mruby compiler path"
+    @mrbc_path || InstallationPaths.new.mrbc || raise "Mochi setup: mrbc not found; set MRBC or run `task install:dev`"
   end
 
   private def resolved_wasm_source : String?
-    @wasm_source || self.class.find_wasm
+    @wasm_source || InstallationPaths.new.wasm
   end
 
   private def resolved_js_source : String?
@@ -436,11 +443,11 @@ class MrbcCompiler
       return sibling if File.file?(sibling)
     end
 
-    self.class.find_js
+    InstallationPaths.new.js
   end
 
   private def resolved_loader_source : String?
-    @loader_source || self.class.find_loader
+    @loader_source || InstallationPaths.new.loader
   end
 
   private def resolved_host_adapter_source(host : String) : String?
@@ -452,120 +459,31 @@ class MrbcCompiler
     if host == "mochi-format.js" && (source = @format_host_source)
       return source
     end
-    self.class.find_host_adapter(host)
+    InstallationPaths.new.host_adapter(host)
   end
-
-  private def self.search_roots : Array(String)
-    roots = [Dir.current]
-    if exe = Process.executable_path
-      exe_dir = File.dirname(exe)
-      roots << exe_dir
-      roots << File.expand_path("..", exe_dir)
-    end
-    roots.uniq
-  end
-
-  @@cached_mrbc : String?
-  @@mrbc_resolved : Bool = false
-  @@cached_wasm : String?
-  @@wasm_resolved : Bool = false
-  @@cached_js : String?
-  @@js_resolved : Bool = false
-  @@cached_loader : String?
-  @@loader_resolved : Bool = false
-  @@cached_host_adapters = {} of String => String?
-  @@host_adapter_resolved = Set(String).new
 
   def self.find_format_host : String?
-    find_host_adapter("mochi-format.js")
+    InstallationPaths.new.format_host
   end
 
   def self.find_host_adapter(host : String) : String?
-    host = File.basename(host)
-    return @@cached_host_adapters[host]? if @@host_adapter_resolved.includes?(host)
-    @@host_adapter_resolved << host
-
-    candidates = [] of String
-    search_roots.each do |root|
-      candidates << File.join(root, "runtime", host)
-      candidates << File.join(root, "..", "runtime", host)
-      candidates << File.join(root, "..", "..", "runtime", host)
-      candidates << File.join(root, "..", "mochi-gvm", "runtime", host)
-      candidates << File.join(root, "..", "..", "mochi-gvm", "runtime", host)
-    end
-
-    @@cached_host_adapters[host] = first_existing_file(candidates)
+    InstallationPaths.new.host_adapter(host)
   end
 
   def self.find_mrbc : String?
-    return @@cached_mrbc if @@mrbc_resolved
-    @@mrbc_resolved = true
-
-    if found = Process.find_executable("mrbc")
-      return @@cached_mrbc = found
-    end
-    candidates = [] of String
-    search_roots.each do |root|
-      candidates << File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc")
-      candidates << File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
-      candidates << File.join(root, "..", "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc")
-      candidates << File.join(root, "..", "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
-    end
-    @@cached_mrbc = first_existing_executable(candidates)
+    InstallationPaths.new.mrbc
   end
 
   def self.find_wasm : String?
-    return @@cached_wasm if @@wasm_resolved
-    @@wasm_resolved = true
-
-    candidates = [] of String
-    search_roots.each do |root|
-      candidates << File.join(root, "..", "mochi-gvm", "dist", "mochi-gvm.wasm")
-      candidates << File.join(root, "..", "..", "mochi-gvm", "dist", "mochi-gvm.wasm")
-      candidates << File.join(root, "mochi-gvm", "dist", "mochi-gvm.wasm")
-      candidates << File.join(root, "dist", "mochi-gvm.wasm")
-    end
-
-    @@cached_wasm = first_existing_file(candidates)
+    InstallationPaths.new.wasm
   end
 
   def self.find_js : String?
-    return @@cached_js if @@js_resolved
-    @@js_resolved = true
-
-    candidates = [] of String
-    search_roots.each do |root|
-      candidates << File.join(root, "..", "mochi-gvm", "dist", "mochi-gvm.js")
-      candidates << File.join(root, "..", "..", "mochi-gvm", "dist", "mochi-gvm.js")
-      candidates << File.join(root, "mochi-gvm", "dist", "mochi-gvm.js")
-      candidates << File.join(root, "dist", "mochi-gvm.js")
-    end
-
-    @@cached_js = first_existing_file(candidates)
+    InstallationPaths.new.js
   end
 
   def self.find_loader : String?
-    return @@cached_loader if @@loader_resolved
-    @@loader_resolved = true
-
-    candidates = [] of String
-    search_roots.each do |root|
-      candidates << File.join(root, "runtime", "mochi-loader.js")
-      candidates << File.join(root, "..", "runtime", "mochi-loader.js")
-      candidates << File.join(root, "..", "..", "runtime", "mochi-loader.js")
-      candidates << File.join(root, "..", "mochi-gvm", "runtime", "mochi-loader.js")
-      candidates << File.join(root, "..", "..", "mochi-gvm", "runtime", "mochi-loader.js")
-    end
-
-    @@cached_loader = first_existing_file(candidates)
-  end
-
-  private def self.first_existing_file(candidates : Array(String)) : String?
-    candidates.find { |path| File.file?(path) }
-  end
-
-  private def self.first_existing_executable(candidates : Array(String)) : String?
-    candidates.find { |path| File.info?(path).try(&.permissions.owner_execute?) }
+    InstallationPaths.new.loader
   end
 
   private def copy_asset(source : String?, output_dir : String, filename : String) : String?

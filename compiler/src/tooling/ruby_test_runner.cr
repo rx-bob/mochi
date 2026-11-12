@@ -2,6 +2,7 @@ require "file_utils"
 require "json"
 require "path"
 require "random"
+require "./installation_paths"
 
 class RubyTestRunner
   RECORDER_SOURCE = {{ read_file("#{__DIR__}/../../../runtime/test/mochi_test_recorder.rb") }}
@@ -21,6 +22,19 @@ class RubyTestRunner
     end
     unless File.directory?(test_dir)
       STDERR.puts "mochi test: no test/ directory in #{project_root}"
+      return 2
+    end
+
+    node_modules = begin
+      InstallationPaths.new.required_test_dependencies!
+    rescue ex
+      STDERR.puts "mochi test: #{ex.message}"
+      return 2
+    end
+    begin
+      InstallationPaths.new.validate_test_dependencies!(node_modules)
+    rescue ex
+      STDERR.puts "mochi test: #{ex.message}"
       return 2
     end
 
@@ -54,11 +68,6 @@ class RubyTestRunner
         <body></body></html>
         HTML
 
-      node_modules = File.join(repository_root, "e2e", "node_modules")
-      unless File.directory?(node_modules)
-        STDERR.puts "mochi test: framework Playwright runner dependencies missing; install Mochi development dependencies"
-        return 2
-      end
       env = {"NODE_PATH" => node_modules}
       browser_status = Process.run(
         command: "node",
@@ -89,9 +98,5 @@ class RubyTestRunner
       next unless {".css", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2"}.includes?(File.extname(name).downcase)
       FileUtils.cp(source, stage_dir)
     end
-  end
-
-  private def repository_root : String
-    File.expand_path(Path[__DIR__, "../../.."].to_s)
   end
 end

@@ -6,6 +6,7 @@ require "../../generated/app_router_rb"
 require "../../generated/store_rb"
 require "../../generated/money_rb"
 require "../../generated/format_rb"
+require "../../tooling/installation_paths"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
 
@@ -131,6 +132,7 @@ class BuildMain
         raise "Input & output directory need to be specified"
       end
 
+      InstallationPaths.new.validate_build_resources!
       validate_build_paths(input_dir, output_dir)
       print_separator
       puts "1. input_dir:#{input_dir}, output_dir:#{output_dir}"

@@ -119,6 +119,7 @@ class Compiler
         [input_dir, project_dir].compact,
         project_dir
       )
+      compiler.validate_emitted_resources!
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
       puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}" if @verbose
     end

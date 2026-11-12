@@ -881,6 +881,7 @@ Prerequisites:
 * Prebuilt C libraries in `fragments/libs` (see [docs/BUILD_INSTRUCTIONS_EXT_LIBS.md](docs/BUILD_INSTRUCTIONS_EXT_LIBS.md))
 * Node.js for the Playwright end-to-end test
 * Emscripten only when rebuilding the `mochi-gvm` WASM artifact
+* A built `mrbc` executable for Ruby bytecode compilation
 
 ```
 git clone http://github.com/yampug/mochi
@@ -915,6 +916,37 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task check` | Run runtime tests, compiler specs, payload checks, GVM tests, and the GVM end-to-end test |
 
 ### Usage
+
+#### Installing the development command
+
+From the Mochi checkout, run `task install:dev`. This builds the compiler and
+installs a checkout-backed `mochi` launcher under `~/.local/bin`, plus a
+resource record under `~/.local/share/mochi`. Set `MOCHI_INSTALL_PREFIX` to use
+another prefix, for example:
+
+```sh
+MOCHI_INSTALL_PREFIX="$HOME/Tools/mochi dev" task install:dev
+```
+
+The installer prints the `PATH` entry to add when needed. It does not edit shell
+startup files. `task install:dev:update` refreshes an owned launcher and record;
+`task install:dev:remove` removes only those owned files. Installer refuses to
+replace an unrelated `mochi` executable. Running `ruby
+scripts/install_dev.rb --prefix PATH` from the checkout offers the same install
+operation.
+
+Resource lookup order is explicit environment override, installed resource
+record, then known paths in the compiler's development checkout and its
+`../mochi-gvm` checkout. The compiler supports `MOCHI_COMPILER`, `MRBC`,
+`MOCHI_GVM_DIR`, `MOCHI_GVM_WASM`, `MOCHI_GVM_JS`, `MOCHI_LOADER`,
+`MOCHI_FORMAT_HOST`, `MOCHI_HOST_ADAPTER_MOCHI_FETCH_JS`, and
+`MOCHI_E2E_NODE_MODULES`. A bad explicit path stops
+the operation; it never falls through to another resource. The launcher sets
+`MOCHI_INSTALL_RECORD` for its installation. Builds validate required files,
+WebAssembly format, loader manifest schema, and installed compiler/runtime
+identity before changing output. The current runtime uses the `default`
+capacity profile; custom profile identity will be supplied by the capacity
+artifact work.
 
 #### Creating a new project
 ```
