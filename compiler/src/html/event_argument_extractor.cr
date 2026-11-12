@@ -1,6 +1,28 @@
 require "./event_argument"
 require "./template_expression"
 
+# One event attribute discovered in a template. The replacement callback in
+# `rewrite` decides whether the DOM receives a plain handler name or a compiled
+# row wrapper symbol.
+struct EventCall
+  getter event_name : String
+  getter method_name : String
+  getter arguments : Array(String)
+  getter span : TemplateSourceSpan?
+
+  def initialize(
+    @event_name : String,
+    @method_name : String,
+    @arguments : Array(String),
+    @span : TemplateSourceSpan? = nil,
+  )
+  end
+
+  def event : String
+    event_name.starts_with?("on") ? event_name[2..] : event_name
+  end
+end
+
 class EventArgumentExtractor
   EVENT_START = /(on[a-z]+)\s*=\s*(["'])?\{/
 
@@ -8,8 +30,23 @@ class EventArgumentExtractor
   # a JSON descriptor list. Keeping the descriptors on the element lets the
   # loader pass typed values to the VM without evaluating Ruby in JavaScript.
   def self.process(html : String, locator : TemplateSourceLocator? = nil) : String
+    rewritten, _calls = rewrite(html, locator) do |call|
+      render_event_attribute(call)
+    end
+    rewritten
+  end
+
+  # Rewrites every event attribute and returns the calls that were found.
+  # List rows use this to replace the attribute with a generated Ruby wrapper
+  # symbol instead of shipping argument expressions to the browser.
+  def self.rewrite(
+    html : String,
+    locator : TemplateSourceLocator? = nil,
+    &replacement : EventCall -> String
+  ) : Tuple(String, Array(EventCall))
     parser = TemplateExpressionParser.new(locator)
-    String.build do |io|
+    calls = [] of EventCall
+    result = String.build do |io|
       cursor = 0
 
       while match = EVENT_START.match(html, TemplateExpressionParser.byte_to_char(html, cursor))
@@ -33,26 +70,27 @@ class EventArgumentExtractor
           attribute_end += 1
         end
 
-        io << render_event_attribute(parser, event_name, content)
+        method_name, arguments = parser.parse_call(content)
+        validate_arguments(parser, arguments)
+        call = EventCall.new(event_name, method_name, arguments, locator.try(&.locate(content)))
+        calls << call
+        io << replacement.call(call)
         cursor = attribute_end
       end
 
       io << html.byte_slice(cursor, html.bytesize - cursor)
     end
+    {result, calls}
   end
 
-  private def self.render_event_attribute(parser : TemplateExpressionParser, event_name : String, content : String) : String
-    method_name, arguments = parser.parse_call(content)
-    validate_arguments(parser, arguments)
-    event = event_name.starts_with?("on") ? event_name[2..] : event_name
-
+  private def self.render_event_attribute(call : EventCall) : String
     String.build do |io|
-      io << event_name << "=\"{"
-      io << method_name << "}\""
+      io << call.event_name << "=\"{"
+      io << call.method_name << "}\""
 
-      unless arguments.empty?
-        descriptors = arguments.map { |argument| EventArgumentDescriptor.parse(argument) }
-        io << " data-mochi-args-" << event << "=\""
+      unless call.arguments.empty?
+        descriptors = call.arguments.map { |argument| EventArgumentDescriptor.parse(argument) }
+        io << " data-mochi-args-" << call.event << "=\""
         io << escape_attribute(EventArgumentDescriptor.array_json(descriptors))
         io << "\""
       end

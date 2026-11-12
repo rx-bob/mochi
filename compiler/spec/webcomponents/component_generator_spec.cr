@@ -239,7 +239,7 @@ describe ComponentGenerator do
     cond.branches.first.html_template.should contain("<p>On</p>")
 
     each = manifest.bindings.find! { |binding| binding.kind == "each" }
-    each.getter_expr.should eq("@items")
+    each.getter_expr.should eq("__mochi_each_0_rows")
     each.template_text.not_nil!.should contain("<li>")
   end
 
@@ -305,7 +305,7 @@ describe ComponentGenerator do
     branch.html_template.should contain("<!--each-anchor-0-->")
 
     each = branch.bindings.find! { |binding| binding.kind == "each" }
-    each.getter_expr.should eq("@items")
+    each.getter_expr.should eq("__mochi_each_0_rows")
     generator.each_blocks.size.should eq(1)
     generator.each_blocks.first.loop_def.array_name.should eq("@items")
   end

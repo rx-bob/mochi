@@ -848,6 +848,144 @@ end
   }
 });
 
+test("scoped list rows keep typed ids through filtering, reordering, and nested events", async ({ page }) => {
+  test.setTimeout(180_000);
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-scoped-lists-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "lib", "ScopedListProbe.rb"), `
+class ScopedListProbe
+  @tag_name = "scoped-list-probe"
+  @events
+  @selected
+  @suffix
+
+  def initialize
+    @events = [
+      {"id" => "a", "label" => "Alpha", "children" => ["a1", "a2"]},
+      {"id" => "b", "label" => "Beta", "children" => ["b1"]}
+    ]
+    @selected = "none"
+    @suffix = "!"
+  end
+
+  def label(ev)
+    ev["label"] + @suffix
+  end
+
+  def open_event(id, idx)
+    @selected = id + ":" + idx.to_s
+  end
+
+  def pick_child(parent_id, child, child_index)
+    @selected = parent_id + ":" + child + ":" + child_index.to_s
+  end
+
+  def filter_beta
+    kept = []
+    @events.each do |event|
+      if event["id"] == "b"
+        kept.push(event)
+      end
+    end
+    @events = kept
+  end
+
+  def reorder
+    @events = [@events[1], @events[0]]
+  end
+
+  def bump_suffix
+    @suffix = @suffix + "?"
+  end
+
+  def html
+    %Q{
+      <div class="probe">
+        <p class="selected">{@selected}</p>
+        <button class="filter" onclick="{filter_beta}">Filter</button>
+        <button class="reorder" onclick="{reorder}">Reorder</button>
+        <button class="bump" onclick="{bump_suffix}">Bump</button>
+        <ul class="events">
+          {each @events as ev, idx}
+            <li class="row" data-row="{ev["id"]}">
+              <button class="open" onclick="{open_event(ev["id"], idx)}">{label(ev)}</button>
+              <span class="children">{each ev["children"] as child, ci}<button class="child" onclick="{pick_child(ev["id"], child, ci)}">{child}@{ev["id"]}:{ci}</button>{end}</span>
+            </li>
+          {end}
+        </ul>
+      </div>
+    }
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <scoped-list-probe></scoped-list-probe>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    const probe = page.locator("scoped-list-probe");
+    const rows = probe.locator("li.row");
+
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator("button.open")).toHaveText("Alpha!");
+    await expect(rows.nth(1).locator("button.open")).toHaveText("Beta!");
+    await expect(rows.nth(0).locator(".children")).toHaveText("a1@a:0a2@a:1");
+
+    await rows.nth(1).locator("button.open").click();
+    await expect(probe.locator("p.selected")).toHaveText("b:1");
+
+    await probe.locator("button.bump").click();
+    await expect(rows.nth(0).locator("button.open")).toHaveText("Alpha!?");
+    await expect(rows.nth(1).locator("button.open")).toHaveText("Beta!?");
+
+    await probe.locator("button.reorder").click();
+    await expect(rows.nth(0).locator("button.open")).toHaveText("Beta!?");
+    await expect(rows.nth(1).locator("button.open")).toHaveText("Alpha!?");
+    await rows.nth(0).locator("button.open").click();
+    await expect(probe.locator("p.selected")).toHaveText("b:0");
+
+    await rows.nth(1).locator("button.child").nth(1).click();
+    await expect(probe.locator("p.selected")).toHaveText("a:a2:1");
+
+    await probe.locator("button.filter").click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0).locator("button.open")).toHaveText("Beta!?");
+    await rows.nth(0).locator("button.open").click();
+    await expect(probe.locator("p.selected")).toHaveText("b:0");
+    await rows.nth(0).locator("button.child").click();
+    await expect(probe.locator("p.selected")).toHaveText("b:b1:0");
+
+    const rowText = await rows.nth(0).innerText();
+    expect(rowText).not.toContain("{");
+    expect(rowText).not.toContain("}");
+    expect(errors).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 test("Sencha frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
   test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);

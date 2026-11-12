@@ -3,6 +3,7 @@ require "lexbor"
 require "./binding_manifest"
 require "../html/conditional_processor"
 require "../html/each_processor"
+require "../html/each_row_compiler"
 require "../html/event_argument_extractor"
 require "../html/template_expression"
 
@@ -13,6 +14,7 @@ class ComponentGenerator
   ESCAPED_RBRACE            = "\uE001"
 
   @each_blocks : Array(EachBlock) = [] of EachBlock
+  @each_row_templates : Array(EachRowTemplate) = [] of EachRowTemplate
   @conditionals : Array(ConditionalBlock) = [] of ConditionalBlock
   @next_binding_id : Int32 = 0
   @next_each_id : Int32 = 0
@@ -23,6 +25,10 @@ class ComponentGenerator
   # Includes top-level and branch-discovered each blocks so callers can inject
   # every generated each helper method after generation.
   getter each_blocks
+
+  # Root row templates for every compiled list binding. Nested rows live under
+  # each root's `children`; callers generate one Ruby row getter per root.
+  getter each_row_templates
 
   def initialize
     @expression_parser = TemplateExpressionParser.new
@@ -51,6 +57,7 @@ class ComponentGenerator
     @mochi_cmp_name = mochi_cmp_name
     @conditionals = conditionals
     @each_blocks = each_blocks
+    @each_row_templates.clear
     @next_binding_id = 0
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
     @event_expressions.clear
@@ -169,50 +176,44 @@ class ComponentGenerator
       block = @each_blocks.find { |candidate| candidate.id == id }
       return unless block
 
-      each_template = process_each_template(block, path, events)
+      row = EachRowCompiler.compile(block, @expression_parser)
+      @each_row_templates << row
+      row.all_events.each do |event|
+        events << EventDescriptor.new(path, event.event, event.handler, event.args)
+      end
+
       loop_meta = if idx = block.loop_def.index_name
                     "#{block.loop_def.item_name},#{idx}"
                   else
                     block.loop_def.item_name
                   end
-      bindings << new_binding(
-        path,
-        "each",
-        loop_meta,
-        each_template,
-        block.loop_def.array_name
-      )
+      bindings << new_each_binding(path, loop_meta, row)
     end
   end
 
-  private def process_each_template(
-    block : EachBlock,
+  private def new_each_binding(
     path : Array(Int32),
-    events : Array(EventDescriptor),
-  ) : String
-    scope = [block.loop_def.item_name]
-    if index_name = block.loop_def.index_name
-      scope << index_name
-    end
-    validate_each_template_expressions(block.content, scope)
-
-    content = self.class.escape_double_braces(EventArgumentExtractor.process(block.content))
-    content.gsub(/\bon([a-zA-Z]+)\s*=\s*(["'])\{([^}]+)\}\2/) do |_, match|
-      event_name = match[1].downcase
-      quote = match[2]
-      method_name = match[3].strip.split("(").first
-      events << EventDescriptor.new(path, event_name, method_name)
-      "data-mochi-#{event_name}=#{quote}#{method_name}#{quote}"
-    end
-  end
-
-  private def validate_each_template_expressions(content : String, scope : Array(String))
-    @expression_parser.scan(scannable_template(content), "each", scope, validate: false).each do |expression|
-      inner = expression.source
-      next if CONTROL_TEMPLATE_KEYWORDS.includes?(inner)
-      next if CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
-      @expression_parser.validate!(expression)
-    end
+    attr_name : String,
+    row : EachRowTemplate,
+  ) : BindingDescriptor
+    id = allocate_binding_id
+    getter_sym = "__mochi_each_#{row.block_id}_rows"
+    BindingDescriptor.new(
+      id,
+      path.dup,
+      "each",
+      getter_sym,
+      attr_name,
+      row.template,
+      getter_sym,
+      [] of ConditionalBranchDescriptor,
+      nil,
+      nil,
+      nil,
+      [] of String,
+      nil,
+      row
+    )
   end
 
   private def collect_attribute_bindings(

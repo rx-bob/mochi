@@ -823,13 +823,25 @@
     return null;
   }
 
-  function findEachContext(target, root) {
+  function findEachContexts(target, root) {
+    var nearest = null;
     var node = target;
     while (node && node !== root) {
-      if (node.__mochiEachContext) return node.__mochiEachContext;
+      if (node.__mochiEachContext) {
+        nearest = node.__mochiEachContext;
+        break;
+      }
       node = node.parentNode;
     }
-    return null;
+    if (!nearest) return [];
+
+    var contexts = [];
+    var context = nearest;
+    while (context) {
+      contexts.unshift(context);
+      context = context.parent;
+    }
+    return contexts;
   }
 
   function eventPayload(target, event) {
@@ -891,16 +903,10 @@
     return value === undefined ? null : value;
   }
 
-  // Ruby expressions used as event arguments are resolved from `{each}` loop
-  // context first, then from cached binding values.
-  function resolveEventExpression(element, expression, eachContext) {
-    if (eachContext) {
-      if (expression === eachContext.itemName) return eachContext.item;
-      if (expression === eachContext.indexName || expression === "index") return eachContext.index;
-      var fromItem = itemLookup(eachContext.item, expression, eachContext.itemName);
-      if (fromItem !== undefined) return fromItem;
-    }
-
+  // Ruby expressions used as top-level event arguments are resolved from
+  // cached binding values. List row arguments are compiled into Ruby wrappers
+  // and never travel as expression text.
+  function resolveEventExpression(element, expression) {
     var bindingData = element.bindingData || {};
     var bindingValues = element.bindingValues || {};
     var ids = Object.keys(bindingData);
@@ -914,14 +920,14 @@
     throw new Error("mochi-loader: unresolved event argument expression " + expression);
   }
 
-  function eventArgumentValue(element, descriptor, target, payload, eachContext) {
+  function eventArgumentValue(element, descriptor, target, payload) {
     if (descriptor.kind === "event") return payload;
     if (descriptor.kind === "element") {
       throw new Error("mochi-loader: DOM elements cannot be passed to Ruby event handlers; use $event");
     }
     if (descriptor.kind === "literal") return literalEventArgument(descriptor);
     if (descriptor.kind === "expr") {
-      return resolveEventExpression(element, String(descriptor.value || "").trim(), eachContext);
+      return resolveEventExpression(element, String(descriptor.value || "").trim());
     }
     throw new Error("mochi-loader: unknown event argument kind " + descriptor.kind);
   }
@@ -933,18 +939,6 @@
     return withUtf8(module, JSON.stringify(args), function (pointer, length) {
       return module._mochi_dispatch_event_args(instance, methodSymbol, pointer, length) === 1;
     });
-  }
-
-  function evalEachExpr(module, instance, methodName, args) {
-    if (!module || typeof module._mochi_eval_each_expr !== "function") return null;
-    var symbol = intern(module, methodName);
-    var len = withUtf8(module, JSON.stringify(args || []), function (pointer, length) {
-      return module._mochi_eval_each_expr(instance, symbol, pointer, length);
-    });
-    if (len < 0) return null;
-    var offset = module._mochi_eval_buffer_offset ? module._mochi_eval_buffer_offset() : 0;
-    if (!offset || len === 0) return "";
-    return decode(module.HEAPU8.subarray(offset, offset + len));
   }
 
   function requiredArgumentCount(module, instance, methodSymbol) {
@@ -1266,92 +1260,144 @@
     return String(index);
   }
 
-  function parseEachLoopMeta(binding) {
-    var raw = binding && binding.attr_name ? String(binding.attr_name) : "";
-    if (!raw) return { itemName: "item", indexName: "index" };
-    var parts = raw.split(",");
-    return {
-      itemName: (parts[0] || "item").trim(),
-      indexName: (parts[1] || "index").trim()
-    };
+  function eachRowDescriptor(binding) {
+    var rows = binding && binding.each_rows;
+    if (!rows) {
+      throw new Error("mochi-loader: each binding " + (binding && binding.id) +
+        " has no compiled row descriptor");
+    }
+    return rows;
   }
 
-  function itemLookup(item, expression, itemName) {
-    if (item === null || item === undefined) return undefined;
-    var normalized = String(expression || "").trim()
-      .replace(/\[\s*:([a-zA-Z0-9_]+)\s*\]/g, ".$1")
-      .replace(/\[\s*["']([^"']+)["']\s*\]/g, ".$1");
-    var parts = normalized.split(".");
-    if (parts.length === 1 && (parts[0] === itemName || parts[0] === "item")) {
-      return item;
-    }
-    var start = (parts.length > 1 && (parts[0] === itemName || parts[0] === "item")) ? 1 : 0;
-    var value = item;
-    for (var i = start; i < parts.length; i++) {
-      if (value === null || value === undefined) return undefined;
-      value = value[parts[i]];
-    }
-    return value;
+  function escapeHtmlText(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
-  function resolveEachCallArg(rawArg, item, index, meta) {
-    var arg = String(rawArg || "").trim();
-    if (!arg) return null;
-    if (arg === meta.itemName) return item;
-    if (arg === meta.indexName || arg === "index") return index;
-    if ((arg.charAt(0) === '"' && arg.charAt(arg.length - 1) === '"') ||
-        (arg.charAt(0) === "'" && arg.charAt(arg.length - 1) === "'")) {
-      return arg.slice(1, -1);
-    }
-    if (/^-?\d+$/.test(arg)) return Number(arg);
-    if (arg === "true") return true;
-    if (arg === "false") return false;
-    var lookedUp = itemLookup(item, arg, meta.itemName);
-    return lookedUp !== undefined ? lookedUp : null;
+  function escapeHtmlAttribute(value) {
+    return escapeHtmlText(value)
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  function renderEachTemplate(element, binding, template, item, index, meta) {
-    var rendered = String(template || "").replace(/\{([^}]+)\}/g, function (match, expression) {
-      var expr = expression.trim();
-      if (expr === meta.indexName || expr === "index") return String(index);
-      if (expr === meta.itemName && (item === null || typeof item !== "object")) {
-        return item === null || item === undefined ? "" : String(item);
+  function displayRowValue(value) {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch (error) {
+        return "";
       }
+    }
+    return String(value);
+  }
 
-      var callMatch = expr.match(/^([a-zA-Z_][a-zA-Z0-9_?!]*)\s*\((.*)\)$/);
-      if (callMatch && element && element._mochiModule && element._mochiInstance) {
-        var fnName = callMatch[1];
-        var rawArgs = callMatch[2].trim();
-        var callArgs = rawArgs
-          ? rawArgs.split(",").map(function (part) { return resolveEachCallArg(part, item, index, meta); })
-          : [];
-        var evaluated = evalEachExpr(element._mochiModule, element._mochiInstance, fnName, callArgs);
-        if (evaluated !== null) return evaluated;
+  function renderRowTemplate(descriptor, values) {
+    var template = descriptor.template || "";
+    var bindings = descriptor.bindings || [];
+    var rendered = template.replace(/\uE002(\d+)\uE003/g, function (match, rawSlot) {
+      var slot = Number(rawSlot);
+      var binding = null;
+      for (var i = 0; i < bindings.length; i++) {
+        if (bindings[i].slot === slot) {
+          binding = bindings[i];
+          break;
+        }
       }
-
-      var value = itemLookup(item, expr, meta.itemName);
-      if (value === undefined && element && element._mochiModule && element._mochiInstance &&
-          /^[a-zA-Z_][a-zA-Z0-9_?!]*$/.test(expr) &&
-          hasMethod(element._mochiModule, element._mochiInstance, expr)) {
-        var zeroArgVal = evalEachExpr(element._mochiModule, element._mochiInstance, expr, []);
-        if (zeroArgVal !== null) return zeroArgVal;
-      }
-      if (value === undefined || value === null) return "";
-      if (typeof value === "object") return match;
-      return String(value);
+      var text = displayRowValue(Array.isArray(values) ? values[slot] : undefined);
+      if (binding && binding.kind === "html") return text;
+      if (binding && binding.kind === "attr") return escapeHtmlAttribute(text);
+      return escapeHtmlText(text);
     });
     return unescapeBraces(rendered);
   }
 
-  function eachItemHtml(element, binding, item, index, meta) {
-    if (item && typeof item === "object" && typeof item.html === "string" &&
-        (!binding.template_text || binding.template_text.indexOf("{") === -1)) {
-      return item.html;
+  function rowSignature(row) {
+    try {
+      return JSON.stringify(row);
+    } catch (error) {
+      return "";
     }
-    if (typeof item === "string" && (!binding.template_text || binding.template_text.indexOf("{") === -1)) {
-      return item;
+  }
+
+  function findEachAnchor(root, blockId) {
+    var wanted = "mochi-each-" + blockId;
+    var stack = [root];
+    while (stack.length > 0) {
+      var node = stack.pop();
+      var children = node.childNodes || [];
+      for (var i = 0; i < children.length; i++) {
+        var child = children[i];
+        if (child.nodeType === 8 && child.nodeValue === wanted) return child;
+        if (child.childNodes && child.childNodes.length > 0) stack.push(child);
+      }
     }
-    return renderEachTemplate(element, binding, binding.template_text, item, index, meta);
+    return null;
+  }
+
+  function buildEachRow(element, descriptor, row, index, parentContext) {
+    if (!Array.isArray(row) || row.length < 2) {
+      throw new Error("mochi-loader: invalid list row for binding descriptor " + descriptor.id +
+        " at index " + index);
+    }
+
+    var item = row[0];
+    var values = row[1] || [];
+    var children = row[2] || [];
+    var html = renderRowTemplate(descriptor, values);
+    var bindings = descriptor.bindings || [];
+    var childDescriptors = descriptor.children || [];
+    if (bindings.length === 0 && childDescriptors.length === 0 &&
+        descriptor.template.indexOf("\uE002") === -1) {
+      if (item && typeof item === "object" && typeof item.html === "string") {
+        html = item.html;
+      } else if (typeof item === "string") {
+        html = item;
+      }
+    }
+
+    var fragment = fragmentFor(html);
+    var outerNodes = Array.from(fragment.childNodes);
+    var context = {
+      blockId: descriptor.id,
+      item: item,
+      index: index,
+      parent: parentContext || null
+    };
+    outerNodes.forEach(function (node) {
+      if (node.nodeType === 1) node.__mochiEachContext = context;
+    });
+
+    childDescriptors.forEach(function (child, childIndex) {
+      var anchor = findEachAnchor(fragment, child.id);
+      if (!anchor) {
+        throw new Error("mochi-loader: missing nested list anchor " + child.id +
+          " for binding descriptor " + descriptor.id);
+      }
+      var childRows = children[childIndex] || [];
+      if (!Array.isArray(childRows)) {
+        throw new Error("mochi-loader: nested list rows must be an array for binding descriptor " +
+          child.id);
+      }
+      childRows.forEach(function (childRow, childRowIndex) {
+        var built = buildEachRow(element, child, childRow, childRowIndex, context);
+        built.nodes.forEach(function (node) {
+          anchor.parentNode.insertBefore(node, anchor);
+        });
+      });
+      anchor.parentNode.removeChild(anchor);
+    });
+
+    return {
+      html: html,
+      signature: rowSignature(row),
+      nodes: Array.from(fragment.childNodes),
+      context: context,
+      contextNodes: outerNodes.filter(function (node) { return node.nodeType === 1; })
+    };
   }
 
   function entryFollows(entry, cursor) {
@@ -1364,21 +1410,21 @@
   }
 
   function applyEachPatch(element, target, binding, value) {
-    var items;
+    var descriptor = eachRowDescriptor(binding);
+    var rows;
     if (!value) {
-      items = [];
+      rows = [];
     } else {
       try {
-        items = JSON.parse(value);
+        rows = JSON.parse(value);
       } catch (error) {
         throw new Error("mochi-loader: invalid each patch for binding " + binding.id);
       }
-      if (!Array.isArray(items)) {
+      if (!Array.isArray(rows)) {
         throw new Error("mochi-loader: each patch must be an array for binding " + binding.id);
       }
     }
 
-    var meta = parseEachLoopMeta(binding);
     var state = target.__mochiEach;
     if (!state) state = target.__mochiEach = { items: new Map() };
     var previous = state.items;
@@ -1387,22 +1433,21 @@
     var parent = target.parentNode;
     if (!parent) return;
 
-    items.forEach(function (item, index) {
-      var key = itemKey(item, index);
-      var html = eachItemHtml(element, binding, item, index, meta);
-      var entry = previous.get(key);
-      if (!entry || entry.html !== html) {
-        entry = { html: html, nodes: Array.from(fragmentFor(html).childNodes) };
+    rows.forEach(function (row, index) {
+      if (!Array.isArray(row) || row.length < 2) {
+        throw new Error("mochi-loader: invalid list row for binding " + binding.id +
+          " at index " + index);
       }
-      var context = {
-        item: item,
-        index: index,
-        itemName: meta.itemName,
-        indexName: meta.indexName
-      };
-      entry.nodes.forEach(function (node) {
-        if (node.nodeType === 1) node.__mochiEachContext = context;
-      });
+      var item = row[0];
+      var key = itemKey(item, index);
+      var signature = rowSignature(row);
+      var entry = previous.get(key);
+      if (!entry || entry.signature !== signature) {
+        entry = buildEachRow(element, descriptor, row, index);
+      } else {
+        entry.context.item = item;
+        entry.context.index = index;
+      }
       next.set(key, entry);
       ordered.push(entry);
     });
@@ -1826,10 +1871,11 @@
         if (!method || !this._mochiReady) return;
 
         var payload = eventPayload(target, event);
-        var eachContext = findEachContext(target, this.shadowRoot);
-        if (eachContext) {
-          payload.item = eachContext.item;
-          payload.index = eachContext.index;
+        var eachContexts = findEachContexts(target, this.shadowRoot);
+        var nearestEachContext = eachContexts.length > 0 ? eachContexts[eachContexts.length - 1] : null;
+        if (nearestEachContext) {
+          payload.item = nearestEachContext.item;
+          payload.index = nearestEachContext.index;
         }
         var descriptors;
 
@@ -1851,9 +1897,20 @@
           var symbol = intern(mounted.module, method);
           var dispatched;
 
-          if (descriptors.length > 0) {
+          if (method.indexOf("__mochi_each_") === 0) {
+            if (eachContexts.length === 0) {
+              throw new Error("mochi-loader: list row event " + method + " has no row context");
+            }
+            var rowArgs = [];
+            eachContexts.forEach(function (context) {
+              rowArgs.push(context.item);
+              rowArgs.push(context.index);
+            });
+            rowArgs.push(payload);
+            dispatched = dispatchEventArgs(mounted.module, mounted.instance, symbol, rowArgs);
+          } else if (descriptors.length > 0) {
             var args = descriptors.map(function (descriptor) {
-              return eventArgumentValue(element, descriptor, target, payload, eachContext);
+              return eventArgumentValue(element, descriptor, target, payload);
             });
             dispatched = dispatchEventArgs(mounted.module, mounted.instance, symbol, args);
           } else if (requiredArgumentCount(mounted.module, mounted.instance, symbol) === 1) {

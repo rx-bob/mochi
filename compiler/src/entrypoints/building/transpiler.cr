@@ -207,6 +207,13 @@ class Compiler
     )
 
     validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, root)
+    validate_row_expressions(cls_name, generator.each_row_templates, methods.keys, root)
+
+    amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
+      amped_ruby_code,
+      cls_name,
+      generator.each_row_templates
+    )
 
     rewritten_ruby_code = ComponentGenerator.new.rewrite_ruby(
       amped_ruby_code,
@@ -259,6 +266,69 @@ class Compiler
   ) : Nil
     tree = @ruby_parser.parse(rb_file)
     validate_binding_methods(cls_name, bindings, method_names, tree.root_node)
+  end
+
+  # Rejects bare method names in list rows that cannot resolve to a component
+  # method, attribute reader, literal, or one of the row's lexical names.
+  private def validate_row_expressions(
+    cls_name : String,
+    rows : Array(EachRowTemplate),
+    method_names : Array(String),
+    root : TreeSitter::Node,
+  ) : Nil
+    readable = Set(String).new
+    method_names.each { |name| readable << name }
+    RubyUnderstander.attribute_readers(root, cls_name).each { |name| readable << name }
+
+    rows.each do |root_row|
+      root_row.each_template do |row|
+        row.bindings.each do |binding|
+          validate_row_expression(cls_name, binding.expression, row.scope_names, readable, binding.span)
+        end
+        row.events.each do |event|
+          scope_names = row_scope_names(event.scope)
+          event.args.each do |argument|
+            next unless argument.kind == "expr"
+            validate_row_expression(cls_name, argument.value || "", scope_names, readable, event.span)
+          end
+        end
+      end
+    end
+  end
+
+  private def validate_row_expression(
+    cls_name : String,
+    expression : String,
+    scope_names : Array(String),
+    readable : Set(String),
+    span : TemplateSourceSpan?,
+  ) : Nil
+    source = expression.strip
+    while source.starts_with?("!")
+      source = source.byte_slice(1, source.bytesize - 1).strip
+    end
+    return if source.empty?
+    return if source.starts_with?("@") || source.starts_with?("!") || source.starts_with?("$")
+    return if BINDING_LITERALS.includes?(source)
+    return unless match = source.match(/\A([a-z_][a-zA-Z0-9_]*[?!]?)(.*)\z/m)
+
+    name = match[1]
+    return if name == "self"
+    return if scope_names.includes?(name)
+    return if readable.includes?(name)
+
+    location = span ? "#{span}: " : ""
+    raise "#{location}Component '#{cls_name}' list row uses undefined name '#{name}' in #{expression.inspect}; use a loop name, @ivar, or component method"
+  end
+
+  private def row_scope_names(scope : Array(EachRowScope)) : Array(String)
+    names = [] of String
+    scope.each do |entry|
+      names << entry.item_name unless names.includes?(entry.item_name)
+      names << entry.index_name unless names.includes?(entry.index_name)
+      names << "index" unless names.includes?("index")
+    end
+    names
   end
 
   private def validate_ivar_capacity(cls_name : String, vars : Array(TreeSitter::InstanceVarAnalyzer::VariableInfo)) : Nil

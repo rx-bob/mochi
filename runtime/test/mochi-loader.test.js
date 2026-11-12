@@ -1895,14 +1895,33 @@ test("each patches reconcile keyed fragments and preserve unchanged nodes", asyn
     html_template: "<!--each-anchor-0-->",
     css: "",
     bindings: [
-      { id: 0, path: [0], kind: "each", attr_name: null, template_text: "<li>{name}</li>", getter_sym: "__mochi_bind_0" },
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: "<li>\uE0020\uE003</li>",
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [],
+        },
+      },
     ],
     events: [],
   };
 
   const { loader, module } = await setup([eachComponent]);
   module.patchQueue.push({
-    patches: [{ id: 0, value: JSON.stringify([{ id: "a", name: "A" }, { id: "b", name: "B" }]) }],
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a", name: "A" }, ["A"], []],
+        [{ id: "b", name: "B" }, ["B"], []],
+      ]),
+    }],
   });
   const element = document.createElement("each-check");
   document.body.appendChild(element);
@@ -1922,7 +1941,13 @@ test("each patches reconcile keyed fragments and preserve unchanged nodes", asyn
   };
 
   module.patchQueue.push({
-    patches: [{ id: 0, value: JSON.stringify([{ id: "a", name: "A" }, { id: "c", name: "C" }]) }],
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a", name: "A" }, ["A"], []],
+        [{ id: "c", name: "C" }, ["C"], []],
+      ]),
+    }],
   });
   loader.applyPatches(element);
 
@@ -1935,6 +1960,209 @@ test("each patches reconcile keyed fragments and preserve unchanged nodes", asyn
   assert.equal(element.bindingTargets[0], anchor);
   assert.equal(anchor.nodeType, 8);
 });
+
+test("compiled rows mount nested lists with distinct outer and inner scopes", async () => {
+  const nestedComponent = {
+    tag_name: "nested-each-check",
+    class_name: "NestedEachCheck",
+    chi_file: "nested-each-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<div class="group"><span>\uE0020\uE003</span><!--mochi-each-1--></div>',
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [
+            {
+              id: 1,
+              template: "<li>\uE0020\uE003-\uE0021\uE003-\uE0022\uE003</li>",
+              bindings: [
+                { slot: 0, kind: "text", attr_name: null },
+                { slot: 1, kind: "text", attr_name: null },
+                { slot: 2, kind: "text", attr_name: null },
+              ],
+              children: [],
+            },
+          ],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([nestedComponent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [
+          { id: "g1", label: "G1" },
+          ["G1"],
+          [[[{ id: "c1", name: "c1", group: "g1" }, ["c1", "g1", 0], []]]],
+        ],
+        [
+          { id: "g2", label: "G2" },
+          ["G2"],
+          [[[{ id: "c2", name: "c2", group: "g2" }, ["c2", "g2", 1], []]]],
+        ],
+      ]),
+    }],
+  });
+
+  const element = document.createElement("nested-each-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const groups = Array.from(element.shadowRoot.querySelectorAll(".group"));
+  assert.deepEqual(groups.map((group) => group.querySelector("span").textContent), ["G1", "G2"]);
+  assert.deepEqual(
+    Array.from(element.shadowRoot.querySelectorAll("li")).map((item) => item.textContent),
+    ["c1-g1-0", "c2-g2-1"]
+  );
+  assert.equal(groups[0].textContent.indexOf("{"), -1);
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [
+          { id: "g1", label: "G1x" },
+          ["G1x"],
+          [[[{ id: "c1", name: "c1", group: "g1" }, ["c1", "g1", 0], []]]],
+        ],
+      ]),
+    }],
+  });
+  loader.applyPatches(element);
+
+  assert.equal(element.shadowRoot.querySelectorAll(".group").length, 1);
+  assert.equal(element.shadowRoot.querySelector("span").textContent, "G1x");
+  assert.equal(element.shadowRoot.querySelector("li").textContent, "c1-g1-0");
+});
+
+test("compiled row events pass outer and inner row values before the event payload", async () => {
+  const rowEventComponent = {
+    tag_name: "row-event-check",
+    class_name: "RowEventCheck",
+    chi_file: "row-event-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<div class="group"><!--mochi-each-1--></div>',
+          bindings: [],
+          children: [
+            {
+              id: 1,
+              template: '<button class="row" data-mochi-click="__mochi_each_1_ev_1">\uE0020\uE003</button>',
+              bindings: [{ slot: 0, kind: "text", attr_name: null }],
+              children: [],
+            },
+          ],
+        },
+      },
+    ],
+    events: [{ path: [0], event: "click", method_sym: "open_event", args: [] }],
+  };
+
+  const { module, log } = await setup([rowEventComponent]);
+  log.methods.add("open_event");
+  const outerItem = { id: "g1", name: "G1" };
+  const innerItem = { id: "c1", name: "C1" };
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [outerItem, [], [[[innerItem, ["C1"], []]]]],
+      ]),
+    }],
+  });
+
+  const element = document.createElement("row-event-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const button = element.shadowRoot.querySelector("button.row");
+  assert.ok(button);
+  assert.equal(button.textContent, "C1");
+  button.click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const wrapperSymbol = log.symbols.get("__mochi_each_1_ev_1");
+  assert.ok(wrapperSymbol);
+  const dispatched = log.dispatchedArgs.at(-1);
+  assert.equal(dispatched.methodSymbol, wrapperSymbol);
+  assert.deepEqual(dispatched.args.slice(0, 4), [outerItem, 0, innerItem, 0]);
+  assert.equal(dispatched.args[4].type, "click");
+});
+
+test("compiled row text and attributes escape interpolated values", async () => {
+  const escapeComponent = {
+    tag_name: "row-escape-check",
+    class_name: "RowEscapeCheck",
+    chi_file: "row-escape-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<li title="\uE0021\uE003">\uE0020\uE003</li>',
+          bindings: [
+            { slot: 0, kind: "text", attr_name: null },
+            { slot: 1, kind: "attr", attr_name: "title" },
+          ],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { module } = await setup([escapeComponent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a" }, ['<b>&" quoted</b>', "<attr>&\"'" ], []],
+      ]),
+    }],
+  });
+
+  const element = document.createElement("row-escape-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const item = element.shadowRoot.querySelector("li");
+  assert.equal(item.textContent, '<b>&" quoted</b>');
+  assert.equal(item.querySelector("b"), null);
+  assert.equal(item.getAttribute("title"), "<attr>&\"'");
+  assert.equal(item.textContent.indexOf("{"), -1);
+});
+
+
 
 test("template event arguments pass typed literals to the VM", async () => {
   const literalArguments = JSON.stringify([

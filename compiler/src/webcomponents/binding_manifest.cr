@@ -1,4 +1,5 @@
 require "../html/event_argument"
+require "../html/each_row_template"
 require "../html/template_expression"
 require "../ruby/inject_utils"
 require "../ruby/ruby_def"
@@ -18,6 +19,7 @@ struct BindingDescriptor
   property template_end : Int32?
   property scope : Array(String)
   property span : TemplateSourceSpan?
+  property each_rows : EachRowTemplate?
 
   def initialize(
     @id : Int32,
@@ -33,6 +35,7 @@ struct BindingDescriptor
     @template_end : Int32? = nil,
     @scope : Array(String) = [] of String,
     @span : TemplateSourceSpan? = nil,
+    @each_rows : EachRowTemplate? = nil,
   )
   end
 end
@@ -139,6 +142,10 @@ class RubyBindingRewriter
       setters = [] of String
 
       all_bindings.each do |binding|
+        # List rows own a generated rows getter; injecting `__mochi_bind_N`
+        # would either duplicate work or recurse through the same symbol.
+        next if binding.kind == "each" && binding.getter_sym.starts_with?("__mochi_each_")
+
         expression = expression_for(binding)
         io << "\n  def " << binding.getter_sym << "; " << expression << "; end\n"
 

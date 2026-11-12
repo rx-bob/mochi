@@ -164,6 +164,8 @@ class TemplateExpressionParser
   @parser : TreeSitter::RubyParser
   @locator : TemplateSourceLocator?
 
+  getter locator
+
   def initialize(@locator : TemplateSourceLocator? = nil)
     @parser = TreeSitter::RubyParser.new
   end

@@ -399,6 +399,9 @@ class MrbcCompiler
       if span = binding.span
         write_span(json, span)
       end
+      if rows = binding.each_rows
+        write_each_rows(json, rows)
+      end
 
       unless binding.branches.empty?
         json.field "branches" do
@@ -411,6 +414,38 @@ class MrbcCompiler
               end
             end
           end
+        end
+      end
+    end
+  end
+
+  private def write_each_rows(json : JSON::Builder, rows : EachRowTemplate) : Nil
+    json.field "each_rows" do
+      write_each_rows_object(json, rows)
+    end
+  end
+
+  private def write_each_rows_object(json : JSON::Builder, rows : EachRowTemplate) : Nil
+    json.object do
+      json.field "id", rows.block_id
+      json.field "template", rows.template
+      json.field "bindings" do
+        json.array do
+          rows.bindings.each do |binding|
+            json.object do
+              json.field "slot", binding.slot
+              json.field "kind", binding.kind
+              json.field "attr_name", binding.attr_name
+              if span = binding.span
+                write_span(json, span)
+              end
+            end
+          end
+        end
+      end
+      json.field "children" do
+        json.array do
+          rows.children.each { |child| write_each_rows_object(json, child) }
         end
       end
     end

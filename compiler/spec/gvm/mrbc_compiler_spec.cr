@@ -26,6 +26,30 @@ RUBY
     ],
     [] of EventDescriptor
   )
+  child_row = EachRowTemplate.new(
+    1,
+    "item[:children]",
+    "child",
+    "ci",
+    nil,
+    "<b>{child}</b>",
+    [EachRowBindingDescriptor.new(0, "text", nil, "child")],
+    [] of EachRowEventDescriptor,
+    [] of EachRowTemplate,
+    [EachRowScope.new("item", "index"), EachRowScope.new("child", "ci")]
+  )
+  each_row = EachRowTemplate.new(
+    0,
+    "@items",
+    "item",
+    "index",
+    nil,
+    "<span>{item[:name]}</span><!--mochi-each-1-->",
+    [EachRowBindingDescriptor.new(0, "text", nil, "item[:name]")],
+    [] of EachRowEventDescriptor,
+    [child_row],
+    [EachRowScope.new("item", "index")]
+  )
   bindings = [
     BindingDescriptor.new(
       0,
@@ -60,6 +84,22 @@ RUBY
       nil,
       "@query",
       "@query"
+    ),
+    BindingDescriptor.new(
+      4,
+      [3],
+      "each",
+      "__mochi_each_0_rows",
+      "item,index",
+      "<span>{item[:name]}</span>",
+      nil,
+      [] of ConditionalBranchDescriptor,
+      nil,
+      nil,
+      nil,
+      [] of String,
+      nil,
+      each_row
     ),
   ]
   events = [
@@ -180,6 +220,17 @@ describe MrbcCompiler do
 
       expr = bindings.find { |entry| entry.as_h["kind"].as_s == "expr" }.not_nil!
       expr.as_h["getter_expr"].as_s.should eq("@query")
+
+      each = bindings.find { |entry| entry.as_h["kind"].as_s == "each" }.not_nil!
+      each.as_h["getter_sym"].as_s.should eq("__mochi_each_0_rows")
+      rows = each.as_h["each_rows"].as_h
+      rows["id"].as_i.should eq(0)
+      rows["bindings"].as_a.first.as_h["slot"].as_i.should eq(0)
+      rows["children"].as_a.size.should eq(1)
+      child = rows["children"].as_a.first.as_h
+      child["id"].as_i.should eq(1)
+      child["template"].as_s.should eq("<b>{child}</b>")
+      child.has_key?("each_rows").should be_false
 
       events = component_json["events"].as_a
       events.first.as_h["event"].as_s.should eq("click")

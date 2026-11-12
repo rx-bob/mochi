@@ -27,8 +27,13 @@ class EachBlock
   property end_pos : Int32
   property content_start_pos : Int32
   property id : Int32
+  # Nested blocks extracted from this block's content, ordered by source
+  # position. Linking happens once at extraction time so callers do not need
+  # to compare positions from unrelated HTML fragments.
+  property children : Array(EachBlock)
 
   def initialize(@loop_def : EachLoopDef, @content : String, @start_pos : Int32, @end_pos : Int32, @content_start_pos : Int32, @id : Int32 = 0)
+    @children = [] of EachBlock
   end
 
   def contains?(other : EachBlock) : Bool
@@ -152,7 +157,41 @@ class EachProcessor
         pos += 1
       end
     end
+    link_nested_blocks(result)
     return result
+  end
+
+  # Assigns each extracted block to its smallest containing block. Blocks are
+  # extracted on their closing `{end}`, so the resulting root list follows
+  # source order only after sorting.
+  def self.link_nested_blocks(blocks : Array(EachBlock)) : Nil
+    blocks.each do |block|
+      block.children.clear
+    end
+
+    blocks.each do |block|
+      parent = nil
+      blocks.each do |candidate|
+        next if candidate == block
+        next unless candidate.contains?(block)
+        if parent.nil? || candidate.start_pos > parent.start_pos
+          parent = candidate
+        end
+      end
+      if parent
+        parent.children << block
+      end
+    end
+
+    blocks.each do |block|
+      block.children.sort_by!(&.start_pos)
+    end
+  end
+
+  def self.roots(blocks : Array(EachBlock)) : Array(EachBlock)
+    blocks.select do |block|
+      blocks.none? { |candidate| candidate != block && candidate.contains?(block) }
+    end.sort_by(&.start_pos)
   end
 
   def self.try_match_each_token(html : String, pos : Int32) : EachMatch?

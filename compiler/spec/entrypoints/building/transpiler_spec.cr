@@ -347,9 +347,119 @@ RUBY
       component = transpile_source(source, "EachEventsComponent")
       each_binding = component.manifest.bindings.find! { |b| b.kind == "each" }
       each_binding.attr_name.should eq("q,idx")
-      each_binding.template_text.not_nil!.should contain("data-mochi-click=\"toggle_pause\"")
+      each_binding.getter_expr.should eq("__mochi_each_0_rows")
+      each_binding.template_text.not_nil!.should contain("data-mochi-click=\"__mochi_each_0_ev_1\"")
+      each_binding.each_rows.not_nil!.events.first.handler.should eq("toggle_pause")
       component.manifest.event_names.should contain("click")
-      component.ruby_code.should_not contain("__mochi_each_")
+      component.ruby_code.should contain("def __mochi_each_0_rows")
+      component.ruby_code.should contain("def __mochi_each_0_ev_1(")
+      component.ruby_code.should contain("toggle_pause(q)")
+      component.ruby_code.should_not contain("data-mochi-args")
+    end
+
+    it "keeps repeated row event arguments attached to their own element" do
+      source = <<-RUBY
+class RepeatedRowEvents
+  @tag_name = "x-repeated-row-events"
+  @queues = []
+
+  def pick(value)
+  end
+
+  def html
+    %Q{
+      <div>
+        {each @queues as q}
+          <button class="first" onclick="{pick(q[:first])}">first</button>
+          <button class="second" onclick="{pick(q[:second])}">second</button>
+        {end}
+      </div>
+    }
+  end
+end
+RUBY
+
+      component = transpile_source(source, "RepeatedRowEvents")
+      binding = component.manifest.bindings.find! { |entry| entry.kind == "each" }
+      row = binding.each_rows.not_nil!
+      row.events.size.should eq(2)
+      row.events.map(&.handler).should eq(["pick", "pick"])
+      row.events.map { |event| event.args.map(&.value) }.should eq([
+        ["q[:first]"],
+        ["q[:second]"],
+      ])
+      row.events[0].wrapper_sym.should_not eq(row.events[1].wrapper_sym)
+    end
+
+    it "rejects unresolved names in list row bindings and event arguments" do
+      self_source = <<-RUBY
+class SelfRow
+  @tag_name = "x-self-row"
+  @items = []
+
+  def label_for(item)
+    item.to_s
+  end
+
+  def html
+    %Q{
+      <div>
+        {each @items as item}
+          <span>{self.label_for(item)}</span>
+        {end}
+      </div>
+    }
+  end
+end
+RUBY
+
+      transpile_source(self_source, "SelfRow").manifest.bindings
+        .any? { |binding| binding.kind == "each" }.should be_true
+
+      binding_source = <<-RUBY
+class BadRowBinding
+  @tag_name = "x-bad-row-binding"
+  @items = []
+
+  def html
+    %Q{
+      <ul>
+        {each @items as item}
+          <li><button>{missing_helper(item)}</button></li>
+        {end}
+      </ul>
+    }
+  end
+end
+RUBY
+
+      expect_raises(Exception, /list row uses undefined name 'missing_helper'/) do
+        transpile_source(binding_source, "BadRowBinding")
+      end
+
+      argument_source = <<-RUBY
+class BadRowArgument
+  @tag_name = "x-bad-row-argument"
+  @items = []
+
+  def html
+    %Q{
+      <div>
+        {each @items as item}
+          <button onclick="{pick(missing)}">pick</button>
+        {end}
+      </div>
+    }
+  end
+
+  def pick(value)
+  end
+end
+RUBY
+
+      expect_raises(Exception, /list row uses undefined name 'missing'/) do
+        transpile_source(argument_source, "BadRowArgument")
+      end
     end
 
     if real_mrbc = MrbcCompiler.find_mrbc
