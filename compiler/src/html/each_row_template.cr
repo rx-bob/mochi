@@ -3,12 +3,14 @@ require "./template_expression"
 
 # One scalar expression inside a compiled list row. `slot` is the position in
 # the row's evaluated value array; `kind` is `text`, `html`, or `attr`.
+# `trusted_markup` is true only for an explicit `Mochi.raw(...)` slot.
 struct EachRowBindingDescriptor
   getter slot : Int32
   getter kind : String
   getter attr_name : String?
   getter expression : String
   getter span : TemplateSourceSpan?
+  getter trusted_markup : Bool
 
   def initialize(
     @slot : Int32,
@@ -16,6 +18,7 @@ struct EachRowBindingDescriptor
     @attr_name : String?,
     @expression : String,
     @span : TemplateSourceSpan? = nil,
+    @trusted_markup : Bool = false,
   )
   end
 end

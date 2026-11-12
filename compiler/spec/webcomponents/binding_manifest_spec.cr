@@ -83,7 +83,7 @@ RUBY
     class_binding = manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == "class" }
     class_binding.getter_expr.should eq("box_class")
 
-    text_binding = manifest.bindings.find! { |binding| binding.kind == "html" }
+    text_binding = manifest.bindings.find! { |binding| binding.kind == "text" }
     text_binding.getter_expr.should eq("@label")
 
     rewritten = ComponentGenerator.new.rewrite_ruby(source, "MochiBox", manifest, methods)

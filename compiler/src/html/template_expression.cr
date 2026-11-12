@@ -131,6 +131,12 @@ end
 # interpolation are rejected at build time; interpolation belongs inside
 # helper methods, not in the template string.
 class TemplateExpressionParser
+  # The only construct that opts a template value into raw markup. It is
+  # recognized at compile time so ordinary values, including helper results,
+  # always stay text. `Mochi.raw` is a template escape hatch, not a sanitizer:
+  # callers must only pass markup they authored or already trust.
+  TRUSTED_MARKUP_PREFIX = "Mochi.raw("
+
   REJECTED_NODE_TYPES = Set{
     "assignment",
     "operator_assignment",
@@ -342,6 +348,22 @@ class TemplateExpressionParser
     arguments
   end
 
+  # Returns the wrapped expression when `source` is exactly
+  # `Mochi.raw(expression)`. A larger expression that merely contains
+  # `Mochi.raw(...)` is rejected during validation instead of silently losing
+  # its trust marker.
+  def self.trusted_markup_source(source : String) : String?
+    stripped = source.strip
+    return nil unless stripped.starts_with?(TRUSTED_MARKUP_PREFIX)
+    open = TRUSTED_MARKUP_PREFIX.bytesize - 1
+    close = matching_delimiter(stripped, open, 40, 41)
+    return nil unless close
+    return nil unless close == stripped.bytesize - 1
+
+    inner = stripped.byte_slice(open + 1, close - open - 1).strip
+    inner.empty? ? nil : inner
+  end
+
   def self.matching_brace(text : String, open : Int32) : Int32?
     matching_delimiter(text, open, 123, 125)
   end
@@ -401,6 +423,17 @@ class TemplateExpressionParser
         "unsupported #{node.type.gsub("_", " ")} in template expression #{expression.source.inspect}; move it into a helper method",
         expression.span
       )
+    end
+    if node.type == "call"
+      receiver = node.child_by_field_name("receiver")
+      method = node.child_by_field_name("method")
+      if receiver && method && receiver.text == "Mochi" && method.text == "raw" &&
+         TemplateExpressionParser.trusted_markup_source(expression.source).nil?
+        raise TemplateExpressionError.new(
+          "Mochi.raw must wrap the entire template expression, got #{expression.source.inspect}",
+          expression.span
+        )
+      end
     end
     node.each_named_child { |child| validate_node(child, expression) }
   end

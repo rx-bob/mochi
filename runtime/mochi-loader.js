@@ -882,12 +882,13 @@
       throw new Error("mochi-loader: missing binding path [" + path.join(", ") + "] for " + context);
     }
 
-    if (binding.kind === "html" && node.nodeType === 3) {
+    if ((binding.kind === "html" || binding.kind === "text_html") && node.nodeType === 3) {
       var span = global.document.createElement("span");
       span.textContent = node.textContent;
       node.parentNode.replaceChild(span, node);
       node = span;
-    } else if (binding.kind === "text" && node.nodeType === 3) {
+    }
+    if (binding.kind === "text" || binding.kind === "text_html") {
       textBindingState(node, binding);
     } else if (binding.kind === "attr" && node.nodeType === 1) {
       attrBindingState(node, binding);
@@ -1082,6 +1083,10 @@
   function addBindingEntry(state, binding) {
     if (state.ids.indexOf(binding.id) !== -1) return;
     state.ids.push(binding.id);
+    if (binding.trusted_markup) {
+      state.trusted = state.trusted || {};
+      state.trusted[binding.id] = true;
+    }
     var range = bindingRange(binding);
     if (range) state.entries.push(range);
   }
@@ -1116,9 +1121,22 @@
     };
   }
 
-  function substitute(state, values) {
+  function substitute(state, values, escapeMarkup) {
     var template = String(state.template || "");
     var result = "";
+
+    function literal(text) {
+      return escapeMarkup ? escapeHtmlText(text) : text;
+    }
+
+    function valueFor(id, fallback) {
+      if (id === undefined || !Object.prototype.hasOwnProperty.call(values, id)) {
+        return literal(fallback);
+      }
+      var value = values[id];
+      if (!escapeMarkup || (state.trusted && state.trusted[id])) return value;
+      return escapeHtmlText(value);
+    }
 
     // The compiler records the exact byte range of every placeholder. Using
     // those ranges avoids guessing again in the browser and keeps nested
@@ -1133,24 +1151,24 @@
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
         if (entry.start < cursor) continue;
-        result += template.slice(cursor, entry.start);
-        if (Object.prototype.hasOwnProperty.call(values, entry.id)) {
-          result += values[entry.id];
-        } else {
-          result += template.slice(entry.start, entry.end);
-        }
+        result += literal(template.slice(cursor, entry.start));
+        result += valueFor(entry.id, template.slice(entry.start, entry.end));
         cursor = entry.end;
       }
-      result += template.slice(cursor);
+      result += literal(template.slice(cursor));
       return unescapeBraces(result);
     }
 
     var index = 0;
-    result = template.replace(/\{([^}]+)\}/g, function (match) {
+    var fallbackCursor = 0;
+    template.replace(/\{([^}]+)\}/g, function (match, inner, offset) {
+      result += literal(template.slice(fallbackCursor, offset));
       var id = state.ids[index++];
-      if (id === undefined || !Object.prototype.hasOwnProperty.call(values, id)) return match;
-      return values[id];
+      result += valueFor(id, match);
+      fallbackCursor = offset + match.length;
+      return match;
     });
+    result += literal(template.slice(fallbackCursor));
     return unescapeBraces(result);
   }
 
@@ -1193,10 +1211,17 @@
     var state = textBindingState(target, binding);
     if (state.values[binding.id] === value) return;
     state.values[binding.id] = value;
-    target.textContent = substitute(state, state.values);
+    if (binding.kind === "text_html") {
+      target.innerHTML = substitute(state, state.values, true);
+    } else {
+      target.textContent = substitute(state, state.values, false);
+    }
   }
 
   function applyHtmlPatch(target, binding, value) {
+    if (!binding.trusted_markup) {
+      throw new Error("mochi-loader: html binding " + binding.id + " is missing trusted_markup");
+    }
     if (target.__mochiHtmlValue === value) return;
     target.__mochiHtmlValue = value;
     target.innerHTML = value;
@@ -1324,7 +1349,7 @@
   }
 
   function applyBindingValue(element, target, binding, value) {
-    if (binding.kind === "text") {
+    if (binding.kind === "text" || binding.kind === "text_html") {
       applyTextPatch(target, binding, value);
     } else if (binding.kind === "html") {
       applyHtmlPatch(target, binding, value);
@@ -1395,7 +1420,12 @@
         }
       }
       var text = displayRowValue(Array.isArray(values) ? values[slot] : undefined);
-      if (binding && binding.kind === "html") return text;
+      if (binding && binding.kind === "html") {
+        if (!binding.trusted_markup) {
+          throw new Error("mochi-loader: row html binding " + binding.slot + " is missing trusted_markup");
+        }
+        return text;
+      }
       if (binding && binding.kind === "attr") return escapeHtmlAttribute(text);
       return escapeHtmlText(text);
     });
@@ -1434,18 +1464,8 @@
     var item = row[0];
     var values = row[1] || [];
     var children = row[2] || [];
-    var html = renderRowTemplate(descriptor, values);
-    var bindings = descriptor.bindings || [];
     var childDescriptors = descriptor.children || [];
-    if (bindings.length === 0 && childDescriptors.length === 0 &&
-        descriptor.template.indexOf("\uE002") === -1) {
-      if (item && typeof item === "object" && typeof item.html === "string") {
-        html = item.html;
-      } else if (typeof item === "string") {
-        html = item;
-      }
-    }
-
+    var html = renderRowTemplate(descriptor, values);
     var fragment = fragmentFor(html);
     var outerNodes = Array.from(fragment.childNodes);
     var context = {

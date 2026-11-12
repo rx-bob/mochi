@@ -62,6 +62,13 @@ RUBY
     end
   end
 
+  it "requires Mochi.raw to wrap the whole expression" do
+    error = expect_raises(TemplateExpressionError) do
+      TemplateExpressionParser.new.scan(%q(<p>{"prefix " + Mochi.raw(@icon)}</p>), "text")
+    end
+    error.message.not_nil!.should contain("Mochi.raw must wrap the entire template expression")
+  end
+
   it "rejects an unclosed placeholder after a quoted brace" do
     error = expect_raises(TemplateExpressionError) do
       TemplateExpressionParser.new.scan(%q(<p>{wrap("}")</p>), "text")

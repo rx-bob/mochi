@@ -15,7 +15,7 @@ class FeatherIcon
   def html
     %Q{
       <div class="feather-icon">
-        {@rendered_svg}
+        {Mochi.raw(@rendered_svg)}
       </div>
     }
   end

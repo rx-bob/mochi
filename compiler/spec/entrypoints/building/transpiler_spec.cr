@@ -102,7 +102,7 @@ RUBY
       direct_class = manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == "data-direct" }
       direct_class.getter_expr.should eq("@box_class")
 
-      label_text = manifest.bindings.find! { |binding| binding.kind == "html" }
+      label_text = manifest.bindings.find! { |binding| binding.kind == "text" }
       label_text.getter_expr.should eq("@label")
 
       component.ruby_code.should contain("def #{class_binding.getter_sym}; box_class; end")

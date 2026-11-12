@@ -113,7 +113,24 @@ class EachRowCompiler
     bindings = [] of EachRowBindingDescriptor
     expressions.each_with_index do |expression, slot|
       kind, attr_name = classification[slot]? || {"text", nil}
-      bindings << EachRowBindingDescriptor.new(slot, kind, attr_name, expression.source, expression.span)
+      trusted_source = TemplateExpressionParser.trusted_markup_source(expression.source)
+      if trusted_source && kind == "attr"
+        raise TemplateExpressionError.new(
+          "Mochi.raw is only supported in text content, not in the #{attr_name} attribute",
+          expression.span
+        )
+      end
+      if trusted_source
+        kind = "html"
+      end
+      bindings << EachRowBindingDescriptor.new(
+        slot,
+        kind,
+        attr_name,
+        trusted_source || expression.source,
+        expression.span,
+        !trusted_source.nil?
+      )
     end
 
     children = block.children.map do |child|
@@ -205,9 +222,9 @@ class EachRowCompiler
     names
   end
 
-  # Uses the HTML parser only to decide whether a slot is a text value, an
-  # entire-text HTML value, or an attribute value. Slot placement is unique,
-  # so the classification survives regardless of surrounding markup.
+  # Uses the HTML parser only to decide whether a slot is text or an attribute
+  # value. Text is the default regardless of surrounding whitespace. The
+  # caller upgrades a slot to HTML only when `Mochi.raw(...)` wraps it.
   private def self.classify_slots(template : String) : Hash(Int32, Tuple(String, String?))
     result = {} of Int32 => Tuple(String, String?)
     body = Lexbor.new(template).body
@@ -223,9 +240,8 @@ class EachRowCompiler
       slots = slots_in(text)
       return if slots.empty?
 
-      whole_text = slots.size == 1 && text.strip == sentinel(slots.first)
       slots.each do |slot|
-        result[slot] = {whole_text ? "html" : "text", nil}
+        result[slot] = {"text", nil}
       end
       return
     end

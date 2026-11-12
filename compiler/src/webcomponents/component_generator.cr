@@ -138,11 +138,36 @@ class ComponentGenerator
   end
 
   private def collect_text_bindings(text : String, path : Array(Int32), bindings : Array(BindingDescriptor))
-    @expression_parser.scan(text, "text").each do |expression|
+    expressions = @expression_parser.scan(text, "text")
+    trusted_sources = {} of Int32 => String
+    expressions.each_with_index do |expression, index|
+      if source = TemplateExpressionParser.trusted_markup_source(expression.source)
+        trusted_sources[index] = source
+      end
+    end
+    has_trusted = !trusted_sources.empty?
+
+    expressions.each_with_index do |expression, index|
       before = text.byte_slice(0, expression.template_start).strip
       after = text.byte_slice(expression.template_end, text.bytesize - expression.template_end).strip
-      kind = before.empty? && after.empty? ? "html" : "text"
-      bindings << new_expression_binding(path, kind, nil, text, expression)
+      standalone = before.empty? && after.empty?
+      trusted_source = trusted_sources[index]?
+      kind = if standalone && trusted_source
+               "html"
+             elsif has_trusted
+               "text_html"
+             else
+               "text"
+             end
+      bindings << new_expression_binding(
+        path,
+        kind,
+        nil,
+        text,
+        expression,
+        trusted_markup: !trusted_source.nil?,
+        expression_override: trusted_source
+      )
     end
   end
 
@@ -273,6 +298,12 @@ class ComponentGenerator
     bindings : Array(BindingDescriptor),
   )
     @expression_parser.scan(value, "attribute").each do |expression|
+      if TemplateExpressionParser.trusted_markup_source(expression.source)
+        raise TemplateExpressionError.new(
+          "Mochi.raw is only supported in text content, not in the #{attr_name} attribute",
+          expression.span
+        )
+      end
       bindings << new_expression_binding(path, "attr", attr_name, value, expression)
     end
   end
@@ -396,6 +427,8 @@ class ComponentGenerator
     expression : TemplateExpression,
     branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
     setter_sym : String? = nil,
+    trusted_markup : Bool = false,
+    expression_override : String? = nil,
   ) : BindingDescriptor
     id = allocate_binding_id
     BindingDescriptor.new(
@@ -405,13 +438,14 @@ class ComponentGenerator
       "__mochi_bind_#{id}",
       attr_name,
       template_text,
-      normalize_expression(expression.source),
+      normalize_expression(expression_override || expression.source),
       branches,
       setter_sym,
       expression.template_start,
       expression.template_end,
       expression.scope,
-      expression.span
+      expression.span,
+      trusted_markup: trusted_markup
     )
   end
 

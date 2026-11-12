@@ -41,7 +41,7 @@ describe ComponentGenerator do
     manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
 
     binding = manifest.bindings.first
-    binding.kind.should eq("html")
+    binding.kind.should eq("text")
     binding.getter_expr.should eq(%q(format(@h["key"], {a: 1, b: "}"})))
     binding.template_start.should eq(0)
     binding.template_end.should eq(binding.template_text.not_nil!.bytesize)
@@ -155,7 +155,7 @@ describe ComponentGenerator do
     end
   end
 
-  it "uses method calls for bare text bindings" do
+  it "uses method calls for bare text bindings and keeps them textual" do
     manifest = ComponentGenerator.new.generate(
       "TestCmp",
       "test-cmp",
@@ -164,7 +164,8 @@ describe ComponentGenerator do
     )
 
     binding = manifest.bindings.first
-    binding.kind.should eq("html")
+    binding.kind.should eq("text")
+    binding.trusted_markup.should be_false
     binding.path.should eq([0, 0])
     binding.getter_expr.should eq("rendered_svg")
   end
@@ -178,8 +179,58 @@ describe ComponentGenerator do
     )
 
     binding = manifest.bindings.first
-    binding.kind.should eq("html")
+    binding.kind.should eq("text")
+    binding.trusted_markup.should be_false
     binding.getter_expr.should eq("@rendered_svg")
+  end
+
+  it "marks only explicit Mochi.raw calls as trusted markup" do
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      %(<div>{Mochi.raw(@rendered_svg)}</div><p>{Mochi.raw(rendered_svg)}</p>)
+    )
+
+    standalone = manifest.bindings[0]
+    standalone.kind.should eq("html")
+    standalone.trusted_markup.should be_true
+    standalone.getter_expr.should eq("@rendered_svg")
+
+    method = manifest.bindings[1]
+    method.kind.should eq("html")
+    method.trusted_markup.should be_true
+    method.getter_expr.should eq("rendered_svg")
+  end
+
+  it "keeps mixed trusted and ordinary text in one escaped node" do
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      %(<div>Status {Mochi.raw(icon)} and {message}</div>)
+    )
+
+    trusted = manifest.bindings[0]
+    trusted.kind.should eq("text_html")
+    trusted.trusted_markup.should be_true
+    trusted.getter_expr.should eq("icon")
+
+    ordinary = manifest.bindings[1]
+    ordinary.kind.should eq("text_html")
+    ordinary.trusted_markup.should be_false
+    ordinary.getter_expr.should eq("message")
+  end
+
+  it "rejects Mochi.raw in attribute values" do
+    expect_raises(Exception, "Mochi.raw is only supported in text content") do
+      ComponentGenerator.new.generate(
+        "TestCmp",
+        "test-cmp",
+        "",
+        %(<div title="{Mochi.raw(label)}">Box</div>)
+      )
+    end
   end
 
   it "uses method calls for bare attribute bindings" do

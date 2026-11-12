@@ -20,6 +20,7 @@ struct BindingDescriptor
   property scope : Array(String)
   property span : TemplateSourceSpan?
   property each_rows : EachRowTemplate?
+  property trusted_markup : Bool
 
   def initialize(
     @id : Int32,
@@ -36,6 +37,7 @@ struct BindingDescriptor
     @scope : Array(String) = [] of String,
     @span : TemplateSourceSpan? = nil,
     @each_rows : EachRowTemplate? = nil,
+    @trusted_markup : Bool = false,
   )
   end
 end

@@ -74,6 +74,29 @@ end
 
 ```
 
+### Trusted markup
+
+Template values are text by default, whether they stand alone, sit inside a
+sentence, or come from an `each` row. A string containing `<b>`, quotes, or an
+event-handler attribute is displayed literally.
+
+Use `Mochi.raw(expression)` when an app-authored value intentionally contains
+markup, such as an inline SVG icon:
+
+```ruby
+def html
+  %Q{
+    <span class="icon">{Mochi.raw(IconLibrary.svg("settings"))}</span>
+    <span>Status: {@status}</span>
+  }
+end
+```
+
+`Mochi.raw` is a compilation-time escape hatch, not a sanitizer. Only wrap
+markup your app authored or already trusts. It is accepted in text content,
+including list rows, and rejected in attribute values. Values without it never
+create elements or event handlers.
+
 ### Component lifecycle
 
 Moving a connected component between positions in the same turn preserves its Ruby instance, state, timers, and event handlers; `unmounted` and `mounted` do not run again. If the element stays disconnected through that turn, the loader disposes it once and runs `unmounted`. Reinserting it afterwards performs a fresh mount from `initialize`, rebuilding props, bindings, and handlers.

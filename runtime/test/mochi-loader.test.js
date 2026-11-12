@@ -1283,7 +1283,7 @@ test("binding paths resolve through text nodes and comments exactly as emitted",
     bindings: [
       { id: 7, path: [1, 0, 0], kind: "text", attr_name: null, template_text: "text", getter_sym: "__mochi_bind_7" },
       { id: 8, path: [3], kind: "cond", attr_name: null, template_text: "<p>shown</p>", getter_sym: "__mochi_bind_8" },
-      { id: 9, path: [5, 0], kind: "html", attr_name: null, template_text: "{html}", getter_sym: "__mochi_bind_9" },
+      { id: 9, path: [5, 0], kind: "text_html", attr_name: null, template_text: "{html}", getter_sym: "__mochi_bind_9" },
     ],
     events: [],
   };
@@ -1919,7 +1919,7 @@ test("html and attribute patches update their cached targets", async () => {
     html_template: '<span class="icon">{rendered_svg}</span>',
     css: "",
     bindings: [
-      { id: 0, path: [0, 0], kind: "html", attr_name: null, template_text: "{rendered_svg}", getter_sym: "__mochi_bind_0" },
+      { id: 0, path: [0, 0], kind: "html", trusted_markup: true, attr_name: null, template_text: "{rendered_svg}", getter_sym: "__mochi_bind_0" },
     ],
     events: [],
   };
@@ -1956,6 +1956,171 @@ test("html and attribute patches update their cached targets", async () => {
   loader.applyPatches(attrElement);
   assert.equal(link.hasAttribute("href"), false);
   assert.equal(attrElement.bindingTargets[0], link);
+});
+
+test("ordinary text bindings stay literal and only trusted markup creates elements", async () => {
+  const component = {
+    tag_name: "trusted-text-check",
+    class_name: "TrustedTextCheck",
+    chi_file: "trusted-text-check.chi",
+    html_template:
+      '<div class="ordinary">{value}</div>' +
+      '<div class="mixed">Before {plain} {Mochi.raw(svg)} after</div>',
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0, 0],
+        kind: "text",
+        attr_name: null,
+        template_text: "{value}",
+        getter_sym: "__mochi_bind_0",
+      },
+      {
+        id: 1,
+        path: [1, 0],
+        kind: "text_html",
+        attr_name: null,
+        template_text: "Before {plain} {Mochi.raw(svg)} after",
+        template_start: 7,
+        template_end: 14,
+        getter_sym: "__mochi_bind_1",
+      },
+      {
+        id: 2,
+        path: [1, 0],
+        kind: "text_html",
+        trusted_markup: true,
+        attr_name: null,
+        template_text: "Before {plain} {Mochi.raw(svg)} after",
+        template_start: 15,
+        template_end: 31,
+        getter_sym: "__mochi_bind_2",
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([component]);
+  const hostile = '<b class="bad">& "quoted"</b><img src=x onerror="global.__mochiPwned=1">';
+  module.patchQueue.push({
+    patches: [
+      { id: 0, value: hostile },
+      { id: 1, value: "<em>plain</em> & \"quoted\"" },
+      { id: 2, value: '<svg class="icon"><circle></circle></svg>' },
+    ],
+  });
+
+  const element = document.createElement("trusted-text-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const ordinary = element.shadowRoot.querySelector(".ordinary");
+  assert.equal(ordinary.textContent, hostile);
+  assert.equal(ordinary.querySelector("b"), null);
+  assert.equal(ordinary.querySelector("img"), null);
+  assert.equal(global.__mochiPwned, undefined);
+
+  const mixed = element.shadowRoot.querySelector(".mixed");
+  assert.equal(mixed.querySelector("em"), null);
+  assert.equal(mixed.querySelector(".icon").tagName.toLowerCase(), "svg");
+  assert.equal(mixed.textContent, 'Before <em>plain</em> & "quoted"  after');
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "next & <tag>" }] });
+  loader.applyPatches(element);
+  assert.equal(mixed.querySelector("em"), null);
+  assert.equal(mixed.querySelector("tag"), null);
+  assert.equal(mixed.textContent, 'Before next & <tag>  after');
+  assert.equal(mixed.querySelector(".icon").tagName.toLowerCase(), "svg");
+});
+
+test("trusted row slots render markup while row item html strings stay data", async () => {
+  const component = {
+    tag_name: "trusted-row-check",
+    class_name: "TrustedRowCheck",
+    chi_file: "trusted-row-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<li class="row">\uE0020\uE003</li>',
+          bindings: [{ slot: 0, kind: "html", trusted_markup: true, attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { module } = await setup([component]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a" }, ['<svg class="icon"><circle></circle></svg>'], []],
+        [{ id: "b", html: '<button class="injected" onclick="global.__mochiPwned=1">bad</button>' }, ["plain"], []],
+        ["<button class=\"string-injected\">bad</button>", ["string plain"], []],
+      ]),
+    }],
+  });
+
+  const element = document.createElement("trusted-row-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const rows = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].querySelector(".icon").tagName.toLowerCase(), "svg");
+  assert.equal(rows[1].textContent, "plain");
+  assert.equal(rows[1].querySelector("button"), null);
+  assert.equal(rows[2].textContent, "string plain");
+  assert.equal(rows[2].querySelector("button"), null);
+  assert.equal(global.__mochiPwned, undefined);
+});
+
+test("row html bindings without trusted markup are rejected", async () => {
+  const component = {
+    tag_name: "untrusted-row-check",
+    class_name: "UntrustedRowCheck",
+    chi_file: "untrusted-row-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<li class="row">\uE0020\uE003</li>',
+          bindings: [{ slot: 0, kind: "html", attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { module } = await setup([component]);
+  module.patchQueue.push({
+    patches: [{ id: 0, value: JSON.stringify([[{ id: "a" }, ["<b>bad</b>"], []]]) }],
+  });
+
+  const element = document.createElement("untrusted-row-check");
+  document.body.appendChild(element);
+  await assert.rejects(element._mochiReady, /missing trusted_markup/);
+  assert.equal(element.shadowRoot.querySelector("b"), null);
 });
 
 test("each patches reconcile keyed fragments and preserve unchanged nodes", async () => {

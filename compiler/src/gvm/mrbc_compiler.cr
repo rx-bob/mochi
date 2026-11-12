@@ -450,6 +450,7 @@ class MrbcCompiler
         end
       end
       json.field "kind", binding.kind
+      json.field "trusted_markup", true if binding.trusted_markup
       json.field "attr_name", binding.attr_name
       json.field "template_text", binding.template_text
       json.field "getter_sym", binding.getter_sym
@@ -509,6 +510,7 @@ class MrbcCompiler
             json.object do
               json.field "slot", binding.slot
               json.field "kind", binding.kind
+              json.field "trusted_markup", true if binding.trusted_markup
               json.field "attr_name", binding.attr_name
               if span = binding.span
                 write_span(json, span)

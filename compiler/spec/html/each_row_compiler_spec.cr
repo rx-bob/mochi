@@ -45,7 +45,9 @@ describe EachRowCompiler do
 
     titles = child.bindings.select { |binding| binding.attr_name == "title" }
     titles.map(&.expression).should eq(["child", %Q{ev["id"]}])
-    child.bindings.find! { |binding| binding.kind == "html" }.expression.should eq("label(ev, idx)")
+    label_binding = child.bindings.find! { |binding| binding.expression == "label(ev, idx)" }
+    label_binding.kind.should eq("text")
+    label_binding.trusted_markup.should be_false
 
     event = child.all_events.first
     event.event.should eq("click")
@@ -87,6 +89,33 @@ describe EachRowCompiler do
     row.scope_names.should eq(["item", "index"])
     row.bindings.map(&.expression).should eq([%Q{item[:kind]}, %Q{item[:label]}, "index"])
     row.bindings.map(&.kind).should eq(["attr", "text", "text"])
+  end
+
+  it "keeps row text ordinary unless Mochi.raw wraps it" do
+    row = compile_row_template(%Q{
+      {each @items as item}
+        <li>{item[:label]}</li>
+        <li>Status {Mochi.raw(item[:svg])} and {item[:note]}</li>
+      {end}
+    })
+
+    row.bindings.map(&.kind).should eq(["text", "html", "text"])
+    row.bindings.map(&.trusted_markup).should eq([false, true, false])
+    row.bindings.map(&.expression).should eq([
+      %Q{item[:label]},
+      %Q{item[:svg]},
+      %Q{item[:note]},
+    ])
+  end
+
+  it "rejects Mochi.raw in row attributes" do
+    expect_raises(TemplateExpressionError, "Mochi.raw is only supported in text content") do
+      compile_row_template(%Q{
+        {each @items as item}
+          <li title="{Mochi.raw(item[:title])}">row</li>
+        {end}
+      })
+    end
   end
 
   it "rejects leftover control blocks inside a row" do
