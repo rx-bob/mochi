@@ -2365,7 +2365,7 @@ test("compiled row text and attributes escape interpolated values", async () => 
         getter_sym: "__mochi_each_0_rows",
         each_rows: {
           id: 0,
-          template: '<li title="\uE0021\uE003">\uE0020\uE003</li>',
+          template: '<li title="\uE0021\uE003" data-literal="\uE000literal\uE001">\uE0020\uE003</li>',
           bindings: [
             { slot: 0, kind: "text", attr_name: null },
             { slot: 1, kind: "attr", attr_name: "title" },
@@ -2395,10 +2395,441 @@ test("compiled row text and attributes escape interpolated values", async () => 
   assert.equal(item.textContent, '<b>&" quoted</b>');
   assert.equal(item.querySelector("b"), null);
   assert.equal(item.getAttribute("title"), "<attr>&\"'");
+  assert.equal(item.getAttribute("data-literal"), "{literal}");
   assert.equal(item.textContent.indexOf("{"), -1);
 });
 
 
+
+test("keyed rows patch scalar slots without replacing inputs, focus, or selection", async () => {
+  const keyedComponent = {
+    tag_name: "keyed-draft-check",
+    class_name: "KeyedDraftCheck",
+    chi_file: "keyed-draft-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          keyed: true,
+          source: { file: "lib/keyed_drafts.rb", line: 4, column: 7 },
+          template: '<li class="row"><input class="draft"><span class="label">\uE0020\uE003</span></li>',
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([keyedComponent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a" }, ["Alpha"], [], "a"],
+        [{ id: "b" }, ["Beta"], [], "b"],
+      ]),
+    }],
+  });
+  const element = document.createElement("keyed-draft-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const row = element.shadowRoot.querySelector("li.row");
+  const input = row.querySelector("input.draft");
+  input.value = "draft-a";
+  input.focus();
+  input.setSelectionRange(1, 3);
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a", changed: true }, ["Alpha changed"], [], "a"],
+        [{ id: "b" }, ["Beta"], [], "b"],
+      ]),
+    }],
+  });
+  loader.applyPatches(element);
+
+  assert.equal(element.shadowRoot.querySelector("li.row"), row);
+  assert.equal(row.querySelector("input.draft"), input);
+  assert.equal(input.value, "draft-a");
+  assert.equal(element.shadowRoot.activeElement, input);
+  assert.equal(input.selectionStart, 1);
+  assert.equal(input.selectionEnd, 3);
+  assert.equal(row.querySelector(".label").textContent, "Alpha changed");
+});
+
+test("keyed row moves preserve child component state and dispose removed rows once", async () => {
+  const rowChild = {
+    tag_name: "row-child-probe",
+    class_name: "RowChildProbe",
+    chi_file: "row-child-probe.chi",
+    html_template: '<span class="child-state">child</span>',
+    css: "",
+    bindings: [],
+    events: [],
+  };
+  const movingParent = {
+    tag_name: "keyed-move-check",
+    class_name: "KeyedMoveCheck",
+    chi_file: "keyed-move-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          keyed: true,
+          template: '<li class="row"><row-child-probe></row-child-probe><span class="label">\uE0020\uE003</span></li>',
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module, log } = await setup([rowChild, movingParent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "a" }, ["Alpha"], [], "a"],
+        [{ id: "b" }, ["Beta"], [], "b"],
+      ]),
+    }],
+  });
+  const element = document.createElement("keyed-move-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const rows = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  const children = rows.map((row) => row.querySelector("row-child-probe"));
+  await Promise.all(children.map((child) => child._mochiReady));
+  const childInstances = children.map((child) => child._mochiInstance);
+  const unmountCount = log.unmounts.length;
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [{ id: "b" }, ["Beta changed"], [], "b"],
+        [{ id: "a" }, ["Alpha"], [], "a"],
+      ]),
+    }],
+  });
+  loader.applyPatches(element);
+  await flushLifecycle();
+
+  const reordered = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  assert.equal(reordered[0], rows[1]);
+  assert.equal(reordered[1], rows[0]);
+  assert.equal(reordered[0].querySelector("row-child-probe"), children[1]);
+  assert.equal(reordered[1].querySelector("row-child-probe"), children[0]);
+  assert.deepEqual(children.map((child) => child._mochiInstance), childInstances);
+  assert.equal(log.unmounts.length, unmountCount);
+  assert.equal(reordered[0].querySelector(".label").textContent, "Beta changed");
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[{ id: "b" }, ["Beta changed"], [], "b"]]),
+    }],
+  });
+  loader.applyPatches(element);
+  await flushLifecycle();
+
+  assert.equal(element.shadowRoot.querySelectorAll("li.row").length, 1);
+  assert.equal(log.unmounts.length, unmountCount + 1);
+});
+
+test("prepend, reverse, and remove keep keyed node identity and current event indexes", async () => {
+  const eventRows = {
+    tag_name: "keyed-event-check",
+    class_name: "KeyedEventCheck",
+    chi_file: "keyed-event-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          keyed: true,
+          template: '<li class="row"><button class="open" data-mochi-click="__mochi_each_0_ev_1">\uE0020\uE003</button></li>',
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [{ path: [0], event: "click", method_sym: "open_event", args: [] }],
+  };
+
+  const { loader, module, log } = await setup([eventRows]);
+  const itemA = { id: "a" };
+  const itemB = { id: "b" };
+  const itemC = { id: "c" };
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[itemA, ["A"], [], "a"], [itemB, ["B"], [], "b"]]),
+    }],
+  });
+  const element = document.createElement("keyed-event-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const rowA = element.shadowRoot.querySelectorAll("li.row")[0];
+  const rowB = element.shadowRoot.querySelectorAll("li.row")[1];
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[itemB, ["B"], [], "b"], [itemA, ["A"], [], "a"]]),
+    }],
+  });
+  loader.applyPatches(element);
+  assert.equal(element.shadowRoot.querySelectorAll("li.row")[0], rowB);
+  assert.equal(element.shadowRoot.querySelectorAll("li.row")[1], rowA);
+
+  rowA.querySelector("button.open").click();
+  await flushLifecycle();
+  let dispatched = log.dispatchedArgs.at(-1);
+  assert.deepEqual(dispatched.args.slice(0, 2), [itemA, 1]);
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([
+        [itemC, ["C"], [], "c"],
+        [itemA, ["A"], [], "a"],
+        [itemB, ["B"], [], "b"],
+      ]),
+    }],
+  });
+  loader.applyPatches(element);
+  const prepended = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  assert.equal(prepended[1], rowA);
+  assert.equal(prepended[2], rowB);
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[itemC, ["C"], [], "c"], [itemB, ["B"], [], "b"]]),
+    }],
+  });
+  loader.applyPatches(element);
+  const remaining = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  assert.equal(remaining[0], prepended[0]);
+  assert.equal(remaining[1], rowB);
+  assert.equal(remaining.includes(rowA), false);
+
+  remaining[1].querySelector("button.open").click();
+  await flushLifecycle();
+  dispatched = log.dispatchedArgs.at(-1);
+  assert.deepEqual(dispatched.args.slice(0, 2), [itemB, 1]);
+});
+
+test("duplicate keyed rows fail before DOM changes and a later patch recovers", async () => {
+  const duplicateComponent = {
+    tag_name: "keyed-duplicate-check",
+    class_name: "KeyedDuplicateCheck",
+    chi_file: "keyed-duplicate-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          keyed: true,
+          source: { file: "lib/keyed_duplicate.rb", line: 7, column: 3 },
+          template: '<li class="row">\uE0020\uE003</li>',
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([duplicateComponent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[{ id: "a" }, ["A"], [], "a"], [{ id: "b" }, ["B"], [], "b"]]),
+    }],
+  });
+  const element = document.createElement("keyed-duplicate-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const rowsBefore = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  const anchor = element.bindingTargets[0];
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[{ id: "a" }, ["A"], [], "a"], [{ id: "c" }, ["C"], [], "a"]]),
+    }],
+  });
+  assert.throws(
+    () => loader.applyPatches(element),
+    /duplicate list key "a" at rows 0 and 1 in lib\/keyed_duplicate\.rb:7:3/
+  );
+  assert.deepEqual(Array.from(element.shadowRoot.querySelectorAll("li.row")), rowsBefore);
+  assert.equal(anchor.__mochiEach.items.size, 2);
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[{ id: "a" }, ["A2"], [], "a"], [{ id: "c" }, ["C"], [], "c"]]),
+    }],
+  });
+  loader.applyPatches(element);
+  const recovered = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  assert.equal(recovered[0], rowsBefore[0]);
+  assert.deepEqual(recovered.map((row) => row.textContent), ["A2", "C"]);
+});
+
+test("trusted row html slots patch between markers without replacing siblings", async () => {
+  const htmlSlotComponent = {
+    tag_name: "keyed-html-slot-check",
+    class_name: "KeyedHtmlSlotCheck",
+    chi_file: "keyed-html-slot-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          keyed: true,
+          template: '<li class="row"><input class="keep"><span class="slot">\uE0020\uE003</span></li>',
+          bindings: [{ slot: 0, kind: "html", trusted_markup: true, attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([htmlSlotComponent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[{ id: "a" }, ["<b>one</b>"], [], "a"]]),
+    }],
+  });
+  const element = document.createElement("keyed-html-slot-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const row = element.shadowRoot.querySelector("li.row");
+  const input = row.querySelector("input.keep");
+  const slot = row.querySelector("span.slot");
+  assert.equal(slot.querySelector("b").textContent, "one");
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([[{ id: "a" }, ["<i>two</i>"], [], "a"]]),
+    }],
+  });
+  loader.applyPatches(element);
+
+  assert.equal(element.shadowRoot.querySelector("li.row"), row);
+  assert.equal(row.querySelector("input.keep"), input);
+  assert.equal(row.querySelector("span.slot"), slot);
+  assert.equal(slot.querySelector("b"), null);
+  assert.equal(slot.querySelector("i").textContent, "two");
+});
+
+test("unkeyed rows keep positional identity while patching values", async () => {
+  const positionalComponent = {
+    tag_name: "positional-row-check",
+    class_name: "PositionalRowCheck",
+    chi_file: "positional-row-check.chi",
+    html_template: "<!--each-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "each",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_each_0_rows",
+        each_rows: {
+          id: 0,
+          template: '<li class="row">\uE0020\uE003</li>',
+          bindings: [{ slot: 0, kind: "text", attr_name: null }],
+          children: [],
+        },
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module } = await setup([positionalComponent]);
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([["first", ["one"], []], ["second", ["two"], []]]),
+    }],
+  });
+  const element = document.createElement("positional-row-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const first = element.shadowRoot.querySelectorAll("li.row")[0];
+  const second = element.shadowRoot.querySelectorAll("li.row")[1];
+
+  module.patchQueue.push({
+    patches: [{
+      id: 0,
+      value: JSON.stringify([["first", ["one changed"], []], ["second", ["two"], []]]),
+    }],
+  });
+  loader.applyPatches(element);
+
+  const rows = Array.from(element.shadowRoot.querySelectorAll("li.row"));
+  assert.equal(rows[0], first);
+  assert.equal(rows[1], second);
+  assert.equal(rows[0].textContent, "one changed");
+  assert.equal(rows[1].textContent, "two");
+});
 
 test("template event arguments pass typed literals to the VM", async () => {
   const literalArguments = JSON.stringify([

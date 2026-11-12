@@ -102,7 +102,12 @@ class EachMethodGenerator
     lines << "#{indent}  #{result}.push(["
     lines << "#{indent}    #{item_param},"
     lines << "#{indent}    [#{values}],"
-    lines << "#{indent}    [#{child_results.join(", ")}]"
+    if key = row.key_expression
+      lines << "#{indent}    [#{child_results.join(", ")}],"
+      lines << "#{indent}    (#{key})"
+    else
+      lines << "#{indent}    [#{child_results.join(", ")}]"
+    end
     lines << "#{indent}  ])"
     lines << "#{indent}end"
     lines.join("\n")

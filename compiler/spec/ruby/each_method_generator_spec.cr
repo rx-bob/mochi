@@ -74,6 +74,28 @@ describe EachMethodGenerator do
     code.should contain("[__mochi_rows_1]")
   end
 
+  it "evaluates an explicit row key as the fourth tuple element" do
+    row = EachRowTemplate.new(
+      4,
+      "@items",
+      "item",
+      "index",
+      nil,
+      "<li></li>",
+      [EachRowBindingDescriptor.new(0, "text", nil, "item[:name]")],
+      [] of EachRowEventDescriptor,
+      [] of EachRowTemplate,
+      [EachRowScope.new("item", "index", nil)],
+      %Q{item[:id]}
+    )
+
+    code = EachMethodGenerator.generate_rows_method(row)
+
+    code.should contain("__mochi_rows_4.push([")
+    code.should contain("[item[:name]],")
+    code.should contain("        [],\n        (item[:id])")
+  end
+
   it "generates lexical aliases and argument expressions for row events" do
     outer_scope = [EachRowScope.new("ev", "index", nil)]
     inner_scope = outer_scope + [EachRowScope.new("child", "k", "k")]

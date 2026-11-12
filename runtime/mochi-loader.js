@@ -1364,13 +1364,13 @@
     }
   }
 
-  function itemKey(item, index) {
-    if (item && typeof item === "object") {
-      if (item.key !== undefined && item.key !== null) return String(item.key);
-      if (item.id !== undefined && item.id !== null) return String(item.id);
-    }
-    return String(index);
-  }
+  var ROW_SENTINEL_PATTERN = /\uE002(\d+)\uE003/g;
+  var ROW_TEXT_MARKER = "mochi-row-text-";
+  var ROW_HTML_START_MARKER = "mochi-row-html-start-";
+  var ROW_HTML_END_MARKER = "mochi-row-html-end-";
+  var ROW_START_MARKER = "mochi-row-start";
+  var ROW_END_MARKER = "mochi-row-end";
+  var LIST_START_MARKER = "mochi-list-start";
 
   function eachRowDescriptor(binding) {
     var rows = binding && binding.each_rows;
@@ -1407,113 +1407,372 @@
     return String(value);
   }
 
-  function renderRowTemplate(descriptor, values) {
-    var template = descriptor.template || "";
-    var bindings = descriptor.bindings || [];
-    var rendered = template.replace(/\uE002(\d+)\uE003/g, function (match, rawSlot) {
-      var slot = Number(rawSlot);
-      var binding = null;
-      for (var i = 0; i < bindings.length; i++) {
-        if (bindings[i].slot === slot) {
-          binding = bindings[i];
-          break;
-        }
-      }
-      var text = displayRowValue(Array.isArray(values) ? values[slot] : undefined);
-      if (binding && binding.kind === "html") {
+  function rowTemplateMarkup(descriptor) {
+    var bySlot = {};
+    (descriptor.bindings || []).forEach(function (binding) {
+      bySlot[binding.slot] = binding;
+    });
+    return String(descriptor.template || "").replace(ROW_SENTINEL_PATTERN, function (match, rawSlot) {
+      var binding = bySlot[Number(rawSlot)];
+      if (!binding) return match;
+      if (binding.kind === "html") {
         if (!binding.trusted_markup) {
           throw new Error("mochi-loader: row html binding " + binding.slot + " is missing trusted_markup");
         }
-        return text;
+        return "<!--" + ROW_HTML_START_MARKER + binding.slot + "--><!--" +
+          ROW_HTML_END_MARKER + binding.slot + "-->";
       }
-      if (binding && binding.kind === "attr") return escapeHtmlAttribute(text);
-      return escapeHtmlText(text);
+      if (binding.kind === "attr") return match;
+      return "<!--" + ROW_TEXT_MARKER + binding.slot + "-->";
     });
-    return unescapeBraces(rendered);
   }
 
-  function rowSignature(row) {
-    try {
-      return JSON.stringify(row);
-    } catch (error) {
-      return "";
-    }
-  }
-
-  function findEachAnchor(root, blockId) {
-    var wanted = "mochi-each-" + blockId;
+  function findCommentNode(root, value) {
     var stack = [root];
     while (stack.length > 0) {
       var node = stack.pop();
       var children = node.childNodes || [];
       for (var i = 0; i < children.length; i++) {
         var child = children[i];
-        if (child.nodeType === 8 && child.nodeValue === wanted) return child;
+        if (child.nodeType === 8 && child.nodeValue === value) return child;
         if (child.childNodes && child.childNodes.length > 0) stack.push(child);
       }
     }
     return null;
   }
 
-  function buildEachRow(element, descriptor, row, index, parentContext) {
-    if (!Array.isArray(row) || row.length < 2) {
-      throw new Error("mochi-loader: invalid list row for binding descriptor " + descriptor.id +
-        " at index " + index);
-    }
+  function findEachAnchor(root, blockId) {
+    return findCommentNode(root, "mochi-each-" + blockId);
+  }
 
-    var item = row[0];
-    var values = row[1] || [];
-    var children = row[2] || [];
-    var childDescriptors = descriptor.children || [];
-    var html = renderRowTemplate(descriptor, values);
-    var fragment = fragmentFor(html);
-    var outerNodes = Array.from(fragment.childNodes);
+  function unescapeRowText(root) {
+    var stack = [root];
+    while (stack.length > 0) {
+      var node = stack.pop();
+      if (node.nodeType === 3) node.nodeValue = unescapeBraces(node.nodeValue);
+      var children = node.childNodes || [];
+      for (var i = 0; i < children.length; i++) {
+        if (children[i].childNodes && children[i].childNodes.length > 0) stack.push(children[i]);
+      }
+    }
+  }
+
+  function collectRowSlotHosts(fragment, descriptor) {
+    var textHosts = [];
+    var htmlHosts = [];
+    (descriptor.bindings || []).forEach(function (binding) {
+      if (binding.kind === "html") {
+        var start = findCommentNode(fragment, ROW_HTML_START_MARKER + binding.slot);
+        var end = findCommentNode(fragment, ROW_HTML_END_MARKER + binding.slot);
+        if (!start || !end) {
+          throw new Error("mochi-loader: missing row html slot " + binding.slot +
+            " for binding descriptor " + descriptor.id);
+        }
+        htmlHosts.push({ slot: binding.slot, start: start, end: end, value: undefined });
+      } else if (binding.kind === "text") {
+        var marker = findCommentNode(fragment, ROW_TEXT_MARKER + binding.slot);
+        if (!marker) {
+          throw new Error("mochi-loader: missing row text slot " + binding.slot +
+            " for binding descriptor " + descriptor.id);
+        }
+        var node = global.document.createTextNode("");
+        marker.parentNode.replaceChild(node, marker);
+        textHosts.push({ slot: binding.slot, node: node, value: undefined });
+      }
+    });
+    return { textHosts: textHosts, htmlHosts: htmlHosts };
+  }
+
+  function collectRowAttrHosts(fragment) {
+    var elements = [];
+    if (fragment.nodeType === 1) elements.push(fragment);
+    Array.prototype.push.apply(elements, Array.from(fragment.querySelectorAll("*")));
+    var hosts = [];
+    elements.forEach(function (element) {
+      Array.from(element.attributes || []).forEach(function (attribute) {
+        var value = unescapeBraces(attribute.value);
+        if (value.indexOf("\uE002") === -1) {
+          if (value !== attribute.value) element.setAttribute(attribute.name, value);
+          return;
+        }
+        hosts.push({
+          element: element,
+          name: attribute.name,
+          template: value,
+          value: undefined
+        });
+      });
+    });
+    return hosts;
+  }
+
+  function buildRowEntry(descriptor, row, index, parentContext) {
+    var fragment = fragmentFor(rowTemplateMarkup(descriptor));
+    unescapeRowText(fragment);
+    var slotHosts = collectRowSlotHosts(fragment, descriptor);
+    var attrHosts = collectRowAttrHosts(fragment);
     var context = {
       blockId: descriptor.id,
-      item: item,
+      item: row[0],
       index: index,
       parent: parentContext || null
     };
-    outerNodes.forEach(function (node) {
+
+    // Tag only this row's own top-level elements. Nested row nodes are inserted
+    // later, so their child context cannot be overwritten by the parent.
+    Array.from(fragment.childNodes).forEach(function (node) {
       if (node.nodeType === 1) node.__mochiEachContext = context;
     });
 
-    childDescriptors.forEach(function (child, childIndex) {
+    var childAnchors = new Map();
+    (descriptor.children || []).forEach(function (child) {
       var anchor = findEachAnchor(fragment, child.id);
       if (!anchor) {
         throw new Error("mochi-loader: missing nested list anchor " + child.id +
           " for binding descriptor " + descriptor.id);
       }
+      childAnchors.set(child.id, anchor);
+    });
+
+    var start = global.document.createComment(ROW_START_MARKER);
+    var end = global.document.createComment(ROW_END_MARKER);
+    fragment.insertBefore(start, fragment.firstChild);
+    fragment.appendChild(end);
+
+    return {
+      descriptor: descriptor,
+      start: start,
+      end: end,
+      context: context,
+      textHosts: slotHosts.textHosts,
+      htmlHosts: slotHosts.htmlHosts,
+      attrHosts: attrHosts,
+      childAnchors: childAnchors
+    };
+  }
+
+  function assignRowText(host, value) {
+    var next = displayRowValue(value);
+    if (host.value === next) return;
+    host.value = next;
+    host.node.nodeValue = next;
+  }
+
+  function assignRowHtml(host, value) {
+    var next = displayRowValue(value);
+    if (host.value === next) return;
+    host.value = next;
+    var parent = host.start.parentNode;
+    if (!parent) throw new Error("mochi-loader: detached row html slot " + host.slot);
+    var node = host.start.nextSibling;
+    while (node && node !== host.end) {
+      var after = node.nextSibling;
+      parent.removeChild(node);
+      node = after;
+    }
+    parent.insertBefore(fragmentFor(next), host.end);
+  }
+
+  function assignRowAttribute(host, values) {
+    var next = host.template.replace(ROW_SENTINEL_PATTERN, function (match, rawSlot) {
+      return displayRowValue(values[Number(rawSlot)]);
+    });
+    if (host.value === next) return;
+    host.value = next;
+    host.element.setAttribute(host.name, next);
+  }
+
+  function assignRowSlots(entry, row) {
+    var values = Array.isArray(row[1]) ? row[1] : [];
+    entry.textHosts.forEach(function (host) { assignRowText(host, values[host.slot]); });
+    entry.htmlHosts.forEach(function (host) { assignRowHtml(host, values[host.slot]); });
+    entry.attrHosts.forEach(function (host) { assignRowAttribute(host, values); });
+  }
+
+  function rowKeyToken(value) {
+    if (typeof value === "string") return "s:" + value;
+    if (typeof value === "number") return "n:" + String(value);
+    if (typeof value === "boolean") return "b:" + String(value);
+    if (value && typeof value === "object") {
+      try {
+        return "o:" + JSON.stringify(value);
+      } catch (error) {
+        return "o:" + String(value);
+      }
+    }
+    return "u:" + String(value);
+  }
+
+  function rowKeyLabel(value) {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch (error) {
+        return String(value);
+      }
+    }
+    return String(value);
+  }
+
+  function rowIdentity(row, index, descriptor) {
+    if (descriptor && descriptor.keyed) {
+      var key = row[3];
+      if (key === undefined || key === null) {
+        throw new Error("mochi-loader: keyed list row for binding descriptor " +
+          descriptor.id + " at index " + index + " is missing a key");
+      }
+      return { key: "k:" + rowKeyToken(key), label: rowKeyLabel(key) };
+    }
+
+    var item = row[0];
+    if (item && typeof item === "object") {
+      if (item.key !== undefined && item.key !== null) {
+        return { key: "k:" + rowKeyToken(item.key), label: rowKeyLabel(item.key) };
+      }
+      if (item.id !== undefined && item.id !== null) {
+        return { key: "k:" + rowKeyToken(item.id), label: rowKeyLabel(item.id) };
+      }
+    }
+    return { key: "i:" + index, label: String(index) };
+  }
+
+  function rowSourceLocation(descriptor) {
+    var source = descriptor && descriptor.source;
+    if (!source || !source.file) return "";
+    return " in " + source.file + ":" + source.line + ":" + source.column;
+  }
+
+  function prepareEachRows(descriptor, rows) {
+    var seen = new Map();
+    return rows.map(function (row, index) {
+      if (!Array.isArray(row) || row.length < 2) {
+        throw new Error("mochi-loader: invalid list row for binding descriptor " +
+          descriptor.id + " at index " + index);
+      }
+      var identity = rowIdentity(row, index, descriptor);
+      if (seen.has(identity.key)) {
+        throw new Error("mochi-loader: duplicate list key " +
+          JSON.stringify(identity.label) + " at rows " + seen.get(identity.key) +
+          " and " + index + rowSourceLocation(descriptor));
+      }
+      seen.set(identity.key, index);
+      return { row: row, index: index, key: identity.key };
+    });
+  }
+
+  function rowRange(entry) {
+    var nodes = [];
+    var node = entry.start;
+    while (node) {
+      nodes.push(node);
+      if (node === entry.end) return nodes;
+      node = node.nextSibling;
+    }
+    throw new Error("mochi-loader: list row range is detached");
+  }
+
+  function removeRowEntry(entry) {
+    removeNodes(rowRange(entry));
+  }
+
+  function insertRowBefore(entry, anchor) {
+    var parent = anchor.parentNode;
+    if (!parent) return;
+    rowRange(entry).forEach(function (node) {
+      parent.insertBefore(node, anchor);
+    });
+  }
+
+  function moveRowAfter(entry, reference) {
+    var parent = reference.parentNode;
+    if (!parent) return;
+    var anchor = reference.nextSibling;
+    rowRange(entry).forEach(function (node) {
+      parent.insertBefore(node, anchor);
+    });
+  }
+
+  function updateRowEntry(entry, row, index) {
+    entry.context.item = row[0];
+    entry.context.index = index;
+    assignRowSlots(entry, row);
+    reconcileRowChildren(entry, row);
+  }
+
+  function reconcileRowChildren(entry, row) {
+    var children = row[2];
+    if (children === undefined || children === null) children = [];
+    if (!Array.isArray(children)) {
+      throw new Error("mochi-loader: nested list rows must be an array for binding descriptor " +
+        entry.descriptor.id);
+    }
+    (entry.descriptor.children || []).forEach(function (child, childIndex) {
       var childRows = children[childIndex] || [];
       if (!Array.isArray(childRows)) {
         throw new Error("mochi-loader: nested list rows must be an array for binding descriptor " +
           child.id);
       }
-      childRows.forEach(function (childRow, childRowIndex) {
-        var built = buildEachRow(element, child, childRow, childRowIndex, context);
-        built.nodes.forEach(function (node) {
-          anchor.parentNode.insertBefore(node, anchor);
-        });
-      });
-      anchor.parentNode.removeChild(anchor);
+      var anchor = entry.childAnchors.get(child.id);
+      if (!anchor) {
+        throw new Error("mochi-loader: missing nested list anchor " + child.id +
+          " for binding descriptor " + entry.descriptor.id);
+      }
+      reconcileEach(anchor, child, childRows, entry.context);
     });
-
-    return {
-      html: html,
-      signature: rowSignature(row),
-      nodes: Array.from(fragment.childNodes),
-      context: context,
-      contextNodes: outerNodes.filter(function (node) { return node.nodeType === 1; })
-    };
   }
 
-  function entryFollows(entry, cursor) {
-    if (entry.nodes.length === 0) return true;
-    if (entry.nodes[0].previousSibling !== cursor) return false;
-    for (var i = 1; i < entry.nodes.length; i++) {
-      if (entry.nodes[i].previousSibling !== entry.nodes[i - 1]) return false;
+  function reconcileEach(anchor, descriptor, rows, parentContext) {
+    if (!Array.isArray(rows)) {
+      throw new Error("mochi-loader: each patch must be an array for binding " + descriptor.id);
     }
-    return true;
+    var parent = anchor.parentNode;
+    if (!parent) return;
+
+    // Validate every key before touching the DOM so duplicate keys cannot
+    // leave newly built rows or child instances behind.
+    var planned = prepareEachRows(descriptor, rows);
+
+    var state = anchor.__mochiEach;
+    if (!state) state = anchor.__mochiEach = { items: new Map(), start: null };
+    if (!state.start || state.start.parentNode !== parent) {
+      var listStart = global.document.createComment(LIST_START_MARKER);
+      parent.insertBefore(listStart, anchor);
+      state.start = listStart;
+    }
+
+    var previous = state.items;
+    var next = new Map();
+    var ordered = [];
+    planned.forEach(function (item) {
+      var entry = previous.get(item.key);
+      item.isNew = !entry;
+      if (!entry) entry = buildRowEntry(descriptor, item.row, item.index, parentContext);
+      item.entry = entry;
+      next.set(item.key, entry);
+      ordered.push(entry);
+    });
+
+    // Finish every row update before attaching new ranges. A failure while
+    // building a later row cannot strand an earlier new row in the DOM.
+    planned.forEach(function (item) {
+      updateRowEntry(item.entry, item.row, item.index);
+    });
+    planned.forEach(function (item) {
+      if (item.isNew) insertRowBefore(item.entry, anchor);
+    });
+
+    previous.forEach(function (entry, key) {
+      if (!next.has(key)) removeRowEntry(entry);
+    });
+
+    var reference = state.start;
+    ordered.forEach(function (entry) {
+      if (entry.start !== reference.nextSibling) moveRowAfter(entry, reference);
+      reference = entry.end;
+    });
+
+    state.items = next;
   }
 
   function applyEachPatch(element, target, binding, value) {
@@ -1531,53 +1790,7 @@
         throw new Error("mochi-loader: each patch must be an array for binding " + binding.id);
       }
     }
-
-    var state = target.__mochiEach;
-    if (!state) state = target.__mochiEach = { items: new Map() };
-    var previous = state.items;
-    var next = new Map();
-    var ordered = [];
-    var parent = target.parentNode;
-    if (!parent) return;
-
-    rows.forEach(function (row, index) {
-      if (!Array.isArray(row) || row.length < 2) {
-        throw new Error("mochi-loader: invalid list row for binding " + binding.id +
-          " at index " + index);
-      }
-      var item = row[0];
-      var key = itemKey(item, index);
-      var signature = rowSignature(row);
-      var entry = previous.get(key);
-      if (!entry || entry.signature !== signature) {
-        entry = buildEachRow(element, descriptor, row, index);
-      } else {
-        entry.context.item = item;
-        entry.context.index = index;
-      }
-      next.set(key, entry);
-      ordered.push(entry);
-    });
-
-    var live = new Set(ordered);
-    previous.forEach(function (entry) {
-      if (!live.has(entry)) removeNodes(entry.nodes);
-    });
-
-    var cursor = target;
-    ordered.forEach(function (entry) {
-      if (entry.nodes.length === 0) return;
-      if (!entryFollows(entry, cursor)) {
-        entry.nodes.forEach(function (node) {
-          parent.insertBefore(node, cursor.nextSibling);
-          cursor = node;
-        });
-      } else {
-        cursor = entry.nodes[entry.nodes.length - 1];
-      }
-    });
-
-    state.items = next;
+    reconcileEach(target, descriptor, rows, null);
   }
 
   function applyPatchRecord(element, record) {

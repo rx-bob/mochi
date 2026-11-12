@@ -48,7 +48,9 @@ RUBY
     [EachRowBindingDescriptor.new(0, "text", nil, "item[:name]")],
     [] of EachRowEventDescriptor,
     [child_row],
-    [EachRowScope.new("item", "index")]
+    [EachRowScope.new("item", "index")],
+    %Q{item[:id]},
+    TemplateSourceSpan.new("lib/my_counter.rb", 20, 7, 20, 13, 6)
   )
   bindings = [
     BindingDescriptor.new(
@@ -235,12 +237,17 @@ describe MrbcCompiler do
       each.as_h["getter_sym"].as_s.should eq("__mochi_each_0_rows")
       rows = each.as_h["each_rows"].as_h
       rows["id"].as_i.should eq(0)
+      rows["keyed"].as_bool.should be_true
+      row_source = rows["source"].as_h
+      row_source["file"].as_s.should eq("lib/my_counter.rb")
+      row_source["line"].as_i.should eq(20)
       rows["bindings"].as_a.first.as_h["slot"].as_i.should eq(0)
       rows["children"].as_a.size.should eq(1)
       child = rows["children"].as_a.first.as_h
       child["id"].as_i.should eq(1)
       child["template"].as_s.should eq("<b>{child}</b>")
       child.has_key?("each_rows").should be_false
+      child.has_key?("keyed").should be_false
 
       events = component_json["events"].as_a
       events.first.as_h["event"].as_s.should eq("click")

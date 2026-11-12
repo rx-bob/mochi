@@ -37,12 +37,15 @@ class EachRowCompiler
     item_name = block.loop_def.item_name
     declared_index = block.loop_def.index_name
     index_name = declared_index || "index"
+    row_span = parser.locator.try(&.locate(block.loop_def.array_name))
     if item_name == index_name
       raise TemplateExpressionError.new(
         "each item and index must have different names, got #{item_name.inspect}",
-        parser.locator.try(&.locate(block.loop_def.array_name))
+        row_span
       )
     end
+    key_expression = block.loop_def.key_expression
+    parser.validate_source!(key_expression, "each key") if key_expression
 
     entry = EachRowScope.new(item_name, index_name, declared_index)
     scope = parent_scope + [entry]
@@ -147,7 +150,9 @@ class EachRowCompiler
       bindings,
       row_events,
       children,
-      scope
+      scope,
+      key_expression,
+      row_span
     )
   end
 

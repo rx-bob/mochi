@@ -295,6 +295,13 @@ class TemplateExpressionParser
   end
 
   def split_arguments(text : String) : Array(String)
+    self.class.split_arguments(text)
+  end
+
+  # Splits a comma-separated Ruby argument list without treating commas inside
+  # strings, literals, calls, arrays, or hashes as separators. Loop headers
+  # reuse this so `key: f(item, index)` stays one declaration.
+  def self.split_arguments(text : String) : Array(String)
     arguments = [] of String
     start = 0
     index = 0
@@ -306,9 +313,9 @@ class TemplateExpressionParser
       byte = text.byte_at(index)
       case byte
       when 39_u8, 34_u8, 96_u8 # quotes and backticks
-        index = self.class.skip_quoted(text, index)
+        index = skip_quoted(text, index)
       when 37_u8 # percent literal
-        if close = self.class.percent_literal_end(text, index)
+        if close = percent_literal_end(text, index)
           index = close
         else
           index += 1

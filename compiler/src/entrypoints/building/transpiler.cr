@@ -525,6 +525,9 @@ class Compiler
 
     rows.each do |root_row|
       root_row.each_template do |row|
+        if key = row.key_expression
+          validate_row_expression(cls_name, key, row.scope_names, readable, row.span)
+        end
         row.bindings.each do |binding|
           validate_row_expression(cls_name, binding.expression, row.scope_names, readable, binding.span)
         end

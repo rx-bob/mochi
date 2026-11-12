@@ -503,6 +503,10 @@ class MrbcCompiler
   private def write_each_rows_object(json : JSON::Builder, rows : EachRowTemplate) : Nil
     json.object do
       json.field "id", rows.block_id
+      json.field "keyed", true if rows.key_expression
+      if span = rows.span
+        write_span(json, span)
+      end
       json.field "template", rows.template
       json.field "bindings" do
         json.array do

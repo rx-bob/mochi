@@ -70,6 +70,11 @@ class EachRowTemplate
   getter events : Array(EachRowEventDescriptor)
   getter children : Array(EachRowTemplate)
   getter scope : Array(EachRowScope)
+  # Ruby expression evaluated in the VM for each row. The loader receives only
+  # the evaluated value as the row's fourth tuple element.
+  getter key_expression : String?
+  # Source span of the list expression, used for runtime duplicate-key errors.
+  getter span : TemplateSourceSpan?
 
   def initialize(
     @block_id : Int32,
@@ -82,6 +87,8 @@ class EachRowTemplate
     @events : Array(EachRowEventDescriptor),
     @children : Array(EachRowTemplate),
     @scope : Array(EachRowScope),
+    @key_expression : String? = nil,
+    @span : TemplateSourceSpan? = nil,
   )
   end
 

@@ -857,6 +857,26 @@ test("scoped list rows keep typed ids through filtering, reordering, and nested 
   const bundleDir = path.join(projectDir, "bundle");
   fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
   fs.writeFileSync(path.join(projectDir, "lib", "ScopedListProbe.rb"), `
+class ListStateBadge
+  @tag_name = "list-state-badge"
+  @count
+
+  def initialize
+    @count = 0
+  end
+
+  def increment
+    @count += 1
+  end
+
+  def html
+    %Q{
+      <span class="badge-count">{@count}</span>
+      <button class="badge-increment" onclick="{increment}">badge+</button>
+    }
+  end
+end
+
 class ScopedListProbe
   @tag_name = "scoped-list-probe"
   @events
@@ -910,10 +930,12 @@ class ScopedListProbe
         <button class="reorder" onclick="{reorder}">Reorder</button>
         <button class="bump" onclick="{bump_suffix}">Bump</button>
         <ul class="events">
-          {each @events as ev, idx}
+          {each @events as ev, idx, key: ev["id"]}
             <li class="row" data-row="{ev["id"]}">
+              <input class="draft">
               <button class="open" onclick="{open_event(ev["id"], idx)}">{label(ev)}</button>
-              <span class="children">{each ev["children"] as child, ci}<button class="child" onclick="{pick_child(ev["id"], child, ci)}">{child}@{ev["id"]}:{ci}</button>{end}</span>
+              <list-state-badge></list-state-badge>
+              <span class="children">{each ev["children"] as child, ci, key: child}<button class="child" onclick="{pick_child(ev["id"], child, ci)}">{child}@{ev["id"]}:{ci}</button>{end}</span>
             </li>
           {end}
         </ul>
@@ -957,13 +979,42 @@ end
     await rows.nth(1).locator("button.open").click();
     await expect(probe.locator("p.selected")).toHaveText("b:1");
 
-    await probe.locator("button.bump").click();
+    await rows.nth(0).evaluate((row) => { (row as any).__probeIdentity = "alpha"; });
+    await rows.nth(1).evaluate((row) => { (row as any).__probeIdentity = "beta"; });
+    const alphaInput = rows.nth(0).locator("input.draft");
+    await alphaInput.click();
+    await alphaInput.fill("draft-alpha");
+    await alphaInput.evaluate((input: HTMLInputElement) => input.setSelectionRange(1, 4));
+
+    // A programmatic click changes the shared label without moving focus away
+    // from the draft inside the list row.
+    await probe.evaluate((element: any) => {
+      element.shadowRoot.querySelector("button.bump").click();
+    });
     await expect(rows.nth(0).locator("button.open")).toHaveText("Alpha!?");
     await expect(rows.nth(1).locator("button.open")).toHaveText("Beta!?");
+    expect(await rows.nth(0).evaluate((row) => (row as any).__probeIdentity)).toBe("alpha");
+    await expect(alphaInput).toHaveValue("draft-alpha");
+    expect(await alphaInput.evaluate((input: HTMLInputElement) => {
+      const root = input.getRootNode() as ShadowRoot;
+      return {
+        focused: root.activeElement === input,
+        start: input.selectionStart,
+        end: input.selectionEnd,
+      };
+    })).toEqual({ focused: true, start: 1, end: 4 });
+
+    const alphaBadge = rows.nth(0).locator("list-state-badge");
+    await alphaBadge.locator("button.badge-increment").click();
+    await expect(alphaBadge.locator(".badge-count")).toHaveText("1");
 
     await probe.locator("button.reorder").click();
     await expect(rows.nth(0).locator("button.open")).toHaveText("Beta!?");
     await expect(rows.nth(1).locator("button.open")).toHaveText("Alpha!?");
+    expect(await rows.nth(0).evaluate((row) => (row as any).__probeIdentity)).toBe("beta");
+    expect(await rows.nth(1).evaluate((row) => (row as any).__probeIdentity)).toBe("alpha");
+    await expect(rows.nth(1).locator("input.draft")).toHaveValue("draft-alpha");
+    await expect(rows.nth(1).locator("list-state-badge .badge-count")).toHaveText("1");
     await rows.nth(0).locator("button.open").click();
     await expect(probe.locator("p.selected")).toHaveText("b:0");
 
@@ -973,6 +1024,7 @@ end
     await probe.locator("button.filter").click();
     await expect(rows).toHaveCount(1);
     await expect(rows.nth(0).locator("button.open")).toHaveText("Beta!?");
+    expect(await rows.nth(0).evaluate((row) => (row as any).__probeIdentity)).toBe("beta");
     await rows.nth(0).locator("button.open").click();
     await expect(probe.locator("p.selected")).toHaveText("b:0");
     await rows.nth(0).locator("button.child").click();

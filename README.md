@@ -97,6 +97,36 @@ markup your app authored or already trusts. It is accepted in text content,
 including list rows, and rejected in attribute values. Values without it never
 create elements or event handlers.
 
+### List rows
+
+Rows keep their DOM identity while their values change. Use an explicit Ruby
+key expression when the item does not already expose a stable `key` or `id`
+field:
+
+```ruby
+def html
+  %Q{
+    <ul>
+      {each @events as event, index, key: event["id"]}
+        <li>
+          <input class="draft">
+          <span>{event["label"]} at {index}</span>
+        </li>
+      {end}
+    </ul>
+  }
+end
+```
+
+The key expression runs inside the VM, not in the browser. Rows whose keys
+match existing rows patch their text, attributes, trusted markup, and nested
+rows in place, so drafts, focus, selection, and child component state survive
+updates and moves.
+Insertions and removals preserve the surviving rows; removed rows dispose once.
+When no explicit key is given, the loader uses an item `key` field, then an
+`id` field, and otherwise uses the row position as identity. Duplicate keys
+fail with a source-located error before the list changes.
+
 ### Component lifecycle
 
 Moving a connected component between positions in the same turn preserves its Ruby instance, state, timers, and event handlers; `unmounted` and `mounted` do not run again. If the element stays disconnected through that turn, the loader disposes it once and runs `unmounted`. Reinserting it afterwards performs a fresh mount from `initialize`, rebuilding props, bindings, and handlers.

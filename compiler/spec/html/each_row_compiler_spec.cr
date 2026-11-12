@@ -91,6 +91,30 @@ describe EachRowCompiler do
     row.bindings.map(&.kind).should eq(["attr", "text", "text"])
   end
 
+  it "compiles explicit key expressions and list source spans" do
+    source = %Q{
+      {each @groups as group, key: group["id"]}
+        <section>
+          {each group["items"] as item, item_index, key: item["id"]}
+            <span>{item["label"]}</span>
+          {end}
+        </section>
+      {end}
+    }
+    parser = TemplateExpressionParser.new(
+      TemplateSourceLocator.new(source, "lib/keyed_rows.rb")
+    )
+    blocks = EachProcessor.extract_each_blocks(source)
+    row = EachRowCompiler.compile(EachProcessor.roots(blocks).first, parser)
+
+    row.key_expression.should eq(%Q{group["id"]})
+    row.span.not_nil!.file.should eq("lib/keyed_rows.rb")
+    row.span.not_nil!.line.should eq(2)
+    child = row.children.first
+    child.key_expression.should eq(%Q{item["id"]})
+    child.span.not_nil!.file.should eq("lib/keyed_rows.rb")
+  end
+
   it "keeps row text ordinary unless Mochi.raw wraps it" do
     row = compile_row_template(%Q{
       {each @items as item}

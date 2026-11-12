@@ -452,6 +452,52 @@ RUBY
       row.events[0].wrapper_sym.should_not eq(row.events[1].wrapper_sym)
     end
 
+    it "emits evaluated row keys and validates key expressions" do
+      source = <<-RUBY
+class KeyedRows
+  @tag_name = "x-keyed-rows"
+  @groups = []
+
+  def html
+    %Q{
+      <ul>
+        {each @groups as group, key: group["id"]}
+          <li>{group["name"]}</li>
+        {end}
+      </ul>
+    }
+  end
+end
+RUBY
+
+      component = transpile_source(source, "KeyedRows")
+      row = component.manifest.bindings.find! { |binding| binding.kind == "each" }.each_rows.not_nil!
+      row.key_expression.should eq(%Q{group["id"]})
+      component.ruby_code.should contain(%Q{(group["id"])})
+      component.ruby_code.should contain("__mochi_rows_0.push([")
+
+      bad_source = <<-RUBY
+class BadRowKey
+  @tag_name = "x-bad-row-key"
+  @items = []
+
+  def html
+    %Q{
+      <ul>
+        {each @items as item, key: missing_key}
+          <li>{item["label"]}</li>
+        {end}
+      </ul>
+    }
+  end
+end
+RUBY
+
+      expect_raises(Exception, /list row uses undefined name 'missing_key'/) do
+        transpile_source(bad_source, "BadRowKey")
+      end
+    end
+
     it "rejects unresolved names in list row bindings and event arguments" do
       self_source = <<-RUBY
 class SelfRow

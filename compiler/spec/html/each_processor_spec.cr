@@ -1,10 +1,17 @@
 require "spec"
 require "../../src/html/each_processor"
 
-def self.check_loop_def(loop_def : EachLoopDef, array_name : String, item_name : String, index_name : String?)
+def self.check_loop_def(
+  loop_def : EachLoopDef,
+  array_name : String,
+  item_name : String,
+  index_name : String?,
+  key_expression : String? = nil,
+)
   loop_def.array_name.should eq(array_name)
   loop_def.item_name.should eq(item_name)
   loop_def.index_name.should eq(index_name)
+  loop_def.key_expression.should eq(key_expression)
 end
 
 describe EachProcessor do
@@ -32,6 +39,27 @@ describe EachProcessor do
   it "extract_loop_definition: with index, no space" do
     result : EachLoopDef = EachProcessor.extract_loop_definition("@items as item,index").not_nil!
     check_loop_def(result, "@items", "item", "index")
+  end
+
+  it "extract_loop_definition: explicit key with default index" do
+    result : EachLoopDef = EachProcessor.extract_loop_definition(%Q{@items as item, key: item["id"]}).not_nil!
+    check_loop_def(result, "@items", "item", nil, %Q{item["id"]})
+  end
+
+  it "extract_loop_definition: explicit key with named index and comma-bearing call" do
+    result : EachLoopDef = EachProcessor.extract_loop_definition(
+      "@items as item, i, key: row_key(item, i)"
+    ).not_nil!
+    check_loop_def(result, "@items", "item", "i", "row_key(item, i)")
+  end
+
+  it "rejects empty and repeated each key declarations" do
+    expect_raises(TemplateExpressionError, /key: requires/) do
+      EachProcessor.extract_loop_definition("@items as item, key:")
+    end
+    expect_raises(TemplateExpressionError, /only one key:/) do
+      EachProcessor.extract_loop_definition("@items as item, key: item[:id], key: item[:other]")
+    end
   end
 
   it "extract_each_blocks" do

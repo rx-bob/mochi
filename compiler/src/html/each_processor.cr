@@ -59,8 +59,16 @@ class EachLoopDef
   property array_name : String
   property item_name : String
   property index_name : String?
+  # Optional Ruby expression evaluated by the VM for every row. The value is
+  # sent to the browser as a row identity token, never as source text.
+  property key_expression : String?
 
-  def initialize(@array_name : String, @item_name : String, @index_name : String?)
+  def initialize(
+    @array_name : String,
+    @item_name : String,
+    @index_name : String?,
+    @key_expression : String? = nil,
+  )
   end
 end
 
@@ -212,15 +220,40 @@ class EachProcessor
 
   def self.extract_loop_definition(loop_str : String) : EachLoopDef?
     parts = loop_str.split(" as ")
-    if parts.size == 2
-      if parts[1].includes?(",")
-        item_parts = parts[1].split(",")
-        return EachLoopDef.new(parts[0], item_parts[0].strip, item_parts[1].strip)
+    return nil unless parts.size == 2
+
+    array_name = parts[0].strip
+    return nil if array_name.empty?
+
+    declarations = TemplateExpressionParser.split_arguments(parts[1])
+    return nil if declarations.empty?
+
+    item_name = declarations.shift
+    return nil if item_name.nil? || item_name.empty?
+
+    index_name = nil
+    key_expression = nil
+    declarations.each do |declaration|
+      if match = declaration.match(/\Akey\s*:\s*(.*)\z/m)
+        expression = match[1].strip
+        if expression.empty?
+          raise TemplateExpressionError.new("each key: requires a Ruby expression")
+        end
+        if key_expression
+          raise TemplateExpressionError.new("each accepts only one key: expression")
+        end
+        key_expression = expression
       else
-        return EachLoopDef.new(parts[0], parts[1], nil)
+        if index_name
+          raise TemplateExpressionError.new(
+            "each loop accepts one item name, one index name, and one key: expression"
+          )
+        end
+        index_name = declaration
       end
     end
-    return nil
+
+    EachLoopDef.new(array_name, item_name, index_name, key_expression)
   end
 
   def self.try_match_end_token(html : String, pos : Int32) : Bool
