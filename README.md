@@ -824,7 +824,7 @@ mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --t
 ```
 
 #### Testing component behavior
-Put Ruby tests in `test/**/*_test.rb` and run `mochi test -i "."`. Tests use `Mochi::Test.test` with `mount`, `click`, `fill`, `wait_for_settled`, and `assert_text`; the framework builds temporary `.chi` artifacts and runs them in a browser. Assertion output includes the Ruby test file and line. Test plans and runner files do not enter production bundles. The framework test runner requires Node.js and Mochi's Playwright browser dependencies; app-authored tests and configuration remain Ruby.
+Put Ruby tests in `test/**/*_test.rb` and run `mochi test -i "."`. Tests use `Mochi::Test.test` with `mount`, `click`, `fill`, `wait_for_settled`, and text, attribute, and value assertions; `expect_error`, `unmount`, and `remount` cover error and lifecycle behavior. Mochi builds temporary `.chi` artifacts and runs each scenario on Chromium, Firefox, and WebKit by default. Select engines with `--browsers=chromium,webkit` or `--browsers=all`. Install missing browser binaries with `npx playwright install chromium firefox webkit` from the Mochi development checkout. Assertion output includes the Ruby test file, line, and browser. Test plans and runner files do not enter production bundles. The framework runner requires Node.js and Mochi's Playwright browser dependencies; app-authored tests and configuration remain Ruby.
 
 * -i: input directory
 * -o: output directory

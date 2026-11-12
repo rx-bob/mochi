@@ -1,11 +1,11 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { chromium } = require("playwright");
+const playwright = require("playwright");
 
-const [bundleDir, planPath] = process.argv.slice(2);
+const [bundleDir, planPath, browserList = "chromium,firefox,webkit"] = process.argv.slice(2);
 if (!bundleDir || !planPath) {
-  console.error("usage: mochi_test_runner.cjs <bundle-dir> <test-plan.json>");
+  console.error("usage: mochi_test_runner.cjs <bundle-dir> <test-plan.json> [browsers]");
   process.exit(2);
 }
 
@@ -39,7 +39,7 @@ function sourceLabel(step) {
   return `${step.source}:${step.line}`;
 }
 
-async function runCase(browser, baseUrl, testCase) {
+async function runCase(browser, browserName, baseUrl, testCase) {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -51,6 +51,8 @@ async function runCase(browser, baseUrl, testCase) {
   });
 
   let host = null;
+  let detachedHost = null;
+  let expectedError = null;
   try {
     await page.goto(`${baseUrl}/`);
     await page.waitForFunction(() => window.MochiLoader && window.MochiLoader.manifest);
@@ -77,8 +79,7 @@ async function runCase(browser, baseUrl, testCase) {
           const element = document.querySelector(tag);
           await element._mochiReady;
         }, host);
-      } else if (step.operation === "click" || step.operation === "fill" ||
-                 step.operation === "assert_text") {
+      } else if (["click", "fill", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
         if (!host) throw new Error(`${origin}: mount a component before using ${step.operation}`);
         const result = await page.evaluate(({ tag, step }) => {
           const element = document.querySelector(tag);
@@ -108,15 +109,31 @@ async function runCase(browser, baseUrl, testCase) {
             target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
             return { ok: true };
           }
+          if (step.operation === "assert_attribute" || step.operation === "assert_no_attribute") {
+            return { present: target.hasAttribute(step.name), actual: target.getAttribute(step.name) };
+          }
+          if (step.operation === "assert_value") return { actual: target.value };
           const actual = (target.innerText || target.textContent || "").trim();
           return { actual };
         }, { tag: host, step });
 
         if (result.missing) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
         if (result.invalid) throw new Error(`${origin}: ${result.invalid}`);
+        if (step.operation === "assert_attribute" && (!result.present || result.actual !== step.expected)) {
+          throw new Error(`${origin}: expected attribute '${step.name}' to equal '${step.expected}', got ${result.present ? `'${result.actual}'` : "absent"}`);
+        }
+        if (step.operation === "assert_no_attribute" && result.present) {
+          throw new Error(`${origin}: expected attribute '${step.name}' to be absent, got '${result.actual}'`);
+        }
+        if (step.operation === "assert_value" && result.actual !== step.expected) {
+          throw new Error(`${origin}: expected value '${step.expected}' at '${step.selector}', got '${result.actual}'`);
+        }
         if (step.operation === "assert_text" && result.actual !== step.expected) {
           throw new Error(`${origin}: expected '${step.expected}' at '${step.selector}', got '${result.actual}'`);
         }
+      } else if (step.operation === "expect_error") {
+        expectedError = step.message || "";
+        continue;
       } else if (step.operation === "wait") {
         await page.waitForFunction(() => {
           const stats = window.MochiLoader.debugStats();
@@ -126,6 +143,30 @@ async function runCase(browser, baseUrl, testCase) {
         await page.evaluate(() => new Promise((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(resolve));
         }));
+      } else if (step.operation === "unmount" || step.operation === "remount") {
+        if (step.operation === "unmount" && !host) throw new Error(`${origin}: mount a component before unmount`);
+        if (step.operation === "remount" && !host && !detachedHost && !step.tag) throw new Error(`${origin}: remount requires a prior unmount or component tag`);
+        const targetTag = host || detachedHost || step.tag;
+        await page.evaluate(({ tag, operation, nextTag, props }) => {
+          const current = document.querySelector(tag);
+          if (current) current.remove();
+          if (operation === "remount") {
+            const replacement = document.createElement(nextTag || tag);
+            Object.entries(props || {}).forEach(([name, value]) => {
+              if (value !== null && value !== undefined) replacement.setAttribute(name, typeof value === "string" ? value : JSON.stringify(value));
+            });
+            document.body.appendChild(replacement);
+          }
+        }, { tag: targetTag, operation: step.operation, nextTag: step.tag, props: step.props });
+        if (step.operation === "unmount") {
+          detachedHost = host;
+          host = null;
+        }
+        else {
+          host = step.tag || detachedHost;
+          detachedHost = null;
+          await page.evaluate(async (tag) => { await document.querySelector(tag)._mochiReady; }, host);
+        }
       } else {
         throw new Error(`${origin}: unsupported Ruby test operation '${step.operation}'`);
       }
@@ -134,11 +175,17 @@ async function runCase(browser, baseUrl, testCase) {
       if (runtimeErrors.length > 0) {
         const error = runtimeErrors[0];
         const where = error.source ? ` (${error.source})` : "";
-        throw new Error(`${origin}: Mochi runtime error${where}: ${error.message || JSON.stringify(error)}`);
+        const message = error.message || JSON.stringify(error);
+        if (!expectedError || (expectedError && !message.includes(expectedError))) {
+          throw new Error(`${origin}: Mochi runtime error${where}: ${message}`);
+        }
+        expectedError = null;
+      } else if (expectedError) {
+        throw new Error(`${origin}: expected Mochi error containing '${expectedError}', but no error occurred`);
       }
       if (errors.length > 0) throw new Error(`${origin}: browser error: ${errors[0]}`);
     }
-    console.log(`PASS ${testCase.name}`);
+    console.log(`PASS [${browserName}] ${testCase.name}`);
     return true;
   } finally {
     await page.close();
@@ -168,23 +215,33 @@ async function main() {
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
-  let browser;
   let failed = false;
   try {
-    const launchOptions = { headless: true };
-    if (process.env.MOCHI_TEST_CHANNEL) launchOptions.channel = process.env.MOCHI_TEST_CHANNEL;
-    browser = await chromium.launch(launchOptions);
     const baseUrl = `http://127.0.0.1:${address.port}`;
-    for (const testCase of plan.tests || []) {
+    for (const browserName of browserList.split(",").map((name) => name.trim()).filter(Boolean)) {
+      const browserType = playwright[browserName];
+      let browser;
       try {
-        await runCase(browser, baseUrl, testCase);
+        browser = await browserType.launch({ headless: true });
       } catch (error) {
-        failed = true;
-        console.error(`FAIL ${testCase.name}: ${error.message}`);
+        console.error(`mochi test: ${browserName} is unavailable. Install with: npx playwright install ${browserName}\n${error.message}`);
+        process.exitCode = 2;
+        return;
+      }
+      try {
+        for (const testCase of plan.tests || []) {
+          try {
+            await runCase(browser, browserName, baseUrl, testCase);
+          } catch (error) {
+            failed = true;
+            console.error(`FAIL [${browserName}] ${testCase.name}: ${error.message}`);
+          }
+        }
+      } finally {
+        await browser.close();
       }
     }
   } finally {
-    if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));
   }
   if (failed) process.exitCode = 1;

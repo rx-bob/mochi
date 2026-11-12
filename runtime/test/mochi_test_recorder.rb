@@ -32,6 +32,30 @@ module Mochi
         })
       end
 
+      def assert_attribute(selector, name, expected)
+        record("assert_attribute", { "selector" => selector.to_s, "name" => name.to_s, "expected" => expected.to_s })
+      end
+
+      def assert_no_attribute(selector, name)
+        record("assert_no_attribute", { "selector" => selector.to_s, "name" => name.to_s })
+      end
+
+      def assert_value(selector, expected)
+        record("assert_value", { "selector" => selector.to_s, "expected" => expected.to_s })
+      end
+
+      def expect_error(message = nil)
+        record("expect_error", { "message" => message&.to_s })
+      end
+
+      def unmount
+        record("unmount")
+      end
+
+      def remount(tag_name = nil, props = {})
+        record("remount", { "tag" => tag_name&.to_s, "props" => props })
+      end
+
       private
 
       def record(operation, attributes = {})
