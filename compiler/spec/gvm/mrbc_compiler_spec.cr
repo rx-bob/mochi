@@ -218,7 +218,7 @@ describe MrbcCompiler do
       stripped_source.should contain("@count = 0")
 
       json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
-      json["schema_version"].as_i.should eq(1)
+      json["schema_version"].as_i.should eq(2)
       json["entry_packages"].as_a.map(&.as_s).should eq(["component:my-counter"])
       packages = json["packages"].as_h
       packages.size.should eq(1)
@@ -230,7 +230,19 @@ describe MrbcCompiler do
 
       components = json["components"].as_a
       components.size.should eq(1)
-      component_json = components.first.as_h
+      component_index = components.first.as_h
+      component_index["tag_name"].as_s.should eq("my-counter")
+      component_index["class_name"].as_s.should eq("MyCounter")
+      component_index["descriptor"].as_s.should eq("components/my-counter.json")
+      component_index["package"].as_s.should eq("component:my-counter")
+      component_index.has_key?("html_template").should be_false
+      component_index.has_key?("css").should be_false
+      component_index.has_key?("bindings").should be_false
+
+      component_json = JSON.parse(
+        File.read(File.join(output, "components", "my-counter.json"))
+      ).as_h
+      component_json["schema_version"].as_i.should eq(2)
       component_json["tag_name"].as_s.should eq("my-counter")
       component_json["class_name"].as_s.should eq("MyCounter")
       component_json["chi_file"].as_s.should eq("my-counter.chi")
@@ -317,6 +329,60 @@ describe MrbcCompiler do
       args[1].as_h["literal_type"].as_s.should eq("number")
       args[1].as_h["value"].as_s.should eq("1")
       args[2].as_h["kind"].as_s.should eq("event")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  it "writes lazy component descriptors and style resource files outside the entry manifest" do
+    dir = File.join(Dir.tempdir, "mochi_mrbc_lazy_spec_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(dir)
+
+    begin
+      mrbc = File.join(dir, "fake_mrbc")
+      wasm = File.join(dir, "source.wasm")
+      js = File.join(dir, "source.js")
+      loader = File.join(dir, "mochi-loader.js")
+      stripped_source_path = File.join(dir, "stripped.rb")
+      output = File.join(dir, "out")
+
+      write_fake_mrbc(mrbc, stripped_source_path)
+      File.write(wasm, "WASM")
+      File.write(js, "JS")
+      File.write(loader, "LOADER")
+
+      shared_style = PackageResource.new("css-shared", "style", text: ".shared { color: red; }")
+      component = build_mrbc_fixture(dir)
+      component.manifest.style_resources = [shared_style]
+
+      stale_descriptor = File.join(output, "components", "stale.json")
+      Dir.mkdir_p(File.dirname(stale_descriptor))
+      File.write(stale_descriptor, "{}")
+
+      compiler = MrbcCompiler.new(mrbc_path: mrbc, wasm_source: wasm, loader_source: loader)
+      compiler.compile([component], output)
+
+      manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+      index = manifest["components"].as_a.first.as_h
+      index["tag_name"].as_s.should eq("my-counter")
+      index["descriptor"].as_s.should eq("components/my-counter.json")
+      index.has_key?("html_template").should be_false
+      index.has_key?("css").should be_false
+      index.has_key?("bindings").should be_false
+      File.exists?(stale_descriptor).should be_false
+
+      descriptor = JSON.parse(File.read(File.join(output, "components", "my-counter.json"))).as_h
+      descriptor["schema_version"].as_i.should eq(2)
+      descriptor["style_resources"].as_a.map(&.as_s).should eq(["css-shared"])
+      descriptor["html_template"].as_s.should contain("Count: {count}")
+
+      resource = manifest["resources"].as_h["css-shared"].as_h
+      resource.has_key?("text").should be_false
+      resource["file"].as_s.should start_with("components/styles/")
+      File.read(File.join(output, resource["file"].as_s)).should eq(".shared { color: red; }")
+
+      package = manifest["packages"].as_h["component:my-counter"].as_h
+      package["resources"].as_a.map(&.as_s).should eq(["css-shared"])
     ensure
       FileUtils.rm_rf(dir)
     end
@@ -511,7 +577,10 @@ RUBY
         File.exists?(File.join(output, "mochi-format.js")).should be_true
         manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
         manifest["format_host"].as_s.should eq("mochi-format.js")
-        manifest["components"][0]["formatting"].as_bool.should be_true
+        descriptor = JSON.parse(
+          File.read(File.join(output, manifest["components"][0]["descriptor"].as_s))
+        )
+        descriptor["formatting"].as_bool.should be_true
 
         plain_output = File.join(dir, "plain")
         plain = MrbcCompiler.new(

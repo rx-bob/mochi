@@ -72,9 +72,17 @@ describe StyleComposer do
         manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
         resources = manifest["resources"].as_h
         resources.size.should eq(2)
-        alpha_entry = manifest["components"].as_a.find { |entry| entry["tag_name"] == "alpha-card" }.not_nil!
-        beta_entry = manifest["components"].as_a.find { |entry| entry["tag_name"] == "beta-card" }.not_nil!
+        resources.each do |id, resource|
+          resource.as_h.has_key?("text").should be_false
+          file = resource.as_h["file"].as_s
+          File.exists?(File.join(output, file)).should be_true
+        end
+        alpha_index = manifest["components"].as_a.find { |entry| entry["tag_name"] == "alpha-card" }.not_nil!
+        beta_index = manifest["components"].as_a.find { |entry| entry["tag_name"] == "beta-card" }.not_nil!
+        alpha_entry = JSON.parse(File.read(File.join(output, alpha_index["descriptor"].as_s)))
+        beta_entry = JSON.parse(File.read(File.join(output, beta_index["descriptor"].as_s)))
         alpha_entry["style_resources"].should eq(beta_entry["style_resources"])
+        alpha_entry["style_resources"].as_a.size.should eq(2)
       end
     ensure
       FileUtils.rm_rf(root)

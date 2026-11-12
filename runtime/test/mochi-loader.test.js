@@ -119,11 +119,21 @@ const TYPED_COMPONENT = {
   ],
 };
 
+function componentIndexEntry(component) {
+  const entry = {
+    tag_name: component.tag_name,
+    class_name: component.class_name,
+    descriptor: `components/${component.tag_name}.json`,
+  };
+  if (component.package) entry.package = component.package;
+  return entry;
+}
+
 function manifest(components, resources, formatHost) {
   return {
-    schema_version: 1,
+    schema_version: 2,
     packages: {},
-    components,
+    components: components.map(componentIndexEntry),
     ...(resources ? { resources } : {}),
     ...(formatHost ? { format_host: formatHost } : {}),
     wasm_file: "mochi-gvm.wasm",
@@ -368,11 +378,40 @@ async function setup(components, options) {
     dispatched: [], flushes: [], hostUrls: [],
   };
   const body = options.manifest || manifest(components, options.resources, options.formatHost);
+  const descriptors = new Map();
+  components.forEach((component) => {
+    descriptors.set(`components/${component.tag_name}.json`, {
+      schema_version: 2,
+      ...component,
+    });
+  });
+  Object.entries(options.descriptors || {}).forEach(([file, descriptor]) => {
+    descriptors.set(file, descriptor);
+  });
+  const resourceBodies = options.resourceBodies || {};
+  const requestPath = (target) =>
+    decodeURIComponent(new URL(target, "http://localhost/").pathname.replace(/^\/+/, ""));
   global.fetch = async (url, init) => {
     const target = String(url);
     log.fetches.push(target);
+    const relative = requestPath(target);
     if (target.endsWith("mochi-manifest.json")) {
       return { ok: true, json: async () => body };
+    }
+    if (relative.startsWith("components/") && relative.endsWith(".json")) {
+      if (options.descriptorFetch) {
+        const handled = options.descriptorFetch(target, init, descriptors.get(relative));
+        if (handled) return handled;
+      }
+      if (descriptors.has(relative)) {
+        return { ok: true, json: async () => descriptors.get(relative) };
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(resourceBodies, relative)) {
+      return { ok: true, text: async () => resourceBodies[relative] };
+    }
+    if (options.resourceFetch && !relative.endsWith(".chi")) {
+      return options.resourceFetch(target, init);
     }
     if (target.endsWith(".chi") && options.classFetch) {
       return options.classFetch(target, init);
@@ -427,11 +466,230 @@ test("boot defines a custom element with a static shadow template and scoped sty
   assert.ok(log.interned.includes("mounted"));
 });
 
+test("boot registers component identities without fetching templates or bytecode", async () => {
+  const { loader, log } = await setup([COMPONENT, LOGS_COMPONENT]);
+
+  assert.deepEqual(log.fetches, ["http://localhost/mochi-manifest.json"]);
+  assert.equal(log.loads.length, 0);
+  assert.equal(loader.components.length, 2);
+  assert.ok(global.customElements.get("my-counter"));
+  assert.ok(global.customElements.get("my-logs"));
+  assert.equal(loader.components[0].html_template, undefined);
+});
+
+test("a component descriptor with a mismatched schema fails with its identity", async () => {
+  const { dom } = await setup([COMPONENT], {
+    descriptors: {
+      "components/my-counter.json": {
+        schema_version: 1,
+        tag_name: "my-counter",
+        class_name: "MyCounter",
+        html_template: "",
+        bindings: [],
+        events: [],
+      },
+    },
+  });
+
+  const element = dom.window.document.createElement("my-counter");
+  dom.window.document.body.appendChild(element);
+  await assert.rejects(
+    element._mochiReady,
+    /component descriptor for 'my-counter' uses schema 1 .*loader supports schema 2/,
+  );
+});
+
+test("a failed descriptor load reports the component and can be retried", async () => {
+  let attempts = 0;
+  const { dom, loader, module, log } = await setup([COMPONENT, LOGS_COMPONENT], {
+    descriptorFetch: (url) => {
+      if (!url.endsWith("my-counter.json")) return null;
+      attempts += 1;
+      if (attempts === 1) return { ok: false, status: 503 };
+      return null;
+    },
+  });
+  const errors = [];
+  loader.onError = (info) => errors.push(info);
+
+  const logs = dom.window.document.createElement("my-logs");
+  dom.window.document.body.appendChild(logs);
+  await logs._mochiReady;
+
+  const element = dom.window.document.createElement("my-counter");
+  dom.window.document.body.appendChild(element);
+  await assert.rejects(
+    element._mochiReady,
+    /failed to fetch descriptor for component 'my-counter'.*HTTP 503/,
+  );
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].tagName, "my-counter");
+  assert.equal(errors[0].phase, "descriptor");
+
+  // The unrelated screen keeps working through the failed feature load.
+  module.patchQueue.push({ patches: [{ id: 0, value: "9" }] });
+  loader.applyPatches(logs, module);
+  assert.equal(logs.shadowRoot.querySelector(".count").textContent, "Count: 9");
+
+  element.remove();
+  await flushLifecycle();
+  dom.window.document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.json")).length, 2);
+});
+
+test("removal during the descriptor download does not mount an abandoned instance", async () => {
+  let releaseDescriptor;
+  const descriptorGate = new Promise((resolve) => { releaseDescriptor = resolve; });
+  const { dom, log } = await setup([COMPONENT], {
+    descriptorFetch: (url) =>
+      url.endsWith("my-counter.json") ? descriptorGate : null,
+  });
+
+  const element = dom.window.document.createElement("my-counter");
+  dom.window.document.body.appendChild(element);
+  const ready = element._mochiReady;
+  element.remove();
+  await flushLifecycle();
+
+  releaseDescriptor({
+    ok: true,
+    json: async () => ({ schema_version: 2, ...COMPONENT }),
+  });
+  await ready;
+  await flushLifecycle();
+
+  assert.equal(element._mochiMountState, "unmounted");
+  assert.deepEqual(log.unmounts, []);
+  assert.equal(log.components.size, 0);
+  assert.equal(log.bindings.length, 0);
+
+  dom.window.document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(element._mochiInstance, "1");
+  assert.equal(log.components.size, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.json")).length, 1);
+});
+
+test("a conditional child tag loads its descriptor and bytecode when the branch mounts", async () => {
+  const parent = {
+    tag_name: "screen-host",
+    class_name: "ScreenHost",
+    chi_file: "screen-host.chi",
+    html_template: "<!--if-anchor-0-->",
+    css: "",
+    bindings: [
+      {
+        id: 0,
+        path: [0],
+        kind: "cond",
+        attr_name: null,
+        template_text: "",
+        getter_sym: "__mochi_bind_0",
+        branches: [
+          { html_template: "<my-counter></my-counter>", bindings: [], events: [] },
+        ],
+      },
+    ],
+    events: [],
+  };
+
+  const { loader, module, log } = await setup([parent, COMPONENT]);
+  module.patchQueue.push({ patches: [{ id: 0, value: "false" }] });
+
+  const host = document.createElement("screen-host");
+  document.body.appendChild(host);
+  await host._mochiReady;
+
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.json")).length, 0);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.chi")).length, 0);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "true" }] });
+  module.patchQueue.push({ patches: [{ id: 0, value: "4" }, { id: 1, value: "true" }] });
+  loader.applyPatches(host, module);
+  await flushLifecycle();
+
+  const child = host.shadowRoot.querySelector("my-counter");
+  assert.ok(child);
+  await child._mochiReady;
+  assert.equal(child.shadowRoot.querySelector(".count").textContent, "Count: 4");
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.json")).length, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.chi")).length, 1);
+  const loadsAfterFirstUse = log.loads.length;
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "false" }] });
+  loader.applyPatches(host, module);
+  await flushLifecycle();
+  assert.equal(host.shadowRoot.querySelector("my-counter"), null);
+  assert.equal(log.components.size, 1);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: "true" }] });
+  module.patchQueue.push({ patches: [{ id: 0, value: "5" }, { id: 1, value: "true" }] });
+  loader.applyPatches(host, module);
+  await flushLifecycle();
+
+  const reopened = host.shadowRoot.querySelector("my-counter");
+  await reopened._mochiReady;
+  assert.notEqual(reopened, child);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.json")).length, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.chi")).length, 1);
+  assert.equal(log.loads.length, loadsAfterFirstUse);
+});
+
+test("shared style files load on first use once for concurrent components", async () => {
+  const active = {
+    ...COMPONENT,
+    tag_name: "style-active",
+    class_name: "StyleActive",
+    chi_file: "style-active.chi",
+    style_resources: ["css-active"],
+  };
+  const inactive = {
+    ...COMPONENT,
+    tag_name: "style-inactive",
+    class_name: "StyleInactive",
+    chi_file: "style-inactive.chi",
+    style_resources: ["css-inactive"],
+  };
+  const resources = {
+    "css-active": { kind: "style", file: "components/styles/active.css" },
+    "css-inactive": { kind: "style", file: "components/styles/inactive.css" },
+  };
+  const { log } = await setup([active, inactive], {
+    resources,
+    resourceBodies: {
+      "components/styles/active.css": ".active { color: red; }",
+      "components/styles/inactive.css": ".inactive { color: blue; }",
+    },
+  });
+
+  const first = document.createElement("style-active");
+  document.body.appendChild(first);
+  await first._mochiReady;
+
+  assert.equal(log.fetches.filter((url) => url.endsWith("active.css")).length, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("inactive.css")).length, 0);
+
+  const second = document.createElement("style-inactive");
+  const third = document.createElement("style-inactive");
+  document.body.appendChild(second);
+  document.body.appendChild(third);
+  await Promise.all([second._mochiReady, third._mochiReady]);
+
+  assert.equal(log.fetches.filter((url) => url.endsWith("inactive.css")).length, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("style-inactive.json")).length, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("style-inactive.chi")).length, 1);
+});
+
 test("boot rejects a manifest schema the loader does not understand", async () => {
   const base = manifest([], undefined, undefined);
   await assert.rejects(
-    setup([], { manifest: { ...base, schema_version: 2 } }),
-    /unsupported manifest schema 2 .*loader supports schema 1/,
+    setup([], { manifest: { ...base, schema_version: 3 } }),
+    /unsupported manifest schema 3 .*loader supports schema 2/,
   );
 
   const { schema_version, ...missingVersion } = base;
@@ -480,6 +738,38 @@ test("package dependency cycles fail before the component class runs", async () 
   dom.window.document.body.appendChild(element);
   await assert.rejects(element._mochiReady, /package cycle at component:cycle-a/);
   assert.equal(log.loads.length, 0);
+});
+
+test("package dependencies load on first use once for concurrent instances", async () => {
+  const component = { ...COMPONENT, package: "component:lazy-dependent" };
+  const base = manifest([component], undefined, undefined);
+  base.packages = {
+    "component:lazy-dependent": {
+      kind: "component",
+      file: "components/my-counter.chi",
+      dependencies: ["ruby:lazy-dep"],
+    },
+    "ruby:lazy-dep": {
+      kind: "ruby",
+      file: "components/ruby-lazy-dep.chi",
+      dependencies: [],
+    },
+  };
+  const { log } = await setup([component], { manifest: base });
+
+  assert.equal(log.fetches.filter((url) => url.endsWith(".chi")).length, 0);
+
+  const first = document.createElement("my-counter");
+  const second = document.createElement("my-counter");
+  document.body.append(first, second);
+  await Promise.all([first._mochiReady, second._mochiReady]);
+
+  const componentFetches = log.fetches.filter((url) => url.endsWith("my-counter.chi"));
+  const dependencyFetches = log.fetches.filter((url) => url.endsWith("ruby-lazy-dep.chi"));
+  assert.equal(componentFetches.length, 1);
+  assert.equal(dependencyFetches.length, 1);
+  assert.ok(log.fetches.indexOf(dependencyFetches[0]) < log.fetches.indexOf(componentFetches[0]));
+  assert.equal(log.loads.length, 2);
 });
 
 test("formatting capability host is read from the versioned capabilities map", async () => {
@@ -2075,6 +2365,7 @@ test("multiple instances share one class and irep but keep independent targets a
 
   const chiFetches = log.fetches.filter((url) => url.endsWith("my-counter.chi"));
   assert.equal(chiFetches.length, 1);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.json")).length, 1);
   assert.equal(log.loads.length, 1);
   assert.equal(log.calls.filter((call) => call === "init_runtime").length, 1);
 });
@@ -4399,6 +4690,32 @@ test("formatting host failure rejects the mount with an actionable error", async
   assert.equal(failures.length, 1);
   assert.equal(failures[0].phase, "mount");
   assert.match(failures[0].message, /mochi-format\.js/);
+});
+
+test("a failed formatting host load is evicted and can be retried", async () => {
+  let attempts = 0;
+  const hostModule = { format: () => "1" };
+  const { module } = await setup([FORMAT_COMPONENT], {
+    formatHost: "mochi-format.js",
+    hostModuleFactory: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network down");
+      global.MochiFormatHost = hostModule;
+    },
+  });
+
+  const element = document.createElement("format-panel");
+  document.body.appendChild(element);
+  await assert.rejects(element._mochiReady, /failed to load formatting host .*network down/);
+
+  element.remove();
+  await flushLifecycle();
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  assert.equal(attempts, 2);
+  assert.equal(element._mochiMountState, "mounted");
+  assert.equal(module.__mochiFormatHost, hostModule);
 });
 
 test("formatting host must register before a component mounts", async () => {

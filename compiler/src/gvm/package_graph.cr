@@ -11,7 +11,9 @@ require "../tree-sitter/source_symbols"
 # come from literal require/require_relative calls, constant ownership, and
 # static component tag references in templates.
 module MochiPackaging
-  SCHEMA_VERSION   = 1
+  # Bundle schema shared by the entry manifest and the per-component
+  # descriptors it points at. Both halves move together.
+  SCHEMA_VERSION   = 2
   RUNTIME_REQUIRES = Set{"json", "await"}
 
   record Capability,

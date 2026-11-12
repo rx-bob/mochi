@@ -1,5 +1,6 @@
 require "json"
 require "file_utils"
+require "digest/sha1"
 require "../mochi_cmp"
 require "../sorbet/type_stripper"
 require "../webcomponents/resource_manifest"
@@ -91,6 +92,9 @@ class MrbcCompiler
     Dir.mkdir_p(output_dir)
     components_dir = File.join(output_dir, COMPONENTS_DIR)
     Dir.mkdir_p(components_dir)
+    # The output directory can be reused between builds. Descriptors from a
+    # previous source tree must not look like part of this bundle.
+    Dir.glob(File.join(components_dir, "*.json")).each { |path| File.delete(path) }
 
     @mrbc_path ||= resolved_mrbc_path
 
@@ -141,6 +145,9 @@ class MrbcCompiler
     end
 
     @chi_paths = sorted_components.compact_map { |component| chi_paths_by_tag[component.manifest.tag_name]? }
+    sorted_components.each do |component|
+      write_component_descriptor(component.manifest, output_dir)
+    end
     @wasm_path = copy_asset(resolved_wasm_source, output_dir, "mochi-gvm.wasm")
     @js_path = copy_asset(resolved_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
@@ -187,22 +194,44 @@ class MrbcCompiler
       end
       resources[resource.id] = resource
     end
-    resources.values.sort_by(&.id)
+    # Shared style text is a separately loadable resource. The entry manifest
+    # keeps only its identity and location; the loader fetches it when a
+    # component that owns the resource first mounts.
+    resources.values.sort_by(&.id).map do |resource|
+      next resource unless resource.kind == "style" && resource.output_file.nil?
+
+      PackageResource.new(
+        resource.id,
+        resource.kind,
+        text: resource.text,
+        output_file: File.join(COMPONENTS_DIR, "styles", "#{resource_digest(resource.id)}.css"),
+        source_path: resource.source_path
+      )
+    end
+  end
+
+  private def resource_digest(id : String) : String
+    Digest::SHA1.hexdigest(id)[0, 12]
   end
 
   private def emit_resource_files(resources : Array(PackageResource), output_dir : String) : Nil
     icon_root = File.join(output_dir, "mochi-icons")
     FileUtils.rm_rf(icon_root) if File.directory?(icon_root)
+    style_root = File.join(output_dir, COMPONENTS_DIR, "styles")
+    FileUtils.rm_rf(style_root) if File.directory?(style_root)
     resources.each do |resource|
       file = resource.output_file
       source = resource.source_path
       next unless file
-      unless source && File.file?(source)
-        raise "package resource '#{resource.id}' has no source file"
-      end
       destination = File.join(output_dir, file)
       FileUtils.mkdir_p(File.dirname(destination))
-      FileUtils.cp(source, destination)
+      if source && File.file?(source)
+        FileUtils.cp(source, destination)
+      elsif text = resource.text
+        File.write(destination, text)
+      else
+        raise "package resource '#{resource.id}' has no source file or text"
+      end
     end
   end
 
@@ -526,13 +555,46 @@ class MrbcCompiler
         json.field "components" do
           json.array do
             components.each do |component|
-              write_component(json, component.manifest)
+              write_component_index(json, component.manifest)
             end
           end
         end
         json.field "wasm_file", @wasm_path ? File.basename(@wasm_path.not_nil!) : nil
         json.field "js_file", @js_path ? File.basename(@js_path.not_nil!) : nil
         json.field "loader_file", @loader_path ? File.basename(@loader_path.not_nil!) : nil
+      end
+    end
+  end
+
+  private def component_descriptor_file(tag_name : String) : String
+    File.join(COMPONENTS_DIR, "#{tag_name}.json")
+  end
+
+  # The entry manifest carries only the identities needed to register custom
+  # elements and the location of each component's descriptor. Templates,
+  # styles, bindings, props, and dependency ids stay in the descriptor and are
+  # fetched when the component is first used.
+  private def write_component_index(json : JSON::Builder, manifest : ComponentManifest) : Nil
+    json.object do
+      json.field "tag_name", manifest.tag_name
+      json.field "class_name", manifest.class_name
+      json.field "descriptor", component_descriptor_file(manifest.tag_name)
+      if package_id = manifest.package_id
+        json.field "package", package_id
+      end
+    end
+  end
+
+  private def write_component_descriptor(manifest : ComponentManifest, output_dir : String) : Nil
+    path = File.join(output_dir, component_descriptor_file(manifest.tag_name))
+    File.write(path, build_component_descriptor_json(manifest))
+  end
+
+  private def build_component_descriptor_json(manifest : ComponentManifest) : String
+    JSON.build do |json|
+      json.object do
+        json.field "schema_version", MochiPackaging::SCHEMA_VERSION
+        write_component_fields(json, manifest)
       end
     end
   end
@@ -588,90 +650,88 @@ class MrbcCompiler
     json.field resource.id do
       json.object do
         json.field "kind", resource.kind
-        if text = resource.text
-          json.field "text", text
-        end
+        # A resource with a file is fetched on demand and never inlined.
         if file = resource.output_file
           json.field "file", file
+        elsif text = resource.text
+          json.field "text", text
         end
       end
     end
   end
 
-  private def write_component(json : JSON::Builder, manifest : ComponentManifest) : Nil
-    json.object do
-      json.field "tag_name", manifest.tag_name
-      json.field "class_name", manifest.class_name
-      json.field "chi_file", manifest.chi_file
-      if package_id = manifest.package_id
-        json.field "package", package_id
-      end
-      if helper_chi = manifest.helper_chi
-        json.field "helper_chi", helper_chi
-      end
-      unless manifest.dependencies.empty?
-        json.field "dependencies" do
-          json.array do
-            manifest.dependencies.sort.each { |dependency| json.string(dependency) }
-          end
+  private def write_component_fields(json : JSON::Builder, manifest : ComponentManifest) : Nil
+    json.field "tag_name", manifest.tag_name
+    json.field "class_name", manifest.class_name
+    json.field "chi_file", manifest.chi_file
+    if package_id = manifest.package_id
+      json.field "package", package_id
+    end
+    if helper_chi = manifest.helper_chi
+      json.field "helper_chi", helper_chi
+    end
+    unless manifest.dependencies.empty?
+      json.field "dependencies" do
+        json.array do
+          manifest.dependencies.sort.each { |dependency| json.string(dependency) }
         end
       end
-      unless manifest.capabilities.empty?
-        json.field "capabilities" do
-          json.array do
-            manifest.capabilities.sort.each { |capability| json.string(capability) }
-          end
+    end
+    unless manifest.capabilities.empty?
+      json.field "capabilities" do
+        json.array do
+          manifest.capabilities.sort.each { |capability| json.string(capability) }
         end
       end
-      if manifest.formatting
-        json.field "formatting", true
-      end
-      json.field "html_template", manifest.html_template
-      unless manifest.style_resources.empty?
-        json.field "style_resources" do
-          json.array do
-            manifest.style_resource_ids.each { |id| json.string(id) }
-          end
+    end
+    if manifest.formatting
+      json.field "formatting", true
+    end
+    json.field "html_template", manifest.html_template
+    unless manifest.style_resources.empty?
+      json.field "style_resources" do
+        json.array do
+          manifest.style_resource_ids.each { |id| json.string(id) }
         end
       end
-      json.field "css", manifest.css
-      if source_file = manifest.source_file
-        json.field "source" do
+    end
+    json.field "css", manifest.css
+    if source_file = manifest.source_file
+      json.field "source" do
+        json.object do
+          json.field "file", source_file
+          json.field "line", manifest.source_line
+        end
+      end
+      unless manifest.method_lines.empty?
+        json.field "methods" do
           json.object do
-            json.field "file", source_file
-            json.field "line", manifest.source_line
-          end
-        end
-        unless manifest.method_lines.empty?
-          json.field "methods" do
-            json.object do
-              manifest.method_lines.to_a.sort_by(&.[0]).each do |name, line|
-                json.field name, line
-              end
+            manifest.method_lines.to_a.sort_by(&.[0]).each do |name, line|
+              json.field name, line
             end
           end
         end
       end
-
-      unless manifest.props.empty?
-        json.field "props" do
-          json.array do
-            manifest.props.each { |prop| write_prop(json, prop, manifest.source_file) }
-          end
-        end
-      end
-
-      unless manifest.emits.empty?
-        json.field "emits" do
-          json.array do
-            manifest.emits.each { |event| write_emit(json, event, manifest.source_file) }
-          end
-        end
-      end
-
-      write_bindings(json, manifest.bindings)
-      write_events(json, manifest.events)
     end
+
+    unless manifest.props.empty?
+      json.field "props" do
+        json.array do
+          manifest.props.each { |prop| write_prop(json, prop, manifest.source_file) }
+        end
+      end
+    end
+
+    unless manifest.emits.empty?
+      json.field "emits" do
+        json.array do
+          manifest.emits.each { |event| write_emit(json, event, manifest.source_file) }
+        end
+      end
+    end
+
+    write_bindings(json, manifest.bindings)
+    write_events(json, manifest.events)
   end
 
   private def write_prop(json : JSON::Builder, prop : PropDescriptor, fallback_file : String?) : Nil

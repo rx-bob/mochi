@@ -56,6 +56,7 @@ function assertBundleOutput(): void {
     "mochi-manifest.json",
     "index.html",
     path.join("components", "my-counter.chi"),
+    path.join("components", "my-counter.json"),
   ];
   required.forEach((file) => {
     expect(fs.existsSync(path.join(bundleDir, file)), `missing ${file}`).toBe(true);
@@ -69,7 +70,7 @@ function assertBundleOutput(): void {
   expect(manifest.wasm_file).toBe("mochi-gvm.wasm");
   expect(manifest.js_file).toBe("mochi-gvm.js");
   expect(manifest.loader_file).toBe("mochi-loader.js");
-  expect(manifest.schema_version).toBe(1);
+  expect(manifest.schema_version).toBe(2);
   expect(manifest.format_host).toBeUndefined();
   expect(manifest.capabilities).toBeUndefined();
   expect(Object.keys(manifest.packages)).not.toContain("capability:formatting");
@@ -78,6 +79,9 @@ function assertBundleOutput(): void {
   ).toBe(false);
   expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(false);
   expect(manifest.components.map((component: { tag_name: string }) => component.tag_name)).toContain("my-counter");
+  expect(manifest.components.every((component: { descriptor?: string }) =>
+    typeof component.descriptor === "string")).toBe(true);
+  expect(manifest.components[0].html_template).toBeUndefined();
 }
 
 function startBundleServer(): Promise<void> {

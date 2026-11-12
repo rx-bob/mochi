@@ -5,7 +5,7 @@
   var RITE_HEADER = new Uint8Array([0x52, 0x49, 0x54, 0x45, 0x30, 0x34, 0x30, 0x30, 0x00, 0x00]);
   var COMPONENT_DIR = "components/";
   var DEFAULT_MANIFEST = "mochi-manifest.json";
-  var MANIFEST_SCHEMA_VERSION = 1;
+  var MANIFEST_SCHEMA_VERSION = 2;
   var MAX_PENDING_FETCHES = 256;
 
   // Custom element reactions for a same-task DOM move run before queued
@@ -22,6 +22,10 @@
     activeModule: null,
     loadChain: Promise.resolve(),
     irepPromises: new Map(),
+    descriptorPromises: new Map(),
+    styleTextPromises: new Map(),
+    styleTextCache: new Map(),
+    componentRuntimeCache: new Map(),
     hostModulePromises: new Map(),
     internCache: new Map(),
     tags: new Set(),
@@ -1083,6 +1087,133 @@
     state.loadChain = promise.catch(function () {});
     state.irepPromises.set(url, promise);
     promise.catch(function () { state.irepPromises.delete(url); });
+    return promise;
+  }
+
+  // The entry manifest is an index: it names each component and where its
+  // descriptor lives. A descriptor carries the template, styles, bindings,
+  // props, and dependency ids. It is fetched on first use, cached immutably,
+  // and evicted from the promise map when it fails so a later mount can retry.
+  function componentDescriptorUrl(entry, manifestUrl) {
+    var path = entry.descriptor || (COMPONENT_DIR + entry.tag_name + ".json");
+    return absoluteUrl(path, manifestUrl);
+  }
+
+  function validateComponentDescriptor(descriptor, entry, url, manifest) {
+    var tag = entry.tag_name || "<unknown>";
+    if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) {
+      throw new Error("mochi-loader: descriptor for component '" + tag + "' must be an object (" + url + ")");
+    }
+    if (descriptor.schema_version !== MANIFEST_SCHEMA_VERSION) {
+      throw new Error("mochi-loader: component descriptor for '" + tag + "' uses schema " +
+        JSON.stringify(descriptor.schema_version) + " but this loader supports schema " +
+        MANIFEST_SCHEMA_VERSION + " (" + url + ")");
+    }
+    if (descriptor.tag_name && descriptor.tag_name !== tag) {
+      throw new Error("mochi-loader: descriptor for component '" + tag +
+        "' declares tag '" + descriptor.tag_name + "' (" + url + ")");
+    }
+    if (typeof descriptor.class_name !== "string" || descriptor.class_name.length === 0) {
+      throw new Error("mochi-loader: descriptor for component '" + tag + "' has no class name (" + url + ")");
+    }
+    if (descriptor.html_template !== undefined && typeof descriptor.html_template !== "string") {
+      throw new Error("mochi-loader: descriptor for component '" + tag + "' has an invalid template (" + url + ")");
+    }
+    if (descriptor.bindings !== undefined && !Array.isArray(descriptor.bindings)) {
+      throw new Error("mochi-loader: descriptor for component '" + tag + "' has invalid bindings (" + url + ")");
+    }
+    if (descriptor.events !== undefined && !Array.isArray(descriptor.events)) {
+      throw new Error("mochi-loader: descriptor for component '" + tag + "' has invalid events (" + url + ")");
+    }
+    if (descriptor.style_resources !== undefined && !Array.isArray(descriptor.style_resources)) {
+      throw new Error("mochi-loader: descriptor for component '" + tag + "' has invalid style resources (" + url + ")");
+    }
+    if (manifest && manifest.schema_version !== descriptor.schema_version) {
+      throw new Error("mochi-loader: component descriptor for '" + tag +
+        "' does not match the entry manifest schema (" + url + ")");
+    }
+    return descriptor;
+  }
+
+  function loadComponentDescriptor(entry, manifest, manifestUrl) {
+    var url = componentDescriptorUrl(entry, manifestUrl);
+    var existing = state.descriptorPromises.get(url);
+    if (existing) return existing;
+
+    var promise = global.fetch(url).then(function (response) {
+      if (!response.ok) {
+        throw new Error("mochi-loader: failed to fetch descriptor for component '" +
+          entry.tag_name + "' from " + url +
+          (response.status ? " (HTTP " + response.status + ")" : ""));
+      }
+      return response.json();
+    }).then(function (descriptor) {
+      return validateComponentDescriptor(descriptor, entry, url, manifest);
+    }).then(function (descriptor) {
+      var styleIds = descriptor.style_resources || [];
+      return Promise.all(styleIds.map(function (id) {
+        return loadStyleResource(id, manifest, manifestUrl, descriptor.tag_name || entry.tag_name);
+      })).then(function () {
+        return Object.assign({}, entry, descriptor, { descriptor: entry.descriptor });
+      });
+    }).catch(function (error) {
+      state.descriptorPromises.delete(url);
+      if (error && typeof error === "object") error.mochiPhase = "descriptor";
+      throw error;
+    });
+
+    state.descriptorPromises.set(url, promise);
+    return promise;
+  }
+
+  function styleResource(id, manifest) {
+    var resources = manifest && manifest.resources;
+    var resource = resources && resources[id];
+    if (!resource || resource.kind !== "style") {
+      throw new Error("component references missing style resource " + id);
+    }
+    return resource;
+  }
+
+  function loadStyleResource(id, manifest, manifestUrl, tag) {
+    if (state.styleTextCache.has(id)) {
+      return Promise.resolve(state.styleTextCache.get(id));
+    }
+    var existing = state.styleTextPromises.get(id);
+    if (existing) return existing;
+
+    var resource;
+    try {
+      resource = styleResource(id, manifest);
+    } catch (error) {
+      return Promise.reject(new Error(
+        (tag || "component") + " references missing style resource " + id));
+    }
+    if (typeof resource.text === "string") {
+      state.styleTextCache.set(id, resource.text);
+      return Promise.resolve(resource.text);
+    }
+    if (!resource.file) {
+      return Promise.reject(new Error(
+        (tag || "component") + " style resource " + id + " has no file"));
+    }
+
+    var url = absoluteUrl(resource.file, manifestUrl);
+    var promise = global.fetch(url).then(function (response) {
+      if (!response.ok) {
+        throw new Error("mochi-loader: failed to fetch style resource '" + id +
+          "' for " + (tag || "component") + " from " + url);
+      }
+      return response.text();
+    }).then(function (text) {
+      state.styleTextCache.set(id, text);
+      return text;
+    }).catch(function (error) {
+      state.styleTextPromises.delete(id);
+      throw error;
+    });
+
+    state.styleTextPromises.set(id, promise);
     return promise;
   }
 
@@ -2897,14 +3028,16 @@
   }
 
   function styleResourceText(id, tag) {
+    if (state.styleTextCache.has(id)) return state.styleTextCache.get(id);
     var resources = state.manifest && state.manifest.resources;
     var resource = resources && resources[id];
-    if (!resource || resource.kind !== "style" || typeof resource.text !== "string") {
-      throw new Error(
-        (tag || "component") + " references missing style resource " + id
-      );
+    if (resource && resource.kind === "style" && typeof resource.text === "string") {
+      state.styleTextCache.set(id, resource.text);
+      return resource.text;
     }
-    return resource.text;
+    throw new Error(
+      (tag || "component") + " references unloaded style resource " + id
+    );
   }
 
   function canAdoptStyleSheets(root) {
@@ -2959,13 +3092,17 @@
     if (localCss) appendStyleElement(root, localCss, null);
   }
 
-  function defineComponent(component, manifestUrl) {
-    var tag = component.tag_name;
-    if (!tag || state.tags.has(tag) || global.customElements.get(tag)) return;
+  // Immutable per-component compilation data. Two instances share the parsed
+  // template, flattened bindings, and event names; each keeps its own VM
+  // instance and binding targets.
+  function componentRuntime(component) {
+    var key = component.tag_name || component.descriptor || component.class_name;
+    var cached = state.componentRuntimeCache.get(key);
+    if (cached) return cached;
 
     var template = global.document.createElement("template");
     template.innerHTML = component.html_template || "";
-    var bindings = component.bindings || [];
+    var bindings = Array.isArray(component.bindings) ? component.bindings : [];
     var allBindings = flattenBindings(bindings);
     var eventNames = [];
     function addEventName(name) {
@@ -2978,17 +3115,32 @@
       });
     });
 
+    var runtime = {
+      template: template,
+      bindings: bindings,
+      allBindings: allBindings,
+      eventNames: eventNames
+    };
+    state.componentRuntimeCache.set(key, runtime);
+    return runtime;
+  }
+
+  function defineComponent(entry, manifestUrl) {
+    var tag = entry.tag_name;
+    if (!tag || state.tags.has(tag) || global.customElements.get(tag)) return;
+
     var Element = class extends global.HTMLElement {
       constructor() {
         super();
         this.bindingTargets = {};
         this.bindingData = {};
         this.bindingValues = {};
-        allBindings.forEach(function (binding) {
-          this.bindingData[binding.id] = binding;
-        }, this);
         this.refs = this.bindingTargets;
-        this._mochiComponent = component;
+        // The entry manifest only carries identity. The descriptor replaces
+        // this object after the first-use fetch; until then errors can still
+        // name the tag and class.
+        this._mochiComponent = entry;
+        this._mochiRuntime = null;
         this._mochiManifestUrl = manifestUrl;
         this._mochiReady = null;
         this._mochiModule = null;
@@ -3047,40 +3199,56 @@
         this.bindingTargets = {};
         this.bindingValues = {};
         this.bindingData = {};
+        this._mochiRuntime = null;
+        this._mochiComponent = entry;
         focusStacks.delete(this);
-        allBindings.forEach(function (binding) {
-          this.bindingData[binding.id] = binding;
-        }, this);
         this.refs = this.bindingTargets;
         this._mochiMountToken = ++state.nextMountToken;
         var mountToken = this._mochiMountToken;
-
-        try {
-          installComponentStyles(root, component);
-        } catch (error) {
-          this._mochiMountState = "failed";
-          reportError(this, "style", "", error);
-          return;
-        }
-
-        var fragment = template.content.cloneNode(true);
-        try {
-          this._resolveBindings(fragment);
-          root.appendChild(fragment);
-        } catch (error) {
-          this._mochiMountState = "failed";
-          reportError(this, "binding", "", error);
-          return;
-        }
-        // The retained shadow root outlives every mount, so one delegated
-        // listener per event serves all lifecycles of this element.
-        if (!this._mochiEventsAttached) {
-          this._attachEvents(root);
-          this._mochiEventsAttached = true;
-        }
-
         var element = this;
-        this._mochiReady = mountInstance(component, state.manifest, manifestUrl, element, mountToken)
+
+        this._mochiReady = loadComponentDescriptor(entry, state.manifest, manifestUrl)
+          .then(function (loaded) {
+            // The descriptor download can outlive the connection. Settle the
+            // cancelled mount before touching styles, the shadow tree, or the
+            // VM so a detached element never becomes a ghost instance.
+            if (element._mochiMountToken !== mountToken ||
+                element._mochiDisconnected || !element.isConnected) {
+              element._settleCancelledMount(mountToken);
+              return { cancelled: true, mountToken: mountToken };
+            }
+
+            element._mochiComponent = loaded;
+            var runtime = componentRuntime(loaded);
+            element._mochiRuntime = runtime;
+            runtime.allBindings.forEach(function (binding) {
+              element.bindingData[binding.id] = binding;
+            });
+
+            try {
+              installComponentStyles(root, loaded);
+            } catch (error) {
+              if (error && typeof error === "object") error.mochiPhase = "style";
+              throw error;
+            }
+
+            var fragment = runtime.template.content.cloneNode(true);
+            try {
+              element._resolveBindings(fragment);
+              root.appendChild(fragment);
+            } catch (error) {
+              if (error && typeof error === "object") error.mochiPhase = "binding";
+              throw error;
+            }
+            // The retained shadow root outlives every mount, so one delegated
+            // listener per event serves all lifecycles of this element.
+            if (!element._mochiEventsAttached) {
+              element._attachEvents(root);
+              element._mochiEventsAttached = true;
+            }
+
+            return mountInstance(loaded, state.manifest, manifestUrl, element, mountToken);
+          })
           .then(function (mounted) {
             if (mounted.cancelled) {
               element._settleCancelledMount(mountToken);
@@ -3122,8 +3290,9 @@
           }).catch(function (error) {
             if (mountToken === element._mochiMountToken) {
               element._mochiMountState = "failed";
+              var phase = error && error.mochiPhase ? error.mochiPhase : "mount";
               throw reportError(
-                element, "mount", methodFromError(error, "initialize"),
+                element, phase, methodFromError(error, "initialize"),
                 error, element._mochiModule
               );
             }
@@ -3347,6 +3516,9 @@
       }
 
       _resolveBindings(root) {
+        var runtime = this._mochiRuntime;
+        if (!runtime) return;
+        var bindings = runtime.bindings;
         for (var i = 0; i < bindings.length; i++) {
           installBindingTarget(this, root, bindings[i], tag);
         }
@@ -3354,6 +3526,7 @@
 
       _attachEvents(root) {
         var element = this;
+        var eventNames = this._mochiRuntime ? this._mochiRuntime.eventNames : [];
         eventNames.forEach(function (eventName) {
           root.addEventListener(eventName, function (event) {
             var target = eventTarget(event, root, eventName);
@@ -3506,6 +3679,20 @@
     if (!Array.isArray(manifest.components)) {
       throw new Error("mochi-loader: manifest " + manifestUrl + " has no components array");
     }
+    manifest.components.forEach(function (entry, index) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error("mochi-loader: manifest component index entry " + index +
+          " must be an object in " + manifestUrl);
+      }
+      if (typeof entry.tag_name !== "string" || entry.tag_name.length === 0) {
+        throw new Error("mochi-loader: manifest component index entry " + index +
+          " has no tag name in " + manifestUrl);
+      }
+      if (typeof entry.descriptor !== "string" || entry.descriptor.length === 0) {
+        throw new Error("mochi-loader: manifest component index entry '" + entry.tag_name +
+          "' has no descriptor location in " + manifestUrl);
+      }
+    });
     if (!manifest.packages || typeof manifest.packages !== "object" || Array.isArray(manifest.packages)) {
       throw new Error("mochi-loader: manifest " + manifestUrl + " has no package descriptors");
     }

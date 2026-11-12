@@ -365,9 +365,10 @@ RUBY
           File.read(chi_path).includes?("MATZ").should be_true
 
           json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
-          bare = json["components"].as_a.find { |entry| entry.as_h["tag_name"].as_s == "x-bare" }
-          bare.should_not be_nil
-          bare.not_nil!.as_h["css"].as_s.should eq("")
+          bare_index = json["components"].as_a.find { |entry| entry.as_h["tag_name"].as_s == "x-bare" }
+          bare_index.should_not be_nil
+          bare = JSON.parse(File.read(File.join(output, bare_index.not_nil!.as_h["descriptor"].as_s)))
+          bare.as_h["css"].as_s.should eq("")
         ensure
           FileUtils.rm_rf(output)
         end
@@ -1011,7 +1012,8 @@ RUBY
 
           json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
           json["components"].as_a.each do |entry|
-            entry.as_h["helper_chi"].as_s.should eq(helper.key)
+            descriptor = JSON.parse(File.read(File.join(output, entry.as_h["descriptor"].as_s)))
+            descriptor.as_h["helper_chi"].as_s.should eq(helper.key)
           end
         ensure
           FileUtils.rm_rf(output)

@@ -17,6 +17,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json",
+  ".css": "text/css; charset=utf-8",
   ".wasm": "application/wasm",
   ".chi": "application/octet-stream",
   ".woff2": "font/woff2",
@@ -59,6 +60,16 @@ function startStaticServer(rootDir: string): Promise<{ server: http.Server; base
       resolve({ server, baseURL: `http://127.0.0.1:${address.port}` });
     });
   });
+}
+
+function readManifest(bundleDir: string): any {
+  return JSON.parse(fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"));
+}
+
+function readComponentDescriptor(bundleDir: string, manifest: any, tag: string): any {
+  const entry = (manifest.components as any[]).find((component) => component.tag_name === tag);
+  if (!entry) throw new Error(`missing component index entry ${tag}`);
+  return JSON.parse(fs.readFileSync(path.join(bundleDir, entry.descriptor), "utf8"));
 }
 
 test("GVM evolved features: prelude helpers, each events/helpers, props, timers, storage, routing, and class toggle", async ({ page }) => {
@@ -490,8 +501,12 @@ end
   const styleResources = Object.entries(manifest.resources as Record<string, any>)
     .filter(([, resource]) => resource.kind === "style");
   expect(styleResources).toHaveLength(2);
-  const alpha = (manifest.components as any[]).find((component) => component.tag_name === "style-alpha");
-  const beta = (manifest.components as any[]).find((component) => component.tag_name === "style-beta");
+  styleResources.forEach(([, resource]) => {
+    expect(resource.text).toBeUndefined();
+    expect(fs.existsSync(path.join(bundleDir, resource.file))).toBe(true);
+  });
+  const alpha = readComponentDescriptor(bundleDir, manifest, "style-alpha");
+  const beta = readComponentDescriptor(bundleDir, manifest, "style-beta");
   expect(alpha.style_resources).toEqual(beta.style_resources);
   expect(alpha.style_resources).toHaveLength(2);
   expect(fs.existsSync(path.join(bundleDir, "mochi-icons", "home.svg"))).toBe(true);
@@ -1466,7 +1481,8 @@ end
 
   const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"));
   expect(manifest.components).toHaveLength(2);
-  const helperNames = new Set(manifest.components.map((component: { helper_chi: string }) => component.helper_chi));
+  const helperNames = new Set(manifest.components.map((component: any) =>
+    readComponentDescriptor(bundleDir, manifest, component.tag_name).helper_chi));
   expect(helperNames.size).toBe(1);
   const helperName = [...helperNames][0];
   expect(fs.existsSync(path.join(bundleDir, "components", helperName))).toBe(true);
@@ -2128,7 +2144,7 @@ end
   const numericManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(numericManifest.schema_version).toBe(1);
+  expect(numericManifest.schema_version).toBe(2);
   expect(numericManifest.prelude).toBeUndefined();
   expect(numericManifest.format_host).toBeUndefined();
   expect(
@@ -2409,10 +2425,10 @@ end
   const moneyManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(moneyManifest.schema_version).toBe(1);
+  expect(moneyManifest.schema_version).toBe(2);
   expect(moneyManifest.prelude).toBeUndefined();
   expect(moneyManifest.format_host).toBeUndefined();
-  expect(moneyManifest.components[0].formatting).toBeUndefined();
+  expect(readComponentDescriptor(bundleDir, moneyManifest, "money-ledger").formatting).toBeUndefined();
   const moneyPackages = Object.entries(moneyManifest.packages).map(([id, pkg]: [string, any]) => ({
     id,
     ...pkg,
@@ -2573,15 +2589,16 @@ end
   const formatManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(formatManifest.schema_version).toBe(1);
+  expect(formatManifest.schema_version).toBe(2);
   expect(formatManifest.prelude).toBeUndefined();
   expect(formatManifest.format_host).toBe("mochi-format.js");
   expect(formatManifest.capabilities.formatting).toMatchObject({
     version: 1,
     host: "mochi-format.js",
   });
-  expect(formatManifest.components[0].formatting).toBe(true);
-  expect(formatManifest.components[0].capabilities).toContain("formatting");
+  const formatDescriptor = readComponentDescriptor(bundleDir, formatManifest, "format-screen");
+  expect(formatDescriptor.formatting).toBe(true);
+  expect(formatDescriptor.capabilities).toContain("formatting");
   expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(true);
 
   const requested: string[] = [];
@@ -2679,13 +2696,11 @@ end
   const lazyManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(lazyManifest.schema_version).toBe(1);
+  expect(lazyManifest.schema_version).toBe(2);
   expect(lazyManifest.format_host).toBe("mochi-format.js");
   expect(lazyManifest.capabilities.formatting.host).toBe("mochi-format.js");
-  const plain = lazyManifest.components.find((component: any) =>
-    component.tag_name === "plain-panel");
-  const lazy = lazyManifest.components.find((component: any) =>
-    component.tag_name === "lazy-format");
+  const plain = readComponentDescriptor(bundleDir, lazyManifest, "plain-panel");
+  const lazy = readComponentDescriptor(bundleDir, lazyManifest, "lazy-format");
   expect(plain.formatting).toBeUndefined();
   expect(lazy.formatting).toBe(true);
 
@@ -2697,12 +2712,169 @@ end
     await page.goto(`${baseURL}/index.html`);
     await expect(page.locator("plain-panel").locator("p.plain")).toHaveText("plain");
     expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(0);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(0);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(0);
 
     await page.evaluate(() => {
       document.body.appendChild(document.createElement("lazy-format"));
     });
     await expect(page.locator("lazy-format").locator("p.lazy")).toHaveText("1,234.5");
     expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(1);
+
+    await page.evaluate(async () => {
+      document.querySelector("lazy-format")?.remove();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      document.body.appendChild(document.createElement("lazy-format"));
+    });
+    await expect(page.locator("lazy-format").locator("p.lazy")).toHaveText("1,234.5");
+    expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("GVM entry visit fetches only the active component descriptor closure", async ({ page }) => {
+  setupConsoleLogging(page);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-lazy-descriptor-"));
+  const bundleDir = path.join(projectDir, "bundle");
+  fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(projectDir, "lib", "styles"), { recursive: true });
+
+  fs.writeFileSync(path.join(projectDir, "lib", "styles", "costs.css"), `
+    .costs { border: 1px solid rgb(10, 20, 30); }
+  `);
+  fs.writeFileSync(path.join(projectDir, "lib", "HomeScreen.rb"), `
+class HomeScreen
+  @tag_name = "home-screen"
+
+  def initialize
+  end
+
+  def html
+    %Q{<section class="home"><p class="label">home</p></section>}
+  end
+
+  def css
+    %Q{:host { display: block; } .label { color: rgb(1, 2, 3); }}
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "lib", "CostsScreen.rb"), `
+class CostsScreen
+  @tag_name = "costs-screen"
+
+  def initialize
+    @total = 42
+  end
+
+  def html
+    %Q{<section class="costs"><p class="total">{@total}</p></section>}
+  end
+
+  def css
+    %Q{
+      @import "styles/costs.css";
+      :host { display: block; }
+    }
+  end
+end
+`);
+  fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script src="mochi-loader.js"></script>
+  </head>
+  <body>
+    <home-screen></home-screen>
+  </body>
+</html>
+`);
+
+  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+
+  const manifest = readManifest(bundleDir);
+  expect(manifest.schema_version).toBe(2);
+  expect(manifest.components.map((component: any) => component.tag_name).sort())
+    .toEqual(["costs-screen", "home-screen"]);
+  const homeDescriptor = readComponentDescriptor(bundleDir, manifest, "home-screen");
+  const costsDescriptor = readComponentDescriptor(bundleDir, manifest, "costs-screen");
+  const homeStyleIds = new Set(homeDescriptor.style_resources || []);
+  const costsStyleIds: string[] = costsDescriptor.style_resources || [];
+  const sharedStyleFiles: string[] = costsStyleIds.map((id: string) => manifest.resources[id].file);
+  expect(sharedStyleFiles.length).toBeGreaterThan(0);
+  costsStyleIds.forEach((id) => expect(homeStyleIds.has(id)).toBe(false));
+  sharedStyleFiles.forEach((file) => {
+    expect(fs.existsSync(path.join(bundleDir, file))).toBe(true);
+  });
+
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+
+  const { server, baseURL } = await startStaticServer(bundleDir);
+  try {
+    await page.goto(`${baseURL}/index.html`);
+    await expect(page.locator("home-screen").locator("p.label")).toHaveText("home");
+
+    expect(requested.filter((url) => url.endsWith("/components/home-screen.json"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.json"))).toHaveLength(0);
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.chi"))).toHaveLength(0);
+    sharedStyleFiles.forEach((file) => {
+      expect(requested.filter((url) => url.endsWith(`/${file}`))).toHaveLength(0);
+    });
+
+    await page.evaluate(() => {
+      document.body.appendChild(document.createElement("costs-screen"));
+      document.body.appendChild(document.createElement("costs-screen"));
+    });
+    await expect(page.locator("costs-screen")).toHaveCount(2);
+    await expect(page.locator("costs-screen").nth(0).locator("p.total")).toHaveText("42");
+    await expect(page.locator("costs-screen").nth(1).locator("p.total")).toHaveText("42");
+
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.json"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.chi"))).toHaveLength(1);
+    sharedStyleFiles.forEach((file) => {
+      expect(requested.filter((url) => url.endsWith(`/${file}`))).toHaveLength(1);
+    });
+
+    const reopen = await page.evaluate(async () => {
+      const stats = () => (window as any).MochiLoader.debugStats();
+      const existing = Array.from(document.querySelectorAll("costs-screen")) as any[];
+      const before = stats();
+      const firstInstance = String(existing[0]._mochiInstance);
+      existing.forEach((element) => element.remove());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const removed = stats();
+      const reopened = document.createElement("costs-screen") as any;
+      document.body.appendChild(reopened);
+      await reopened._mochiReady;
+      return {
+        before,
+        removed,
+        after: stats(),
+        firstInstance,
+        reopenedInstance: String(reopened._mochiInstance),
+      };
+    });
+    await expect(page.locator("costs-screen").locator("p.total")).toHaveText("42");
+    expect(reopen.removed.components).toBe(reopen.before.components - 2);
+    expect(reopen.after.components).toBe(reopen.before.components - 1);
+    expect(reopen.after.elements).toBe(reopen.before.elements - 1);
+    expect(reopen.reopenedInstance).not.toBe(reopen.firstInstance);
+
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.json"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/costs-screen.chi"))).toHaveLength(1);
+    sharedStyleFiles.forEach((file) => {
+      expect(requested.filter((url) => url.endsWith(`/${file}`))).toHaveLength(1);
+    });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(projectDir, { recursive: true, force: true });
@@ -2754,12 +2926,13 @@ end
   const helperManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(helperManifest.schema_version).toBe(1);
+  expect(helperManifest.schema_version).toBe(2);
   expect(helperManifest.format_host).toBe("mochi-format.js");
   expect(helperManifest.capabilities.formatting.host).toBe("mochi-format.js");
-  expect(helperManifest.components[0].formatting).toBe(true);
-  expect(helperManifest.components[0].capabilities).toContain("formatting");
-  expect(helperManifest.components[0].helper_chi).toMatch(/^mochi-helpers-/);
+  const helperDescriptor = readComponentDescriptor(bundleDir, helperManifest, "helper-format-panel");
+  expect(helperDescriptor.formatting).toBe(true);
+  expect(helperDescriptor.capabilities).toContain("formatting");
+  expect(helperDescriptor.helper_chi).toMatch(/^mochi-helpers-/);
 
   const requested: string[] = [];
   page.on("request", (request) => requested.push(request.url()));

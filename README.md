@@ -94,8 +94,9 @@ Imports resolve relative to the component file, recursively, depth-first in
 source order. `@import` rules must come before local CSS. The component's own
 rules are applied last, so a local override wins. A shared fragment is emitted
 once by stable content identity even when several components import it; the
-manifest lists each component's ordered `style_resources` and stores each
-fragment once under `resources`.
+manifest records each fragment's stable identity and file location, and each
+component descriptor lists its ordered `style_resources`. The loader fetches a
+shared fragment only when a component that owns it first mounts.
 
 The compiler rejects missing fragments, import cycles, unclosed blocks,
 unclosed strings or comments, invalid import syntax, and `#{...}`
@@ -596,9 +597,11 @@ cd mochi
 task run
 ```
 
-The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file per component, and one `.chi` file per Ruby dependency package. It also writes `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
 
-`mochi-manifest.json` records a `schema_version` for the bundle format. A loader that does not support that version fails before it runs Ruby bytecode. Each component names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
+`mochi-manifest.json` is the compact entry index for the bundle. It records a `schema_version` for the bundle format and lists each component's identity, dependency package, and descriptor location. Templates, local styles, bindings, props, and events live in the per-component descriptor instead of the entry manifest. A loader that does not support the bundle schema fails before it runs Ruby bytecode, and a descriptor whose schema does not match the entry manifest fails with the component name. Each component descriptor names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
+
+On first use, the loader fetches that component's descriptor, its shared style files, and its dependency closure before mounting. Descriptor, package bytecode, style text, formatting host, and parsed template data are cached immutably, while every component instance keeps its own VM state. Concurrent instances share one request per resource, failed downloads are evicted so a reconnect can retry, and a component removed during loading is never mounted.
 
 ### Compiler Tasks
 
@@ -633,7 +636,7 @@ mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --t
 * --typecheck: Run Sorbet typechecks (optional)
 * --initialize: Creates a new preconfigured project directory
 
-The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader reads the manifest, checks its schema version, and fetches the WASM, the dependency packages each component needs, and component `.chi` files.
+The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader reads the entry manifest, checks its schema version, registers the component identities, and fetches a component's descriptor, dependency packages, shared styles, and `.chi` file when that component first connects.
 
 
 
