@@ -1475,14 +1475,15 @@ test("late fetch delivery cannot reach a component that reused the instance slot
   await first._mochiReady;
 
   module.queueFetch(JSON.stringify({
+    id: 1,
     instance: "1",
     url: "/api/late",
     callback: "increment",
     options: {},
   }));
-  first.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  first._dispatchAction("increment");
   await new Promise((resolve) => setImmediate(resolve));
-  assert.ok(log.fetches.includes("/api/late"));
+  assert.ok(log.fetches.some((url) => new URL(url, "http://localhost").pathname === "/api/late"));
 
   first.remove();
   await flushLifecycle();
@@ -2504,7 +2505,10 @@ test("drains JSON fetch requests after mount and delivers parsed responses", asy
   await element._mochiReady;
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.deepEqual(calls, [{ url: "/api/logs", init: { method: "GET" } }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/logs");
+  assert.equal(calls[0].init.method, "GET");
+  assert.ok(calls[0].init.signal instanceof AbortSignal);
   assert.deepEqual(log.deliveredFetches, [{
     instance: "1",
     callback: "on_logs",

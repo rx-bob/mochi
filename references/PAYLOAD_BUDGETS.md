@@ -48,11 +48,11 @@ Measured 2026-11-12 on the repository toolchain:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 413,062 | 138,727 | 3 |
-| Minimal initial | 415,602 | 139,983 | 7 |
-| Feature initial | 416,409 | 140,168 | 7 |
+| Core runtime | 416,678 | 139,457 | 3 |
+| Minimal initial | 419,218 | 140,713 | 7 |
+| Feature initial | 420,025 | 140,898 | 7 |
 | Later feature load | 13,618 | 4,475 | 4 |
-| Feature total | 430,027 | 144,643 | 11 |
+| Feature total | 433,643 | 145,373 | 11 |
 
 The current baseline includes the opt-in routing contract and core storage
 subscriptions. The loader owns one structured route state, push/replace history,
@@ -70,9 +70,16 @@ cleanup. The VM adds `storage_subscribe` and the `_mochi_remove_storage` export.
 The optional `MochiStore` Ruby battery is emitted only when an application
 mentions it, so neither payload fixture loads it.
 
-This intentional core cost is 7,031 raw bytes and 1,378 gzip bytes over the
-previous baseline. It belongs to the core runtime, not to either fixture's
-entry component or later feature load.
+The fetch lifecycle work adds 3,616 raw bytes and 730 gzip bytes to the
+previous routing/storage baseline. This measured growth is in `mochi-loader.js`:
+request cancellation, latest-query-wins handling, mount-safe response delivery,
+and JSON conversion for Ruby Hash request bodies. These browser fetch lifecycle
+operations are currently implemented in the loader even when an app does not
+call `Mochi.fetch`.
+
+The route and storage contracts had previously added 7,031 raw bytes and 1,378
+gzip bytes over the pre-route/storage baseline. Both changes belong to the core
+runtime, not to either fixture's entry component or later feature load.
 
 Core runtime:
 
@@ -80,7 +87,7 @@ Core runtime:
 | --- | ---: | ---: |
 | `mochi-gvm.wasm` | 186,160 | 85,371 |
 | `mochi-gvm.js` | 62,944 | 17,568 |
-| `mochi-loader.js` | 163,958 | 35,788 |
+| `mochi-loader.js` | 167,574 | 36,518 |
 
 Minimal initial:
 
