@@ -21,6 +21,8 @@ describe Initializer do
 
       taskfile.should contain("mochi test -i")
       index.should contain("mochi-loader.js")
+      index.should contain(%(data-mochi-manifest="./build/mochi-manifest.json"))
+      index.should contain("<my-counter></my-counter>")
       index.should_not contain("Opal")
       readme.should contain("test/")
       readme.should contain("assert_text")

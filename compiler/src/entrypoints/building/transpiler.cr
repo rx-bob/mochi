@@ -29,8 +29,9 @@ class Compiler
   BINDING_LITERALS  = ["true", "false", "nil", "self"]
 
   @ruby_parser : TreeSitter::RubyParser
+  @verbose : Bool
 
-  def initialize
+  def initialize(@verbose : Bool = false)
     @ruby_parser = TreeSitter::RubyParser.new
   end
 
@@ -41,8 +42,9 @@ class Compiler
     trace : Pftrace::Trace? = nil,
     sequence_id : UInt32 = 1_u32,
     project_dir : String? = nil,
+    asset_root : String? = nil,
   )
-    puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'"
+    puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'" if @verbose
 
     components = [] of MochiComponent
     helpers = [] of HelperUnit
@@ -53,13 +55,16 @@ class Compiler
 
     t_start = Time.monotonic
     trace_slice(trace, "ProcessComponents", sequence_id) do
-      paths = Dir.glob(Path[input_dir, "**", "*.rb"].to_s).select { |p| File.file?(p) && p.ends_with?(".rb") }.sort
+      input_prefix = Path[input_dir].expand.to_s + "/"
+      paths = builder_man.staged_ruby_source_paths.select do |path|
+        path.starts_with?(input_prefix) && path.ends_with?(".rb")
+      end
       paths.each do |path|
         begin
-          puts "Processing #{path}"
+          puts "Processing #{path}" if @verbose
           absolute_path = Path[path].expand.to_s
 
-          rb_file = File.read(absolute_path)
+          rb_file = builder_man.staged_ruby_source(absolute_path) || File.read(absolute_path)
           display_path = self.class.source_display_path(path, input_dir)
           result = transpile_file(rb_file, absolute_path, i, display_path)
 
@@ -86,11 +91,18 @@ class Compiler
 
     validate_component_inventory(components)
 
-    puts "Done with preparing components for transpilation (#{Time.monotonic})"
+    puts "Done with preparing components for transpilation (#{Time.monotonic})" if @verbose
 
     resources = if root = project_dir
-                  scan_paths = Dir.glob(Path[root, "**", "*.{rb,html,htm}"].to_s).select { |path| File.file?(path) }.sort
-                  IconAssetCollector.new(File.join(root, "icons")).collect(scan_paths)
+                  source_root = asset_root || root
+                  scan_paths = builder_man.staged_ruby_source_paths
+                  index_path = File.join(source_root, "index.html")
+                  scan_paths << index_path if File.file?(index_path)
+                  scan_paths.concat(Dir.glob(Path[source_root, "public", "**", "*.{html,htm}"].to_s).select { |path| File.file?(path) })
+                  IconAssetCollector.new(File.join(source_root, "icons")).collect(
+                    scan_paths.uniq.sort,
+                    builder_man.staged_ruby_sources
+                  )
                 else
                   [] of PackageResource
                 end
@@ -108,10 +120,10 @@ class Compiler
         project_dir
       )
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
-      puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}"
+      puts "Wrote #{compiler.chi_paths.size} component(s) and #{compiler.manifest_path}" if @verbose
     end
 
-    puts "Transpilation finished"
+    puts "Transpilation finished" if @verbose
   end
 
   def transpile_component(rb_file : String, i : Int32, absolute_path : String, source_path : String? = nil)
@@ -167,9 +179,26 @@ class Compiler
         declaration,
         declarations
       )
+      source_without_templates = if legacy_source
+                                   TreeSitter::MethodBodyExtractor.remove_ranges(
+                                     rb_file,
+                                     TreeSitter::MethodBodyExtractor.method_ranges_from_class(
+                                       declaration.node,
+                                       ["html", "css"]
+                                     )
+                                   )
+                                 else
+                                   component_source_for(
+                                     rb_file,
+                                     declaration,
+                                     declarations,
+                                     ["html", "css"]
+                                   )
+                                 end
       transpile_class(
         declaration,
         source,
+        source_without_templates,
         helper.try(&.key),
         root,
         rb_file,
@@ -321,11 +350,18 @@ class Compiler
     source : String,
     component : TreeSitter::ClassDecl,
     declarations : Array(TreeSitter::ClassDecl),
+    methods_to_remove : Array(String) = [] of String,
   ) : String
     start_byte = component.wrapper_start_byte
     end_byte = component.wrapper_end_byte
     if start_byte == component.start_byte && end_byte == component.end_byte
-      return source.byte_slice(component.start_byte, component.end_byte - component.start_byte)
+      component_source = source.byte_slice(start_byte, end_byte - start_byte)
+      return component_source if methods_to_remove.empty?
+
+      local_ranges = TreeSitter::MethodBodyExtractor.method_ranges_from_class(component.node, methods_to_remove).map do |range|
+        {range[0] - start_byte, range[1] - start_byte}
+      end
+      return TreeSitter::MethodBodyExtractor.remove_ranges(component_source, local_ranges)
     end
 
     removals = [] of Tuple(Int32, Int32)
@@ -338,6 +374,8 @@ class Compiler
 
       removals << declaration.range
     end
+
+    removals.concat(TreeSitter::MethodBodyExtractor.method_ranges_from_class(component.node, methods_to_remove))
 
     TreeSitter::SourceSlicer.remove_ranges(source, removals)
   end
@@ -366,6 +404,7 @@ class Compiler
   private def transpile_class(
     declaration : TreeSitter::ClassDecl,
     component_source : String,
+    component_source_without_templates : String,
     helper_chi : String?,
     root : TreeSitter::Node,
     rb_file : String,
@@ -376,8 +415,10 @@ class Compiler
     helper_formatting : Bool = false,
   ) : MochiComponent
     cls_name = declaration.name
-    print_cmp_start_separator(cls_name, i)
-    puts "ClassName:'#{cls_name}'"
+    if @verbose
+      print_cmp_start_separator(cls_name, i)
+      puts "ClassName:'#{cls_name}'"
+    end
 
     methods : Hash(String, RubyDef) = TreeSitter::MethodBodyExtractor.extract_method_bodies_from_class(
       declaration.node,
@@ -435,7 +476,7 @@ class Compiler
 
     # Remove html and css before injecting helpers. Their string bodies may
     # contain `{end}`, which must never be mistaken for the class terminator.
-    amped_ruby_code = RubyUnderstander.remove_methods(component_source, cls_name, ["html", "css"])
+    amped_ruby_code = component_source_without_templates
 
     # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
     attr_hash_result = AttributeHashExtractor.process(html)
@@ -458,7 +499,8 @@ class Compiler
     )
 
     # 3. Extract event handler arguments into data- attributes
-    html = EventArgumentExtractor.process(html, source_locator)
+    expression_parser = TemplateExpressionParser.new(source_locator)
+    html = EventArgumentExtractor.process(html, source_locator, expression_parser)
 
     # Analyze instance variables to determine reactables automatically
     vars = TreeSitter::InstanceVarAnalyzer.analyze_class(declaration.node)
@@ -511,7 +553,8 @@ class Compiler
       methods.keys,
       source_locator,
       props,
-      emits
+      emits,
+      expression_parser
     )
     manifest.helper_chi = helper_chi
     manifest.formatting = helper_formatting || component_source.includes?("MochiFormat")
@@ -548,7 +591,7 @@ class Compiler
       methods
     )
 
-    print_cmp_end_seperator(cls_name, i)
+    print_cmp_end_seperator(cls_name, i) if @verbose
     component = MochiComponent.new(
       absolute_path,
       cls_name,

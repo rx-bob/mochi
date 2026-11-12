@@ -141,4 +141,24 @@ describe EventArgumentExtractor do
     args[0]["value"].as_s.should eq("item.id")
     args[1]["value"].as_s.should eq("}")
   end
+
+  it "uses the caller's shared parser for event source locations" do
+    html = %Q[\n<button onclick="{save(@count)}">Save</button>]
+    locator = TemplateSourceLocator.new(html, "lib/actions.rb")
+    parser = TemplateExpressionParser.new(locator)
+    _result, calls = EventArgumentExtractor.rewrite(html, locator, parser) do |call|
+      call.method_name
+    end
+
+    calls.first.span.not_nil!.file.should eq("lib/actions.rb")
+    calls.first.span.not_nil!.line.should eq(2)
+  end
+
+  it "does not read the on substring inside ordinary data attributes as an event" do
+    html = %Q(<div data-component-id="{item.id}"></div><button onclick="{save}">Save</button>)
+    result = EventArgumentExtractor.process(html)
+
+    result.should contain(%Q(data-component-id="{item.id}"))
+    result.should contain(%Q(onclick="{save}"))
+  end
 end

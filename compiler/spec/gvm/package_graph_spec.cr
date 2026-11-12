@@ -332,6 +332,32 @@ RUBY
     end
   end
 
+  it "loads the network host only for reachable Ruby packages that call Mochi.fetch" do
+    root = File.join(Dir.tempdir, "mochi_package_network_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      plain = dependency_component(root, "plain-panel", "PlainPanel", "class PlainPanel\nend\n")
+      fetched = dependency_component(root, "fetch-panel", "FetchPanel", <<-RUBY)
+class FetchPanel
+  def load_data
+    Mochi.fetch("/api/items", :receive_items)
+  end
+end
+RUBY
+
+      graph = dependency_graph(root, [plain, fetched])
+      graph.has_capability?("network").should be_true
+      graph.capabilities["network"].host.should eq("mochi-fetch.js")
+      graph.capabilities["network"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"fetch", "async"}, {"cancel", "sync"}])
+      plain.manifest.capabilities.should eq([] of String)
+      fetched.manifest.capabilities.should eq(["network"])
+      graph.capability_package_ids.should eq(Set{"component:fetch-panel"})
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "rebuilds identical package identities, dependencies, and order across checkout paths" do
     root_one = File.join(Dir.tempdir, "mochi_package_reproducible_one_#{Random.rand(1_000_000)}")
     root_two = File.join(Dir.tempdir, "mochi_package_reproducible_two_#{Random.rand(1_000_000)}")

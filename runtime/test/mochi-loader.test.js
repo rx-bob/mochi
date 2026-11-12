@@ -142,6 +142,58 @@ function manifest(components, resources, formatHost) {
   };
 }
 
+function networkAdapter(fetchImpl) {
+  const controllers = new Map();
+  return {
+    name: "network",
+    version: 1,
+    sync: {
+      cancel(key) {
+        const controller = controllers.get(String(key));
+        if (controller) controller.abort();
+        controllers.delete(String(key));
+        return true;
+      },
+    },
+    async: {
+      async fetch(argsJson) {
+        const request = JSON.parse(argsJson);
+        const options = { ...(request.options || {}) };
+        delete options.key;
+        delete options.request_key;
+        if (options.body && typeof options.body === "object") {
+          options.body = JSON.stringify(options.body);
+          options.headers = { ...(options.headers || {}) };
+          if (!Object.keys(options.headers).some((name) => name.toLowerCase() === "content-type")) {
+            options.headers["content-type"] = "application/json";
+          }
+        }
+        const controller = new AbortController();
+        options.signal = controller.signal;
+        controllers.set(request.request_key, controller);
+        try {
+          const response = await fetchImpl(request.url, options);
+          const body = response && typeof response.text === "function" ? await response.text() : "";
+          const contentType = response && response.headers && response.headers.get
+            ? response.headers.get("content-type") || "" : "";
+          let data = null;
+          if (body && (!contentType || contentType.includes("json"))) {
+            try { data = JSON.parse(body); } catch (_) {}
+          }
+          const status = response && typeof response.status === "number" ? response.status : 0;
+          const ok = response && typeof response.ok === "boolean"
+            ? response.ok : status >= 200 && status < 300;
+          return { status, ok, body, data, error: ok ? null : `HTTP ${status}${response.statusText ? ` ${response.statusText}` : ""}` };
+        } catch (error) {
+          return { status: 0, ok: false, body: "", data: null, error: error.message || String(error) };
+        } finally {
+          controllers.delete(request.request_key);
+        }
+      },
+    },
+  };
+}
+
 // Disposal waits one microtask so a same-turn DOM move can cancel it. Tests
 // that expect a final removal to complete flush that boundary explicitly.
 function flushLifecycle() {
@@ -366,7 +418,7 @@ function fakeModule(log) {
         module.HEAPU8.slice(fetchInboxOffset, fetchInboxOffset + responseLength)));
       log.deliveredFetches.push({ instance, callback, envelope });
       if (log.onFetchDelivery) log.onFetchDelivery();
-      return 0;
+      return log.failFetchDelivery ? -1 : 0;
     },
     _mochi_host_inbox_offset() {
       return hostInboxOffset;
@@ -422,11 +474,18 @@ async function setup(components, options) {
     dispatched: [], flushes: [], hostUrls: [],
   };
   const body = options.manifest || manifest(components, options.resources, options.formatHost);
+  if (options.fetch) {
+    body.capabilities = {
+      ...(body.capabilities || {}),
+      network: { version: 1, host: "mochi-fetch.js", operations: { fetch: "async", cancel: "sync" }, packages: [] },
+    };
+  }
   const descriptors = new Map();
   components.forEach((component) => {
     descriptors.set(`components/${component.tag_name}.json`, {
       schema_version: 2,
       ...component,
+      ...(options.fetch ? { capabilities: [...new Set([...(component.capabilities || []), "network"])] } : {}),
     });
   });
   Object.entries(options.descriptors || {}).forEach(([file, descriptor]) => {
@@ -471,6 +530,8 @@ async function setup(components, options) {
   const module = fakeModule(log);
   loader.moduleFactory = async () => module;
   if (options.hostModuleFactory) loader.hostModuleFactory = options.hostModuleFactory;
+  else if (options.fetch) loader.hostModuleFactory = async (url) =>
+    url.endsWith("mochi-fetch.js") ? networkAdapter(global.fetch) : null;
 
   await loader.boot("mochi-manifest.json");
   return { dom, loader, module, log };
@@ -2657,6 +2718,45 @@ test("fetch delivery preserves HTTP and network error envelopes", async () => {
       }
     ]
   );
+});
+
+test("oversized fetch responses become a recoverable capacity envelope", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async () => ({
+      status: 200,
+      ok: true,
+      headers: { get: () => "application/json" },
+      text: async () => JSON.stringify({ payload: "x".repeat(20_000) }),
+    }),
+  });
+  module.queueFetch(JSON.stringify({
+    id: 1, instance: "1", url: "/api/large", callback: "on_logs", options: {}
+  }) + "\n");
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(log.deliveredFetches[0].envelope, {
+    status: 0, ok: false, body: "", data: null, error: "fetch response too large"
+  });
+  assert.equal(element.mochiError, undefined);
+});
+
+test("fetch callback failures are reported separately from response errors", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async () => ({ status: 200, ok: true, text: async () => "ok" }),
+  });
+  log.failFetchDelivery = true;
+  module.queueFetch(JSON.stringify({
+    id: 1, instance: "1", url: "/api/callback-failure", callback: "on_logs", options: {}
+  }) + "\n");
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(element.mochiError);
+  assert.match(element.mochiError.message, /fetch callback failed for on_logs/);
+  assert.doesNotMatch(element.mochiError.message, /HTTP 200|fetch response too large/);
 });
 
 test("drains fetch requests after DOM events and action dispatches", async () => {

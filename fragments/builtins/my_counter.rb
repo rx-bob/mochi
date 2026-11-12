@@ -48,11 +48,4 @@ class MyCounter
     @count = @count - 1
   end
 
-  def mounted
-    puts "MyCounter mounted"
-  end
-
-  def unmounted
-    puts "MyCounter unmounted"
-  end
 end

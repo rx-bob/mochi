@@ -104,7 +104,7 @@ class Initializer
     <html>
         <head>
             <title>Mochi Starter</title>
-            <script src="./build/mochi-loader.js"></script>
+            <script src="./build/mochi-loader.js" data-mochi-manifest="./build/mochi-manifest.json"></script>
             <style>
                 body {
                     background: #24262c;
@@ -127,7 +127,7 @@ class Initializer
                 <h1>Hello Mochi</h1>
             </div>
             <div>
-                <my-counter count="3"></my-counter>
+            <my-counter></my-counter>
             </div>
         </body>
     </html>

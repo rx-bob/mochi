@@ -13,7 +13,15 @@ export function getTestPage(name: string): string {
  * Setup console logging for a page to capture and log browser console messages.
  * This helps debug issues by showing console.log, errors, and warnings from the browser.
  */
-export function setupConsoleLogging(page: Page) {
+export function setupConsoleLogging(page: Page, options: { expectedMochiErrors?: boolean } = {}) {
+    page.addInitScript(({ expectedMochiErrors }) => {
+        if (expectedMochiErrors) return;
+        window.addEventListener('mochi:error', event => {
+            const detail = (event as CustomEvent).detail;
+            const message = detail && detail.message ? detail.message : JSON.stringify(detail);
+            setTimeout(() => { throw new Error(`[unexpected mochi:error] ${message}`); }, 0);
+        });
+    }, { expectedMochiErrors: options.expectedMochiErrors === true });
     // Capture all console messages
     page.on('console', msg => {
         const type = msg.type();

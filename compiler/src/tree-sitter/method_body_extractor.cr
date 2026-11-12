@@ -103,10 +103,15 @@ module TreeSitter
       class_node = find_class_by_name(root, class_name)
       return source unless class_node
 
-      body = class_node.child_by_field_name("body")
-      return source unless body
+      remove_ranges(source, method_ranges_from_class(class_node, method_names))
+    end
 
+    def self.method_ranges_from_class(class_node : Node, method_names : Array(String)) : Array(Tuple(Int32, Int32))
       ranges = [] of Tuple(Int32, Int32)
+
+      body = class_node.child_by_field_name("body")
+      return ranges unless body
+
       body.each_named_child do |child|
         next unless child.type == "method"
 
@@ -116,6 +121,10 @@ module TreeSitter
 
         ranges << {child.start_byte, child.end_byte}
       end
+      ranges
+    end
+
+    def self.remove_ranges(source : String, ranges : Array(Tuple(Int32, Int32))) : String
       return source if ranges.empty?
 
       builder = String::Builder.new

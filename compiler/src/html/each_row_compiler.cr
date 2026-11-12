@@ -62,7 +62,7 @@ class EachRowCompiler
     event_index = 0
     row_events = [] of EachRowEventDescriptor
 
-    template, _calls = EventArgumentExtractor.rewrite(template, parser.locator) do |call|
+    template, _calls = EventArgumentExtractor.rewrite(template, parser.locator, parser) do |call|
       handler = call.method_name
       arguments = [] of EventArgumentDescriptor
       if marker = handler.match(ARG_MARKER)

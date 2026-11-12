@@ -48,10 +48,13 @@ class IconAssetCollector
     end
   end
 
-  def collect(source_paths : Array(String)) : Array(PackageResource)
+  def collect(
+    source_paths : Array(String),
+    cached_sources : Hash(String, String) = {} of String => String,
+  ) : Array(PackageResource)
     source_paths.sort.each do |path|
       next unless File.file?(path)
-      @sources[path] = File.read(path)
+      @sources[path] = cached_sources[path]? || File.read(path)
     end
 
     @sources.each do |path, text|

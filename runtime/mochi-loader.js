@@ -633,7 +633,10 @@
     var active = state.activeFetches.get(key);
     if (active) {
       active.cancelled = true;
-      if (active.controller) active.controller.abort();
+      var network = state.hostAdapters.get("network");
+      if (network && network.sync && typeof network.sync.cancel === "function") {
+        network.sync.cancel(fetchRequestKey(request));
+      }
       forgetFetch(active.request);
     }
     state.pendingFetches = state.pendingFetches.filter(function (pending) {
@@ -650,48 +653,6 @@
     state.pendingFetches = state.pendingFetches.filter(function (request) {
       return String(request.instance) !== String(instance);
     });
-  }
-
-  function fetchResponseData(body, contentType) {
-    if (!body) return null;
-    if (contentType && contentType.indexOf("json") === -1) return null;
-    try {
-      return JSON.parse(body);
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function fetchResponseEnvelope(response, body) {
-    var status = response && typeof response.status === "number" ? response.status : 0;
-    var ok = response && typeof response.ok === "boolean"
-      ? response.ok
-      : status >= 200 && status < 300;
-    var contentType = "";
-    try {
-      if (response && response.headers && typeof response.headers.get === "function") {
-        contentType = response.headers.get("content-type") || "";
-      }
-    } catch (error) {
-      contentType = "";
-    }
-    var error = null;
-    if (!ok) {
-      var statusText = response && response.statusText ? " " + response.statusText : "";
-      error = "HTTP " + status + statusText;
-    }
-    return {
-      status: status,
-      ok: ok,
-      body: typeof body === "string" ? body : "",
-      data: fetchResponseData(body, contentType),
-      error: error
-    };
-  }
-
-  function fetchNetworkEnvelope(error) {
-    var message = error && error.message ? error.message : String(error || "fetch failed");
-    return { status: 0, ok: false, body: "", data: null, error: message };
   }
 
   function writeFetchEnvelope(module, element, request, envelope) {
@@ -759,54 +720,38 @@
       }
       state.latestFetches.set(latestKey, fetchRequestKey(request));
     }
-    var active = { request: request, controller: null, cancelled: false };
+    var active = { request: request, cancelled: false };
     state.activeFetches.set(fetchRequestKey(request), active);
-    if (typeof global.fetch !== "function") {
-      deliverFetch(module, element, request, fetchNetworkEnvelope("fetch unavailable"));
-      return;
-    }
-
-    var fetchOptions = Object.assign({}, options);
-    delete fetchOptions.key;
-    delete fetchOptions.request_key;
-    var requestBody = fetchOptions.body;
-    var plainBody = requestBody && typeof requestBody === "object" &&
-      (Array.isArray(requestBody) || Object.getPrototypeOf(requestBody) === Object.prototype ||
-        Object.getPrototypeOf(requestBody) === null);
-    if (plainBody) {
-      fetchOptions.body = JSON.stringify(requestBody);
-      var headers = fetchOptions.headers && typeof fetchOptions.headers === "object"
-        ? Object.assign({}, fetchOptions.headers) : {};
-      var hasContentType = Object.keys(headers).some(function (name) {
-        return name.toLowerCase() === "content-type";
+    var adapter = state.hostAdapters.get("network");
+    var operation = adapter && adapter.async && adapter.async.fetch;
+    if (typeof operation !== "function") {
+      deliverFetch(module, element, request, {
+        status: 0, ok: false, body: "", data: null,
+        error: "network capability is not loaded for this component"
       });
-      if (!hasContentType) headers["content-type"] = "application/json";
-      fetchOptions.headers = headers;
-    }
-    if (typeof global.AbortController === "function") {
-      active.controller = new global.AbortController();
-      fetchOptions.signal = active.controller.signal;
+      return;
     }
     var responsePromise;
     try {
-      responsePromise = global.fetch(request.url, fetchOptions);
+      responsePromise = operation.call(adapter.async, JSON.stringify({
+        request_key: fetchRequestKey(request), url: request.url, options: options
+      }));
     } catch (error) {
-      deliverFetch(module, element, request, fetchNetworkEnvelope(error));
+      deliverFetch(module, element, request, {
+        status: 0, ok: false, body: "", data: null,
+        error: error && error.message ? error.message : String(error)
+      });
       return;
     }
-
-    Promise.resolve(responsePromise).then(function (response) {
-      if (active.cancelled || !fetchElement(request)) return null;
-      var bodyPromise = response && typeof response.text === "function"
-        ? response.text()
-        : Promise.resolve("");
-      return Promise.resolve(bodyPromise).then(function (body) {
-        if (active.cancelled || !fetchElement(request)) return;
-        deliverFetch(module, element, request, fetchResponseEnvelope(response, body));
-      });
-    }).catch(function (error) {
+    Promise.resolve(responsePromise).then(function (envelope) {
       if (active.cancelled || !fetchElement(request)) return;
-      deliverFetch(module, element, request, fetchNetworkEnvelope(error));
+      deliverFetch(module, element, request, envelope);
+    }, function (error) {
+      if (active.cancelled || !fetchElement(request)) return;
+      deliverFetch(module, element, request, {
+        status: 0, ok: false, body: "", data: null,
+        error: error && error.message ? error.message : String(error)
+      });
     }).finally(function () {
       if (active.cancelled) forgetFetch(request);
     });

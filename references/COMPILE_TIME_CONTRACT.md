@@ -57,12 +57,28 @@ node scripts/compile_time_gate.cjs --fixture costs --scenario cold --runs 5
 node scripts/compile_time_gate.cjs --fixture logs --scenario edit --runs 5
 ```
 
-For a slow case, inspect the `mochi_build.pftrace` written in that staged
-project by the compiler. Open it in a Perfetto-compatible viewer and follow the
-slow fixture's setup/transpilation slices. Do not use a separate reduced build
-to make the report pass. Optimize the measured critical path without omitting
-components, resources, type checks, generated artifacts, or behavior. After
-timing passes, `task check` runs payload and functional assertions.
+For a slow case, rerun the same staged input with `MOCHI_BUILD_TRACE=1` to write
+`mochi_build.pftrace`. Open it in a Perfetto-compatible viewer and follow the
+slow fixture's setup/transpilation slices. Tracing and per-component progress
+logs are off in the normal build; profiling output is for diagnosis and is not
+part of the release measurement. Do not use a reduced build to make the report
+pass. Optimize the measured critical path without omitting components,
+resources, type checks, generated artifacts, or behavior. After timing passes,
+`task check` runs payload and functional assertions.
+
+## Bytecode compilation and source metadata
+
+Independent Ruby package and component sources compile through a worker pool
+bounded to four `mrbc` processes. The compiler collects worker results and
+publishes `.chi` paths and errors in package-graph order, so process completion
+order does not affect manifests or diagnostics. Each bytecode resource remains
+separately loadable.
+
+Mochi currently has no separate development and production source-metadata
+mode. Bundle metadata retains project-relative Ruby source identifiers so VM
+and asynchronous callback errors can name the author's file and line. It does
+not retain the absolute checkout or temporary build path. Ruby source text is
+not copied into the runtime bundle as a source map.
 
 ## Reference evidence
 

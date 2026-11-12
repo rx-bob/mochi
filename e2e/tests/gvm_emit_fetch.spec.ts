@@ -170,6 +170,7 @@ class FetchProbe
     %Q{
       <button class="load" onclick="{load}">Load</button>
       <button class="fail" onclick="{fail}">Fail</button>
+      <button class="callback-fail" onclick="{callback_fail}">Callback fail</button>
       <p class="status">{@status}</p>
       <p class="ok">{@ok}</p>
       <p class="row">{@row}</p>
@@ -183,6 +184,14 @@ class FetchProbe
 
   def fail
     Mochi.fetch("/api/fail", :on_logs)
+  end
+
+  def callback_fail
+    Mochi.fetch("/api/logs", :bad_callback)
+  end
+
+  def bad_callback(res)
+    raise "fetch callback exploded"
   end
 
   def on_logs(res)
@@ -303,7 +312,7 @@ test("Mochi.emit delivers plain and Hash payloads and filters target tags", asyn
 });
 
 test("declared child events stay scoped to their connected parent and preserve types", async ({ page }) => {
-  setupConsoleLogging(page);
+  setupConsoleLogging(page, { expectedMochiErrors: true });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
 
@@ -340,6 +349,13 @@ test("declared child events stay scoped to their connected parent and preserve t
 });
 
 test("Mochi.fetch auto-resolves the component and flushes the callback DOM update", async ({ page }) => {
+  const bundleManifest = JSON.parse(fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"));
+  expect(bundleManifest.capabilities.network).toMatchObject({
+    version: 1,
+    host: "mochi-fetch.js",
+    operations: { fetch: "async", cancel: "sync" },
+  });
+  expect(fs.existsSync(path.join(bundleDir, "mochi-fetch.js"))).toBe(true);
   setupConsoleLogging(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -359,4 +375,25 @@ test("Mochi.fetch auto-resolves the component and flushes the callback DOM updat
   await expect(probe.locator("p.row")).toHaveText("none");
   await expect(probe.locator("p.error")).toContainText("HTTP 500");
   expect(errors).toEqual([]);
+});
+
+test("Mochi.fetch callback failures retain Ruby method and source context", async ({ page }) => {
+  setupConsoleLogging(page, { expectedMochiErrors: true });
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto(`${baseURL}/index.html`);
+  const probe = page.locator("fetch-probe");
+  await probe.locator("button.callback-fail").click();
+  await expect.poll(async () => page.evaluate(() => (window as any).__mochiErrors.length)).toBe(1);
+  const error = await page.evaluate(() => (window as any).__mochiErrors[0]);
+  expect(error.phase).toBe("fetch");
+  expect(error.message).toContain("FetchProbe#bad_callback");
+  expect(error.source).toMatch(/FetchProbe\.rb:\d+/);
+  expect(pageErrors).toEqual([]);
 });

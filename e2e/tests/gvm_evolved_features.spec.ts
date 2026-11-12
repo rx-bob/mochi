@@ -12,7 +12,10 @@ test.describe.configure({ mode: "serial" });
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const compilerBinary = path.join(repoRoot, "compiler", "mochi");
-const senchaDistDir = "/Users/bob/repos/sencha/frontend-mochi/dist";
+const frontendRoot = process.env.MOCHI_FRONTEND_DIR || fs.readdirSync(path.dirname(repoRoot))
+  .map((name) => path.join(path.dirname(repoRoot), name, "frontend-mochi"))
+  .find((candidate) => fs.existsSync(path.join(candidate, "Taskfile.yml"))) || "";
+const frontendDistDir = path.join(frontendRoot, "dist");
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -1663,10 +1666,16 @@ end
   }
 });
 
-test("Sencha frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+test.describe("Cowboy integration", () => {
+test.beforeAll(() => {
+  if (!frontendRoot || !fs.existsSync(path.join(frontendDistDir, "index.html"))) {
+    throw new Error("Cowboy integration requires a built frontend-mochi checkout; run `task e2e` or set MOCHI_FRONTEND_DIR");
+  }
+});
+
+test("Cowboy frontend-mochi showcase works across all 8 screens with zero errors", async ({ page }) => {
   setupConsoleLogging(page);
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
 
@@ -1701,31 +1710,67 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     // 4. Costs screen dynamic period & harness filtering
     await topbar.locator('button[data-screen="costs"]').click();
     const costs = root.locator("costs-screen");
-    await expect(costs.locator(".summary.primary strong")).toHaveText("184K");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "183500");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "73400");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "64225");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "45875");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "834");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "56");
+    await expect(costs.locator(".costs-screen")).toHaveAttribute("data-usage-row-count", "126");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "6469040");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "2074660");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "3556200");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "838180");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "2828");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "961");
     await expect(costs.locator("costs-daily-chart .day")).toHaveCount(7);
     await costs.locator('button[data-period="30"]').click();
-    await expect(costs.locator(".summary.primary strong")).toHaveText("549K");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "549000");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "219600");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "192150");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "137250");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "2495");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "167");
+    await expect(costs.locator(".costs-screen")).toHaveAttribute("data-usage-row-count", "540");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "27046540");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "8699460");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "14834500");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "3512580");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "11883");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "4003");
     await expect(costs.locator("costs-daily-chart .day")).toHaveCount(30);
+    for (const selector of ["costs-daily-chart .day", ".harness-row", ".component-row", "costs-model-table tbody [data-raw-total]"]) {
+      const sum = await costs.locator(selector).evaluateAll((elements) =>
+        elements.reduce((total, element) => total + Number(element.getAttribute("data-raw-total")), 0),
+      );
+      expect(sum, `${selector} should aggregate the shared usage rows`).toBe(27046540);
+    }
+    await costs.evaluate((host) => {
+      const root = host.shadowRoot!;
+      (window as any).__costsRefs = {
+        summary: root.querySelector("costs-summary"),
+        chart: root.querySelector("costs-daily-chart"),
+        table: root.querySelector("costs-model-table"),
+        components: new Map(Array.from(root.querySelectorAll(".component-row")).map((row) => [
+          row.getAttribute("data-component-id"), row,
+        ])),
+      };
+    });
     await costs.locator('button[data-harness="Codex"]').click();
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "219600");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "87840");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "76860");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "54900");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "998");
-    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "77");
+    await expect(costs.locator(".costs-screen")).toHaveAttribute("data-usage-row-count", "180");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "8896860");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-input", "2903740");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cached", "4820900");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-output", "1172220");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-requests", "3969");
+    await expect(costs.locator("costs-summary .summary-grid")).toHaveAttribute("data-raw-cost-cents", "1779");
     await expect(costs.locator("costs-model-table tbody tr")).toHaveCount(2);
+    const preservedCostsNodes = await costs.evaluate((host) => {
+      const root = host.shadowRoot!;
+      const refs = (window as any).__costsRefs;
+      const rows = Array.from(root.querySelectorAll(".component-row"));
+      return {
+        summary: root.querySelector("costs-summary") === refs.summary,
+        chart: root.querySelector("costs-daily-chart") === refs.chart,
+        table: root.querySelector("costs-model-table") === refs.table,
+        componentRows: rows.map((row) => ({
+          id: row.getAttribute("data-component-id"),
+          same: refs.components.get(row.getAttribute("data-component-id")) === row,
+        })),
+      };
+    });
+    expect(preservedCostsNodes, "neighboring filters should preserve keyed Costs children and rows")
+      .toEqual({ summary: true, chart: true, table: true, componentRows: expect.any(Array) });
+    expect((preservedCostsNodes.componentRows as Array<{ id: string | null; same: boolean }>).every((row) => row.same),
+      `existing keyed component rows should retain identity: ${JSON.stringify(preservedCostsNodes.componentRows)}`).toBe(true);
 
     // 5. Limits screen
     await topbar.locator('button[data-screen="limits"]').click();
@@ -1791,7 +1836,6 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
 });
 
 test("Logs refresh is bounded, latest-wins, retryable, and disposed on navigation", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
   const errors: string[] = [];
   const requested: string[] = [];
@@ -1802,7 +1846,7 @@ test("Logs refresh is bounded, latest-wins, retryable, and disposed on navigatio
     finishDelayedResponse = resolve;
   });
 
-  const { server, baseURL } = await startStaticServer(senchaDistDir, {
+  const { server, baseURL } = await startStaticServer(frontendDistDir, {
     spaFallback: true,
     apiHandler: (request, response) => {
       if (new URL(request.url || "/", "http://localhost").pathname !== "/api/logs") return false;
@@ -1854,8 +1898,8 @@ test("Logs refresh is bounded, latest-wins, retryable, and disposed on navigatio
     const logs = root.locator("logs-screen");
     await expect(logs.locator(".refresh-toolbar")).toHaveAttribute("data-refresh-state", "ready");
     expect(requested.some((entry) => entry === "http:/api/logs")).toBe(true);
-    expect(fs.existsSync(path.join(senchaDistDir, "test"))).toBe(false);
-    expect(fs.readdirSync(senchaDistDir).some((entry) => /test-runner|api-fixture/i.test(entry))).toBe(false);
+    expect(fs.existsSync(path.join(frontendDistDir, "test"))).toBe(false);
+    expect(fs.readdirSync(frontendDistDir).some((entry) => /test-runner|api-fixture/i.test(entry))).toBe(false);
 
     await logs.locator('button[data-level="error"]').click();
     await logs.locator('button[data-level="warn"]').click();
@@ -1878,9 +1922,11 @@ test("Logs refresh is bounded, latest-wins, retryable, and disposed on navigatio
 
     await logs.locator('button[data-action="refresh-now"]').click();
     await expect(logs.locator(".logs-screen")).toHaveAttribute("data-retained-count", "1480");
+    await expect(logs.locator(".logs-screen")).toHaveAttribute("data-refresh-step-count", "1000");
     await expect(logs.locator("aside.drawer")).toHaveAttribute("data-selected-id", "log-480");
     await logs.locator('button[data-action="refresh-now"]').click();
     await expect(logs.locator(".logs-screen")).toHaveAttribute("data-retained-count", "2000");
+    await expect(logs.locator(".logs-screen")).toHaveAttribute("data-refresh-step-count", "2000");
     await expect(logs.locator(".log-row").first()).toHaveAttribute("data-log-id", "log-2480");
     await expect(logs.locator("aside.drawer")).toHaveCount(0);
     await expect(logs.locator(".log-row")).toHaveCount(50);
@@ -1906,9 +1952,8 @@ test("Logs refresh is bounded, latest-wins, retryable, and disposed on navigatio
 });
 
 test("GVM theme storage reaches shell and overlays across reload and tabs", async ({ page, context }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
   const second = await context.newPage();
@@ -1979,15 +2024,14 @@ test("GVM theme storage reaches shell and overlays across reload and tabs", asyn
 });
 
 test("GVM routing: a direct Costs URL loads only the Costs dependency closure", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
   const requested: string[] = [];
   page.on("request", (request) => requested.push(new URL(request.url()).pathname));
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/costs`);
     const root = page.locator("z-root");
-    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("184K");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("6.5M");
     await expect(root.locator("home-screen")).toHaveCount(0);
     await expect(root.locator("top-bar").locator('button[data-screen="costs"]')).toHaveClass(/active/);
 
@@ -2007,11 +2051,10 @@ test("GVM routing: a direct Costs URL loads only the Costs dependency closure", 
 });
 
 test("GVM routing: back and forward render the route-owned screens", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/`);
     const root = page.locator("z-root");
@@ -2019,7 +2062,7 @@ test("GVM routing: back and forward render the route-owned screens", async ({ pa
 
     const topbar = root.locator("top-bar");
     await topbar.locator('button[data-screen="costs"]').click();
-    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("184K");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("6.5M");
     expect(new URL(page.url()).pathname).toBe("/costs");
 
     await topbar.locator('button[data-screen="logs"]').click();
@@ -2027,7 +2070,7 @@ test("GVM routing: back and forward render the route-owned screens", async ({ pa
     expect(new URL(page.url()).pathname).toBe("/logs");
 
     await page.goBack();
-    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("184K");
+    await expect(root.locator("costs-screen .summary.primary strong")).toHaveText("6.5M");
     expect(new URL(page.url()).pathname).toBe("/costs");
     await expect(topbar.locator('button[data-screen="costs"]')).toHaveClass(/active/);
 
@@ -2042,25 +2085,24 @@ test("GVM routing: back and forward render the route-owned screens", async ({ pa
 });
 
 test("Costs stays lazy on Home and retains one copy of its dependency closure", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
   const requested: string[] = [];
   page.on("request", (request) => requested.push(new URL(request.url()).pathname));
-  const manifest = readManifest(senchaDistDir);
+  const manifest = readManifest(frontendDistDir);
   const costTags = ["costs-screen", "costs-summary", "costs-daily-chart", "costs-model-table"];
   const costResources = new Set<string>();
   const initialStyles = new Set<string>();
   const initialCss = ["z-root", "top-bar", "home-screen", "toast-stack", "modal-container"]
-    .map((tag) => readComponentDescriptor(senchaDistDir, manifest, tag).css || "")
+    .map((tag) => readComponentDescriptor(frontendDistDir, manifest, tag).css || "")
     .join("\n");
   const costCss = costTags.map((tag) => {
-    const descriptor = readComponentDescriptor(senchaDistDir, manifest, tag);
+    const descriptor = readComponentDescriptor(frontendDistDir, manifest, tag);
     (descriptor.style_resources || [])
       .forEach((id: string) => initialStyles.add(id));
     return descriptor.css || "";
   });
   costTags.forEach((tag) => {
-    const descriptor = readComponentDescriptor(senchaDistDir, manifest, tag);
+    const descriptor = readComponentDescriptor(frontendDistDir, manifest, tag);
     (descriptor.style_resources || []).forEach((id: string) => {
       if (!initialStyles.has(id)) costResources.add(manifest.resources[id].file);
     });
@@ -2069,7 +2111,7 @@ test("Costs stays lazy on Home and retains one copy of its dependency closure", 
   expect(costCss.join("\n")).toContain(".chart");
   expect(initialCss).not.toContain(".summary-grid");
   expect(initialCss).not.toContain(".model-panel");
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/`);
     await expect(page.locator("z-root home-screen h1")).toHaveText("Keep the herd moving.");
@@ -2083,7 +2125,7 @@ test("Costs stays lazy on Home and retains one copy of its dependency closure", 
     });
 
     await page.locator("z-root top-bar button[data-screen='costs']").click();
-    await expect(page.locator("z-root costs-screen costs-summary .summary.primary strong")).toHaveText("184K");
+    await expect(page.locator("z-root costs-screen costs-summary .summary.primary strong")).toHaveText("6.5M");
     costTags.forEach((tag) => {
       expect(requested.filter((url) => url.endsWith(`/components/${tag}.json`))).toHaveLength(1);
       expect(requested.filter((url) => url.endsWith(`/components/${tag}.chi`))).toHaveLength(1);
@@ -2098,7 +2140,6 @@ test("Costs stays lazy on Home and retains one copy of its dependency closure", 
 });
 
 test("Costs navigation and filter loops keep screen registrations bounded", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   test.setTimeout(180_000);
   setupConsoleLogging(page);
   const errors: string[] = [];
@@ -2109,7 +2150,7 @@ test("Costs navigation and filter loops keep screen registrations bounded", asyn
       (window as any).__costsRuntimeErrors.push(event.detail || { message: "Mochi runtime error" });
     });
   });
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/`);
     const root = page.locator("z-root");
@@ -2121,18 +2162,18 @@ test("Costs navigation and filter loops keep screen registrations bounded", asyn
 
     for (let round = 0; round < 200; round += 1) {
       await topbar.locator('button[data-screen="costs"]').click();
-      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "183500");
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "6469040");
       await root.locator("costs-screen button[data-period='30']").click();
-      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "549000");
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "27046540");
       await root.locator("costs-screen button[data-harness='Codex']").click();
-      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "219600");
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "8896860");
       await root.locator("costs-screen button[data-harness='Antigravity']").click();
-      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "192150");
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "8197820");
       await root.locator("costs-screen button[data-harness='Ollama']").click();
-      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "137250");
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "9951860");
       await root.locator("costs-screen button[data-harness='All']").click();
       await root.locator("costs-screen button[data-period='7']").click();
-      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "183500");
+      await expect(root.locator("costs-screen costs-summary .summary-grid")).toHaveAttribute("data-raw-total", "6469040");
       const stats = await page.evaluate(() => (window as any).MochiLoader.debugStats());
       if (!costsBaseline) costsBaseline = stats;
       samples.push({ screen: "costs", stats });
@@ -2155,9 +2196,8 @@ test("Costs navigation and filter loops keep screen registrations bounded", asyn
 });
 
 test("GVM routing: encoded params and query values arrive as Ruby strings", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/logs/hello%20world?level=warn`);
     const root = page.locator("z-root");
@@ -2174,9 +2214,8 @@ test("GVM routing: encoded params and query values arrive as Ruby strings", asyn
 });
 
 test("GVM routing: unknown paths render a deterministic not-found screen", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/missing/screen`);
     const root = page.locator("z-root");
@@ -2191,7 +2230,6 @@ test("GVM routing: unknown paths render a deterministic not-found screen", async
 });
 
 test("GVM routing: rapid navigation never mounts an obsolete delayed screen", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -2203,7 +2241,7 @@ test("GVM routing: rapid navigation never mounts an obsolete delayed screen", as
     }
     await route.continue();
   });
-  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const { server, baseURL } = await startStaticServer(frontendDistDir, { spaFallback: true });
   try {
     await page.goto(`${baseURL}/`);
     const root = page.locator("z-root");
@@ -2224,9 +2262,8 @@ test("GVM routing: rapid navigation never mounts an obsolete delayed screen", as
 });
 
 test("modal keeps backdrop-only close, focus containment, and opener restore", async ({ page }) => {
-  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
   setupConsoleLogging(page);
-  const { server, baseURL } = await startStaticServer(senchaDistDir);
+  const { server, baseURL } = await startStaticServer(frontendDistDir);
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
 
@@ -2290,6 +2327,7 @@ test("modal keeps backdrop-only close, focus containment, and opener restore", a
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
 });
 
 test("shared values survive unmount while replaced storage stays bounded", async ({ page }) => {
@@ -2639,7 +2677,7 @@ end
 });
 
 test("GVM numbers keep integer and float semantics across props, events, and bindings", async ({ page }) => {
-  setupConsoleLogging(page);
+  setupConsoleLogging(page, { expectedMochiErrors: true });
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-numbers-"));
   const bundleDir = path.join(projectDir, "bundle");
   fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
@@ -2831,7 +2869,7 @@ end
 });
 
 test("GVM money helpers keep exact minor-unit totals and named rounding", async ({ page }) => {
-  setupConsoleLogging(page);
+  setupConsoleLogging(page, { expectedMochiErrors: true });
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-money-"));
   const bundleDir = path.join(projectDir, "bundle");
   fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
@@ -3120,7 +3158,7 @@ end
 });
 
 test("GVM formatting helpers use browser Intl from initialize, bindings, and each rows", async ({ page }) => {
-  setupConsoleLogging(page);
+  setupConsoleLogging(page, { expectedMochiErrors: true });
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-format-"));
   const bundleDir = path.join(projectDir, "bundle");
   fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });

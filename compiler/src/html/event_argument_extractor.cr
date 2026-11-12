@@ -42,13 +42,17 @@ struct EventCall
 end
 
 class EventArgumentExtractor
-  EVENT_START = /(on:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*)\s*=\s*(["'])?\{/
+  EVENT_START = /(?<![A-Za-z0-9_:-])(on:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*)\s*=\s*(["'])?\{/
 
   # Rewrites event attributes with call arguments into a plain method name plus
   # a JSON descriptor list. Keeping the descriptors on the element lets the
   # loader pass typed values to the VM without evaluating Ruby in JavaScript.
-  def self.process(html : String, locator : TemplateSourceLocator? = nil) : String
-    rewritten, _calls = rewrite(html, locator) do |call|
+  def self.process(
+    html : String,
+    locator : TemplateSourceLocator? = nil,
+    parser : TemplateExpressionParser? = nil,
+  ) : String
+    rewritten, _calls = rewrite(html, locator, parser) do |call|
       render_event_attribute(call)
     end
     rewritten
@@ -60,9 +64,10 @@ class EventArgumentExtractor
   def self.rewrite(
     html : String,
     locator : TemplateSourceLocator? = nil,
+    parser : TemplateExpressionParser? = nil,
     &replacement : EventCall -> String
   ) : Tuple(String, Array(EventCall))
-    parser = TemplateExpressionParser.new(locator)
+    expression_parser = parser || TemplateExpressionParser.new(locator)
     calls = [] of EventCall
     result = String.build do |io|
       cursor = 0
@@ -88,8 +93,8 @@ class EventArgumentExtractor
           attribute_end += 1
         end
 
-        method_name, arguments = parser.parse_call(content)
-        validate_arguments(parser, arguments)
+        method_name, arguments = expression_parser.parse_call(content)
+        validate_arguments(expression_parser, arguments)
         call = EventCall.new(event_name, method_name, arguments, locator.try(&.locate(content)))
         validate_modifiers(call)
         calls << call

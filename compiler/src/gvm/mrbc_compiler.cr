@@ -11,6 +11,7 @@ require "./rite_verifier"
 class MrbcCompiler
   RITE_HEADER    = "RITE0400\u0000\u0000"
   COMPONENTS_DIR = "components"
+  COMPILE_WORKERS = 4
 
   getter manifest_path : String?
   getter chi_paths : Array(String)
@@ -92,6 +93,8 @@ class MrbcCompiler
     @host_adapter_paths.clear
     @package_graph = nil
     @warnings.clear
+    manifest_path = File.join(output_dir, "mochi-manifest.json")
+    File.delete(manifest_path) if File.exists?(manifest_path)
     validate_component_inventory(components)
     Dir.mkdir_p(output_dir)
     components_dir = File.join(output_dir, COMPONENTS_DIR)
@@ -115,18 +118,6 @@ class MrbcCompiler
       @prelude_path = compile_prelude(prelude_sources.first.source, components_dir)
     end
 
-    graph.ruby_order.each do |package|
-      path = compile_ruby_source(
-        package.source,
-        File.join(components_dir, package.file),
-        package.id,
-        package.source_path,
-        package.line_offset
-      )
-      @ruby_package_paths << path
-      @helper_chi_paths << path if package.helper
-    end
-
     if format_host
       graph.ensure_capability("formatting")
       components.each do |component|
@@ -138,23 +129,41 @@ class MrbcCompiler
     end
 
     sorted_components = graph.component_order
-    chi_paths_by_tag = {} of String => String
-    errors = [] of String
-
+    jobs = [] of Tuple(String, String, String, String?, Int32)
+    graph.ruby_order.each do |package|
+      jobs << {
+        package.source,
+        File.join(components_dir, package.file),
+        package.id,
+        package.source_path,
+        package.line_offset,
+      }
+    end
     sorted_components.each do |component|
-      begin
-        chi_path = compile_component(component, components_dir)
-        chi_paths_by_tag[component.manifest.tag_name] = chi_path
-      rescue ex
-        errors << "#{component.manifest.tag_name}: #{ex.message}"
+      manifest = component.manifest
+      jobs << {
+        component.ruby_code,
+        File.join(components_dir, manifest.chi_file),
+        manifest.tag_name,
+        manifest.source_file,
+        component.source_line_offset,
+      }
+    end
+
+    compiled_paths = begin
+      compile_independent_sources(jobs)
+    rescue ex
+      if prelude = @prelude_path
+        File.delete(prelude) if File.exists?(prelude)
       end
+      raise ex
     end
-
-    unless errors.empty?
-      raise "mrbc failed:\n#{errors.join("\n")}"
+    package_count = graph.ruby_order.size
+    @ruby_package_paths.concat(compiled_paths[0, package_count])
+    graph.ruby_order.each_with_index do |package, index|
+      @helper_chi_paths << compiled_paths[index] if package.helper
     end
-
-    @chi_paths = sorted_components.compact_map { |component| chi_paths_by_tag[component.manifest.tag_name]? }
+    @chi_paths = compiled_paths[package_count, sorted_components.size]
     sorted_components.each do |component|
       write_component_descriptor(component.manifest, output_dir)
     end
@@ -192,7 +201,7 @@ class MrbcCompiler
     package_resources = collect_resources(components, resources)
     emit_resource_files(package_resources, output_dir)
 
-    @manifest_path = File.join(output_dir, "mochi-manifest.json")
+    @manifest_path = manifest_path
     File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components, package_resources))
   end
 
@@ -282,16 +291,59 @@ class MrbcCompiler
     compile_ruby_source(prelude_code, chi_path, "prelude")
   end
 
-  private def compile_component(component : MochiComponent, components_dir : String) : String
-    manifest = component.manifest
-    chi_path = File.join(components_dir, manifest.chi_file)
-    compile_ruby_source(
-      component.ruby_code,
-      chi_path,
-      manifest.tag_name,
-      manifest.source_file,
-      component.source_line_offset
-    )
+  # Package and component bytecode is independently loadable. Compile these
+  # jobs with a small fixed worker pool, then restore graph order before
+  # publishing paths and diagnostics so the output remains deterministic.
+  private def compile_independent_sources(
+    jobs : Array(Tuple(String, String, String, String?, Int32)),
+  ) : Array(String)
+    return [] of String if jobs.empty?
+
+    worker_count = {COMPILE_WORKERS, jobs.size}.min
+    job_channel = Channel(Int32).new(jobs.size)
+    result_channel = Channel(Tuple(Int32, String?, String?)).new(jobs.size)
+    worker_count.times do
+      spawn do
+        while index = job_channel.receive?
+          source, output, label, source_path, line_offset = jobs[index]
+          begin
+            path = compile_ruby_source(source, output, label, source_path, line_offset)
+            result_channel.send({index, path, nil})
+          rescue ex
+            result_channel.send({index, nil, ex.message || ex.class.name})
+          end
+        end
+      end
+    end
+
+    jobs.each_index { |index| job_channel.send(index) }
+    job_channel.close
+
+    results = Array(Tuple(String?, String?)).new(jobs.size) { {nil, nil} }
+    jobs.size.times do
+      index, path, error = result_channel.receive
+      results[index] = {path, error}
+    end
+
+    errors = [] of String
+    paths = [] of String
+    results.each_with_index do |(path, error), index|
+      if message = error
+        errors << "#{jobs[index][2]}: #{message}"
+      elsif compiled_path = path
+        paths << compiled_path
+      else
+        errors << "#{jobs[index][2]}: compilation worker returned no result"
+      end
+    end
+    unless errors.empty?
+      jobs.each do |job|
+        output = job[1]
+        File.delete(output) if File.exists?(output)
+      end
+      raise "mrbc failed:\n#{errors.join("\n")}"
+    end
+    paths
   end
 
   private def compile_ruby_source(

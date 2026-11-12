@@ -324,7 +324,7 @@ test("thirty-day model rows and mixed row arities rebuild without forced aggrega
 
 test("oversized retained rows report the exhausted scratch resource and keep the VM usable", async ({ page }) => {
   test.setTimeout(120_000);
-  setupConsoleLogging(page);
+  setupConsoleLogging(page, { expectedMochiErrors: true });
   const { projectDir, server, baseURL } = await compileProject();
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));

@@ -34,6 +34,7 @@ const fixtures = {
 const scenarios = ["cold", "warm", "edit"];
 const limitMs = 1000;
 const defaultRuns = 5;
+const environment = `${os.platform()} ${os.arch()} ${os.release()}`;
 
 function parseArgs(argv) {
   const options = { runs: defaultRuns, fixture: "all", scenario: "all", compiler: path.join(repoRoot, "compiler/mochi") };
@@ -60,7 +61,9 @@ function parseArgs(argv) {
     throw new Error(`unknown scenario: ${options.scenario}`);
   }
   if (!fs.existsSync(options.compiler)) throw new Error(`compiler not found: ${options.compiler}`);
-  if (!appRoot) throw new Error("frontend-mochi app source was not found beside the Mochi repository");
+  if (options.fixture !== "minimal" && !appRoot) {
+    throw new Error("frontend-mochi app source was not found beside the Mochi repository");
+  }
   return options;
 }
 
@@ -123,15 +126,15 @@ function main() {
             measured += 1;
             const result = `${fixtureName}/${scenario} ${run}/${options.runs}: ${elapsedMs.toFixed(1)} ms`;
             if (elapsedMs >= limitMs) {
-              failures.push(`${fixtureName}/${scenario}: ${elapsedMs.toFixed(1)} ms (limit < ${limitMs} ms)`);
-              process.stderr.write(`FAIL ${result}\n`);
+              failures.push(`${fixtureName}/${scenario}: ${elapsedMs.toFixed(1)} ms (limit < ${limitMs} ms; ${environment})`);
+              process.stderr.write(`FAIL ${result} (${environment})\n`);
             } else {
               process.stdout.write(`PASS ${result}\n`);
             }
           } catch (error) {
             measured += 1;
-            failures.push(`${fixtureName}/${scenario}: ${error.message}`);
-            process.stderr.write(`FAIL ${fixtureName}/${scenario} ${run}/${options.runs}: ${error.message}\n`);
+            failures.push(`${fixtureName}/${scenario}: ${error.message} (${environment})`);
+            process.stderr.write(`FAIL ${fixtureName}/${scenario} ${run}/${options.runs}: ${error.message} (${environment})\n`);
           }
         }
       }

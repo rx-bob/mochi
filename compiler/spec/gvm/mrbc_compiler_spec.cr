@@ -460,13 +460,18 @@ SH
 
       component = build_mrbc_fixture(dir)
       compiler = MrbcCompiler.new(mrbc_path: mrbc)
+      output = File.join(dir, "out")
+      Dir.mkdir_p(output)
+      File.write(File.join(output, "mochi-manifest.json"), "stale manifest")
       error = expect_raises(Exception) do
-        compiler.compile([component], File.join(dir, "out"))
+        compiler.compile([component], output)
       end
       message = error.message.to_s
       message.should contain("lib/my_counter.rb:14")
       message.should_not contain("mochi-my-counter")
       message.should contain("syntax error")
+      File.exists?(File.join(output, "mochi-manifest.json")).should be_false
+      File.exists?(File.join(output, "components", "my-counter.chi")).should be_false
     ensure
       FileUtils.rm_rf(dir)
     end

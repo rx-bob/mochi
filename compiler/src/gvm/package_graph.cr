@@ -41,6 +41,13 @@ module MochiPackaging
       "MochiFormat",
       [CapabilityOperation.new("format", "sync")]
     ),
+    CapabilityDefinition.new(
+      "network",
+      1,
+      "mochi-fetch.js",
+      "Mochi.fetch",
+      [CapabilityOperation.new("fetch", "async"), CapabilityOperation.new("cancel", "sync")]
+    ),
   ]
 
   record Capability,
@@ -534,7 +541,14 @@ module MochiPackaging
       reachable = reachable_packages(@entry_packages)
       CAPABILITY_DEFINITIONS.each do |definition|
         active_packages = @packages.values
-          .select { |node| node.exports.includes?(definition.exporting) && reachable.includes?(node.id) }
+          .select do |node|
+            next false unless reachable.includes?(node.id)
+            if definition.name == "network"
+              node.source.includes?("Mochi.fetch") || node.source.includes?("Mochi.cancel_fetch")
+            else
+              node.exports.includes?(definition.exporting)
+            end
+          end
           .map(&.id)
           .sort
         next if active_packages.empty?

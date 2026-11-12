@@ -57,6 +57,7 @@ class ComponentGenerator
     source_locator : TemplateSourceLocator? = nil,
     props : Array(PropDescriptor) = [] of PropDescriptor,
     emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
+    expression_parser : TemplateExpressionParser? = nil,
   ) : ComponentManifest
     @mochi_cmp_name = mochi_cmp_name
     @conditionals = conditionals
@@ -66,7 +67,7 @@ class ComponentGenerator
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
     @event_expressions.clear
     @ref_names.clear
-    @expression_parser = TemplateExpressionParser.new(source_locator)
+    @expression_parser = expression_parser || TemplateExpressionParser.new(source_locator)
 
     validate_conditional_expressions(conditionals)
     validate_each_expressions(each_blocks)
