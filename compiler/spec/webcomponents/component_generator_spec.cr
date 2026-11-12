@@ -30,6 +30,29 @@ describe ComponentGenerator do
     binding.branches[2].html_template.should contain("Closed")
   end
 
+  it "captures the DOM context for table, select, and SVG row anchors" do
+    source = %q(
+      <table><tbody>{each @rows as row}<tr><td>{row["label"]}</td></tr>{end}</tbody></table>
+      <select>{each @rows as option}<option>{option["label"]}</option>{end}</select>
+      <svg><g>{each @rows as shape}<path fill="{shape["color"]}"></path>{end}</g></svg>
+    )
+    result = EachProcessor.process(source)
+    generator = ComponentGenerator.new
+    manifest = generator.generate(
+      "ContextRows",
+      "context-rows",
+      "",
+      result.html,
+      each_blocks: result.each_blocks
+    )
+
+    generator.each_row_templates.map(&.context_tag).should eq(["tbody", "select", "g"])
+    generator.each_row_templates.map(&.context_namespace).should eq(["html", "html", "svg"])
+    manifest.html_template.should contain("<!--each-anchor-0-->")
+    manifest.html_template.should contain("<!--each-anchor-1-->")
+    manifest.html_template.should contain("<!--each-anchor-2-->")
+  end
+
   it "builds a static manifest with child-node paths and event attributes" do
     html = %(<h1>Count: {@count}</h1><button onclick="{increment}">Increment</button>)
     gen = ComponentGenerator.new

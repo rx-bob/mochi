@@ -101,8 +101,10 @@ class ComponentGenerator
     # Lexbor's document parser drops comments at the body boundary. Mochi uses
     # comment anchors as binding targets, so preserve those markers as inert
     # elements while traversing and restore their exact comment markup after.
-    source = html.gsub(/<!--(if-anchor-\d+|each-anchor-\d+)-->/) do |_, match|
+    visible_anchors = anchor_comments_in_tree(html)
+    source = html.gsub(/<!--(if-anchor-\d+|each-anchor-\d+)-->/) do |original, match|
       anchor = match[1]
+      next original if visible_anchors.includes?(anchor)
       "<mochi-template-#{anchor}></mochi-template-#{anchor}>"
     end
     doc = Lexbor.new(source)
@@ -110,7 +112,7 @@ class ComponentGenerator
 
     if body
       body.children.each_with_index do |child, index|
-        walk(child, [index], bindings, events)
+        walk(child, [index], bindings, events, EachRowDomContext.new("body", "html"))
       end
     end
 
@@ -119,6 +121,23 @@ class ComponentGenerator
     body.inner_html.gsub(/<mochi-template-(if-anchor-\d+|each-anchor-\d+)><\/mochi-template-\1>/) do |_, match|
       "<!--#{match[1]}-->"
     end
+  end
+
+  private def anchor_comments_in_tree(html : String) : Array(String)
+    visible = [] of String
+    body = Lexbor.new(html).body
+    return visible unless body
+    collect_anchor_comments(body, visible)
+    visible
+  end
+
+  private def collect_anchor_comments(node : Lexbor::Node, visible : Array(String))
+    if node.tag_name == "_em_comment"
+      if match = node.tag_text.match(/\A(if-anchor-\d+|each-anchor-\d+)\z/)
+        visible << match[1]
+      end
+    end
+    node.children.each { |child| collect_anchor_comments(child, visible) }
   end
 
   def rewrite_ruby(
@@ -136,6 +155,7 @@ class ComponentGenerator
     path : Array(Int32),
     bindings : Array(BindingDescriptor),
     events : Array(EventDescriptor),
+    parent_context : EachRowDomContext,
   )
     tag = node.tag_name
 
@@ -145,19 +165,27 @@ class ComponentGenerator
     end
 
     if tag == "_em_comment"
-      collect_anchor_binding(node.tag_text, path, bindings, events)
+      collect_anchor_binding(node.tag_text, path, bindings, events, parent_context)
       return
     end
 
     if match = tag.match(/^mochi-template-(if-anchor-\d+|each-anchor-\d+)$/)
-      collect_anchor_binding(match[1], path, bindings, events)
+      collect_anchor_binding(match[1], path, bindings, events, parent_context)
       return
     end
 
     collect_attribute_bindings(node, path, bindings, events)
 
     node.children.each_with_index do |child, index|
-      walk(child, path + [index], bindings, events)
+      lowered_tag = tag.downcase
+      child_namespace = if lowered_tag == "svg"
+                          "svg"
+                        elsif lowered_tag == "foreignobject"
+                          "html"
+                        else
+                          parent_context.namespace
+                        end
+      walk(child, path + [index], bindings, events, EachRowDomContext.new(tag, child_namespace))
     end
   end
 
@@ -200,6 +228,7 @@ class ComponentGenerator
     path : Array(Int32),
     bindings : Array(BindingDescriptor),
     events : Array(EventDescriptor),
+    dom_context : EachRowDomContext,
   )
     if match = text.match(/if-anchor-(\d+)/)
       id = match[1].to_i
@@ -225,7 +254,7 @@ class ComponentGenerator
       block = @each_blocks.find { |candidate| candidate.id == id }
       return unless block
 
-      row = EachRowCompiler.compile(block, @expression_parser)
+      row = EachRowCompiler.compile(block, @expression_parser, dom_context)
       @each_row_templates << row
       row.all_events.each do |event|
         events << EventDescriptor.new(

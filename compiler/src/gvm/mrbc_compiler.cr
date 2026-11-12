@@ -936,6 +936,8 @@ class MrbcCompiler
     json.object do
       json.field "id", rows.block_id
       json.field "keyed", true if rows.key_expression
+      json.field "context_tag", rows.context_tag
+      json.field "context_namespace", rows.context_namespace
       if span = rows.span
         write_span(json, span)
       end

@@ -28,14 +28,16 @@ class EachRowCompiler
   def self.compile(
     block : EachBlock,
     parser : TemplateExpressionParser,
+    context : EachRowDomContext = EachRowDomContext.new,
   ) : EachRowTemplate
-    compile_row(block, parser, [] of EachRowScope)
+    compile_row(block, parser, [] of EachRowScope, context)
   end
 
   private def self.compile_row(
     block : EachBlock,
     parser : TemplateExpressionParser,
     parent_scope : Array(EachRowScope),
+    context : EachRowDomContext,
   ) : EachRowTemplate
     item_name = block.loop_def.item_name
     declared_index = block.loop_def.index_name
@@ -54,6 +56,8 @@ class EachRowCompiler
     scope = parent_scope + [entry]
     scope_names = scope_names_for(scope)
     template = replace_nested_blocks(block)
+    child_contexts = contexts_for_children(template, block.children, context)
+    validate_context_nesting(template, context, row_span)
     if with_directive = template.match(/\{with(?:\s|})/)
       span = parser.locator.try(&.locate(with_directive[0]))
       raise TemplateExpressionError.new(
@@ -133,10 +137,13 @@ class EachRowCompiler
                           sentinel_template.byte_slice(finish, sentinel_template.bytesize - finish)
     end
 
-    classification = classify_slots(sentinel_template)
+    classification = classify_slots(sentinel_template, context)
     bindings = [] of EachRowBindingDescriptor
     expressions.each_with_index do |expression, slot|
-      kind, attr_name = classification[slot]? || {"text", nil}
+      kind, attr_name = classification[slot]? || raise TemplateExpressionError.new(
+        "each row expression was lost while parsing in <#{context.tag}> context; check the surrounding HTML nesting",
+        expression.span || row_span
+      )
       trusted_source = TemplateExpressionParser.trusted_markup_source(expression.source)
       if trusted_source && kind == "attr"
         raise TemplateExpressionError.new(
@@ -159,7 +166,7 @@ class EachRowCompiler
     end
 
     children = block.children.map do |child|
-      compile_row(child, parser, scope)
+      compile_row(child, parser, scope, child_contexts[child.id]? || context)
     end
 
     EachRowTemplate.new(
@@ -176,7 +183,9 @@ class EachRowCompiler
       key_expression,
       row_span,
       conditional_attributes.conditionals,
-      hash_attributes.hashes
+      hash_attributes.hashes,
+      context.tag,
+      context.namespace
     )
   end
 
@@ -267,13 +276,158 @@ class EachRowCompiler
   # Uses the HTML parser only to decide whether a slot is text or an attribute
   # value. Text is the default regardless of surrounding whitespace. The
   # caller upgrades a slot to HTML only when `Mochi.raw(...)` wraps it.
-  private def self.classify_slots(template : String) : Hash(Int32, Tuple(String, String?))
+  private def self.classify_slots(
+    template : String,
+    context : EachRowDomContext,
+  ) : Hash(Int32, Tuple(String, String?))
     result = {} of Int32 => Tuple(String, String?)
-    body = Lexbor.new(template).body
+    body = Lexbor.new(wrap_in_context(template, context)).body
     return result unless body
 
     walk_classify(body, result)
     result
+  end
+
+  private def self.wrap_in_context(template : String, context : EachRowDomContext) : String
+    tag = context.tag.downcase
+    if context.namespace == "svg"
+      return tag == "svg" ? "<svg>#{template}</svg>" : "<svg><#{tag}>#{template}</#{tag}></svg>"
+    end
+
+    case tag
+    when "table"
+      "<table>#{template}</table>"
+    when "tbody", "thead", "tfoot"
+      "<table><#{tag}>#{template}</#{tag}></table>"
+    when "tr"
+      "<table><tbody><tr>#{template}</tr></tbody></table>"
+    when "td", "th"
+      "<table><tbody><tr><#{tag}>#{template}</#{tag}></tr></tbody></table>"
+    when "select"
+      "<select>#{template}</select>"
+    when "optgroup"
+      "<select><optgroup>#{template}</optgroup></select>"
+    when "option"
+      "<select><option>#{template}</option></select>"
+    else
+      "<#{tag}>#{template}</#{tag}>"
+    end
+  end
+
+  private def self.contexts_for_children(
+    template : String,
+    children : Array(EachBlock),
+    context : EachRowDomContext,
+  ) : Hash(Int32, EachRowDomContext)
+    return {} of Int32 => EachRowDomContext if children.empty?
+
+    body = Lexbor.new(wrap_in_context(template, context)).body
+    result = {} of Int32 => EachRowDomContext
+    return result unless body
+
+    children.each do |child|
+      marker_text = "mochi-each-#{child.id}"
+      if marker = find_comment(body, marker_text)
+        parent = marker.parent
+        next unless parent
+        namespace = context.namespace
+        ancestor = parent
+        while ancestor
+          tag = ancestor.tag_name.downcase
+          namespace = "svg" if tag == "svg"
+          namespace = "html" if tag == "foreignobject"
+          ancestor = ancestor.parent
+        end
+        result[child.id] = EachRowDomContext.new(parent.tag_name, namespace)
+      end
+    end
+    result
+  end
+
+  private def self.find_comment(node : Lexbor::Node, text : String) : Lexbor::Node?
+    return node if node.tag_name == "_em_comment" && node.tag_text == text
+    node.children.each do |child|
+      found = find_comment(child, text)
+      return found if found
+    end
+    nil
+  end
+
+  private def self.validate_context_nesting(
+    template : String,
+    context : EachRowDomContext,
+    span : TemplateSourceSpan?,
+  ) : Nil
+    return if context.namespace == "svg"
+
+    parent_tag = context.tag.downcase
+    invalid_tag = root_tags(template).find do |tag|
+      case tag
+      when "tr"
+        !{"table", "tbody", "thead", "tfoot"}.includes?(parent_tag)
+      when "td", "th"
+        parent_tag != "tr"
+      when "tbody", "thead", "tfoot", "caption", "colgroup"
+        parent_tag != "table"
+      when "col"
+        parent_tag != "colgroup"
+      when "option", "optgroup"
+        !{"select", "optgroup"}.includes?(parent_tag)
+      else
+        false
+      end
+    end
+    if invalid_tag
+      raise TemplateExpressionError.new(
+        "<#{invalid_tag}> cannot be a row root inside <#{context.tag}>; use valid HTML nesting for this row",
+        span
+      )
+    end
+
+    allowed = case context.tag.downcase
+              when "table"
+                ["caption", "colgroup", "thead", "tbody", "tfoot", "tr", "style", "script", "template"]
+              when "tbody", "thead", "tfoot"
+                ["tr", "style", "script", "template"]
+              when "tr"
+                ["td", "th", "style", "script", "template"]
+              when "select"
+                ["option", "optgroup", "hr", "script", "template"]
+              when "optgroup"
+                ["option", "script", "template"]
+              when "colgroup"
+                ["col", "template"]
+              else
+                return
+              end
+
+    root_tags(template).each do |tag|
+      next if allowed.includes?(tag)
+      raise TemplateExpressionError.new(
+        "<#{tag}> cannot be a row root inside <#{context.tag}>; use valid HTML nesting for this row",
+        span
+      )
+    end
+  end
+
+  private def self.root_tags(template : String) : Array(String)
+    tags = [] of String
+    depth = 0
+    template.scan(/<\/?([a-zA-Z][a-zA-Z0-9:-]*)\b[^>]*>/m) do |match|
+      token = match[0]
+      name = match[1].downcase
+      closing = token.starts_with?("</")
+      self_closing = token.ends_with?("/>")
+      if closing
+        depth -= 1 if depth > 0
+      else
+        tags << name if depth == 0
+        unless self_closing || {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}.includes?(name)
+          depth += 1
+        end
+      end
+    end
+    tags
   end
 
   private def self.walk_classify(node : Lexbor::Node, result : Hash(Int32, Tuple(String, String?)))

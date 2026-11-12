@@ -2921,6 +2921,29 @@
     return template.content;
   }
 
+  function rowFragmentFor(html, context, descriptor) {
+    if (!descriptor.context_tag && !descriptor.context_namespace) {
+      return fragmentFor(html);
+    }
+    if (!context || context.nodeType !== 1) {
+      throw new Error("mochi-loader: each row has no element insertion context for binding " + descriptor.id);
+    }
+    var expectedTag = descriptor.context_tag;
+    var expectedNamespace = descriptor.context_namespace;
+    var actualTag = String(context.localName || context.tagName || "").toLowerCase();
+    var actualNamespace = context.namespaceURI === "http://www.w3.org/2000/svg" ? "svg" : "html";
+    if ((expectedTag && String(expectedTag).toLowerCase() !== actualTag) ||
+        (expectedNamespace && expectedNamespace !== actualNamespace)) {
+      var location = descriptor.span && descriptor.span.source ? " at " + descriptor.span.source : "";
+      throw new Error("mochi-loader: each row context mismatch" + location +
+        ": expected <" + (expectedTag || "?") + "> in " + (expectedNamespace || "?") +
+        ", found <" + actualTag + "> in " + actualNamespace);
+    }
+    var range = global.document.createRange();
+    range.selectNodeContents(context);
+    return range.createContextualFragment(html || "");
+  }
+
   function applyTextPatch(target, binding, value) {
     var state = textBindingState(target, binding);
     if (state.values[binding.id] === value) return;
@@ -3298,8 +3321,8 @@
     return hosts;
   }
 
-  function buildRowEntry(descriptor, row, index, parentContext) {
-    var fragment = fragmentFor(rowTemplateMarkup(descriptor));
+  function buildRowEntry(descriptor, row, index, parentContext, insertionContext) {
+    var fragment = rowFragmentFor(rowTemplateMarkup(descriptor), insertionContext, descriptor);
     unescapeRowText(fragment);
     var slotHosts = collectRowSlotHosts(fragment, descriptor);
     var attrHosts = collectRowAttrHosts(fragment, descriptor);
@@ -3498,10 +3521,32 @@
   function moveRowAfter(entry, reference) {
     var parent = reference.parentNode;
     if (!parent) return;
+    var active = null;
+    var selection = null;
+    var root = entry.start.getRootNode && entry.start.getRootNode();
+    var focused = root && root.activeElement;
+    if (focused) {
+      if (parent === focused || (parent.contains && parent.contains(focused))) {
+        active = focused;
+        if (typeof focused.selectionStart === "number" && typeof focused.selectionEnd === "number") {
+          selection = {
+            start: focused.selectionStart,
+            end: focused.selectionEnd,
+            direction: focused.selectionDirection
+          };
+        }
+      }
+    }
     var anchor = reference.nextSibling;
     rowRange(entry).forEach(function (node) {
       parent.insertBefore(node, anchor);
     });
+    if (active && active.isConnected) {
+      try { active.focus({ preventScroll: true }); } catch (_) { active.focus(); }
+      if (selection && typeof active.setSelectionRange === "function") {
+        try { active.setSelectionRange(selection.start, selection.end, selection.direction || "none"); } catch (_) { }
+      }
+    }
   }
 
   function updateRowEntry(entry, row, index) {
@@ -3558,7 +3603,7 @@
     planned.forEach(function (item) {
       var entry = previous.get(item.key);
       item.isNew = !entry;
-      if (!entry) entry = buildRowEntry(descriptor, item.row, item.index, parentContext);
+      if (!entry) entry = buildRowEntry(descriptor, item.row, item.index, parentContext, parent);
       item.entry = entry;
       next.set(item.key, entry);
       ordered.push(entry);

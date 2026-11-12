@@ -54,7 +54,7 @@ test("row attributes and handlers keep the current lexical scope through updates
 
     await root.locator("button.activate").click();
     await expect(rows.nth(0)).toHaveClass("row active");
-    await root.locator("button.reorder").click();
+    await root.evaluate((element: any) => element.shadowRoot.querySelector("button.reorder").click());
     await expect(rows.nth(0)).toHaveAttribute("data-row", "b");
     await rows.nth(0).click();
     await expect(root.locator("p.selected")).toHaveText("b:0");
@@ -65,6 +65,77 @@ test("row attributes and handlers keep the current lexical scope through updates
     await expect(root.locator("p.selected")).toHaveText("c:0");
     mochiErrors.push(...await page.evaluate(() => (window as any).__rowMochiErrors));
   }, "<row-scope-root></row-scope-root>");
+
+  expect(pageErrors).toEqual([]);
+  expect(mochiErrors).toEqual([]);
+});
+
+test("keyed table, select, and SVG rows use their insertion DOM context", async ({ page }) => {
+  test.setTimeout(60_000);
+  const pageErrors: string[] = [];
+  const mochiErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__contextMochiErrors = [];
+    window.addEventListener("mochi:error", (event) => {
+      const detail = (event as CustomEvent).detail;
+      (window as any).__contextMochiErrors.push(detail?.message || JSON.stringify(detail));
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("context-rows-root");
+    const rows = root.locator("tbody tr[data-row]");
+    const options = root.locator("select.options option");
+    const paths = root.locator("svg path[data-row]");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator("td.label")).toHaveText("Alpha");
+    await expect(options.nth(1)).toHaveText("Beta");
+    await expect(paths.nth(0)).toHaveAttribute("fill", "red");
+
+    const alphaRow = rows.nth(0);
+    await alphaRow.evaluate((row) => { (window as any).__alphaRow = row; });
+    const alphaInput = alphaRow.locator("input.draft");
+    await alphaInput.fill("draft-alpha");
+    await alphaInput.evaluate((input: HTMLInputElement) => input.setSelectionRange(2, 7));
+    expect(await alphaInput.evaluate((input: HTMLInputElement) => {
+      const root = input.getRootNode() as ShadowRoot;
+      return root.activeElement === input;
+    })).toBe(true);
+    await root.evaluate((element: any) => {
+      element.shadowRoot.querySelector("button.reorder").dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true })
+      );
+    });
+    await expect(rows.nth(0)).toHaveAttribute("data-row", "b");
+    await expect(rows.nth(1)).toHaveAttribute("data-row", "a");
+    expect(await rows.nth(1).evaluate((row) => row === (window as any).__alphaRow)).toBe(true);
+    const movedAlpha = rows.nth(1);
+    const movedInput = movedAlpha.locator("input.draft");
+    await expect(movedInput).toHaveValue("draft-alpha");
+    expect(await movedInput.evaluate((input: HTMLInputElement) => ({
+      focused: input.getRootNode() instanceof ShadowRoot && (input.getRootNode() as ShadowRoot).activeElement === input,
+      start: input.selectionStart,
+      end: input.selectionEnd,
+    }))).toEqual({ focused: true, start: 2, end: 7 });
+
+    await root.locator("button.update").click();
+    const updatedAlpha = root.locator('tbody tr[data-row="a"]');
+    await expect(updatedAlpha.locator("td.label")).toHaveText("Alpine");
+    await expect(root.locator("select option").filter({ hasText: "Bravo" })).toHaveCount(1);
+    await expect(root.locator('svg path[data-row="a"]')).toHaveAttribute("fill", "green");
+    await updatedAlpha.locator("button.choose").click();
+    await expect(root.locator("p.selected")).toHaveText("a");
+    await root.locator("button.replace").click();
+    await expect(rows).toHaveCount(2);
+    await expect(root.locator('tbody tr[data-row="a"]')).toHaveCount(0);
+    await expect(root.locator('tbody tr[data-row="c"] td.label')).toHaveText("Charlie");
+    await expect(root.locator('svg path[data-row="c"]')).toHaveAttribute("fill", "orange");
+    await root.locator('tbody tr[data-row="c"] button.choose').click();
+    await expect(root.locator("p.selected")).toHaveText("c");
+    mochiErrors.push(...await page.evaluate(() => (window as any).__contextMochiErrors));
+  }, "<context-rows-root></context-rows-root>");
 
   expect(pageErrors).toEqual([]);
   expect(mochiErrors).toEqual([]);

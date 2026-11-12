@@ -1,11 +1,14 @@
 require "spec"
 require "../../src/html/each_row_compiler"
 
-private def compile_row_template(html : String) : EachRowTemplate
+private def compile_row_template(
+  html : String,
+  context : EachRowDomContext = EachRowDomContext.new,
+) : EachRowTemplate
   blocks = EachProcessor.extract_each_blocks(html)
   roots = EachProcessor.roots(blocks)
   roots.size.should eq(1)
-  EachRowCompiler.compile(roots.first, TemplateExpressionParser.new)
+  EachRowCompiler.compile(roots.first, TemplateExpressionParser.new, context)
 end
 
 describe EachRowCompiler do
@@ -155,6 +158,72 @@ describe EachRowCompiler do
     expect_raises(TemplateExpressionError, "Ruby helper method") do
       EachRowCompiler.compile(EachProcessor.roots(blocks).first, parser)
     end
+  end
+
+  it "classifies table and option row slots in their authored parent context" do
+    table_row = compile_row_template(%Q{
+      {each @rows as row}
+        <tr data-id="{row["id"]}"><td>{row["label"]}</td><th>{row["label"]}</th></tr>
+      {end}
+    }, EachRowDomContext.new("tbody", "html"))
+
+    table_row.context_tag.should eq("tbody")
+    table_row.context_namespace.should eq("html")
+    table_row.bindings.map(&.kind).should eq(["attr", "text", "text"])
+    table_row.bindings.map(&.attr_name).should eq(["data-id", nil, nil])
+
+    options = compile_row_template(%Q{
+      {each @rows as row}
+        <option value="{row["id"]}">{row["label"]}</option>
+      {end}
+    }, EachRowDomContext.new("select", "html"))
+
+    options.bindings.map(&.kind).should eq(["attr", "text"])
+    options.bindings.first.attr_name.should eq("value")
+  end
+
+  it "classifies SVG row slots in the SVG namespace" do
+    row = compile_row_template(%Q{
+      {each @rows as row}
+        <g><path data-id="{row["id"]}" fill="{row["color"]}"></path><text>{row["label"]}</text></g>
+      {end}
+    }, EachRowDomContext.new("g", "svg"))
+
+    row.context_tag.should eq("g")
+    row.context_namespace.should eq("svg")
+    row.bindings.map(&.kind).should eq(["attr", "attr", "text"])
+    row.bindings.map(&.attr_name).should eq(["data-id", "fill", nil])
+  end
+
+  it "derives nested row context from the nested loop's actual parent" do
+    row = compile_row_template(%Q{
+      {each @groups as group}
+        <table><tbody>
+          {each group["rows"] as row}
+            <tr><td>{row["label"]}</td></tr>
+          {end}
+        </tbody></table>
+      {end}
+    }, EachRowDomContext.new("div", "html"))
+
+    row.children.size.should eq(1)
+    row.children.first.context_tag.should eq("tbody")
+    row.children.first.bindings.map(&.kind).should eq(["text"])
+  end
+
+  it "reports a source-located error when context parsing loses a row slot" do
+    source = %Q{
+      {each @rows as row}
+        <td>{row["label"]}</td>
+      {end}
+    }
+    parser = TemplateExpressionParser.new(TemplateSourceLocator.new(source, "views/table.rb"))
+    blocks = EachProcessor.extract_each_blocks(source)
+
+    error = expect_raises(TemplateExpressionError, "cannot be a row root") do
+      EachRowCompiler.compile(EachProcessor.roots(blocks).first, parser, EachRowDomContext.new("tbody", "html"))
+    end
+    error.span.not_nil!.file.should eq("views/table.rb")
   end
 
   it "compiles explicit key expressions and list source spans" do

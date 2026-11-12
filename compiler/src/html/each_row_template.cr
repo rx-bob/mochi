@@ -40,6 +40,16 @@ struct EachRowScope
   end
 end
 
+# DOM context containing an each anchor. Row templates are parsed relative to
+# this element so table and foreign-content nodes retain their browser shape.
+struct EachRowDomContext
+  getter tag : String
+  getter namespace : String
+
+  def initialize(@tag : String = "body", @namespace : String = "html")
+  end
+end
+
 # One event inside a list row. Events with arguments call a generated wrapper
 # that evaluates the arguments in the current row scope and then invokes the
 # user's handler. `scope` is the enclosing lexical chain, outermost first.
@@ -86,6 +96,8 @@ class EachRowTemplate
   getter span : TemplateSourceSpan?
   getter attribute_conditionals : Array(ExtractedAttributeConditional)
   getter attribute_hashes : Array(ExtractedAttributeHash)
+  getter context_tag : String
+  getter context_namespace : String
 
   def initialize(
     @block_id : Int32,
@@ -102,6 +114,8 @@ class EachRowTemplate
     @span : TemplateSourceSpan? = nil,
     @attribute_conditionals : Array(ExtractedAttributeConditional) = [] of ExtractedAttributeConditional,
     @attribute_hashes : Array(ExtractedAttributeHash) = [] of ExtractedAttributeHash,
+    @context_tag : String = "body",
+    @context_namespace : String = "html",
   )
   end
 
