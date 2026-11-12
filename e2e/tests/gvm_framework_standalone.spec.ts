@@ -26,3 +26,31 @@ test("compiled Ruby child props update through an interactive parent", async ({ 
   expect(pageErrors).toEqual([]);
   expect(mochiErrors).toEqual([]);
 });
+
+test("root conditional anchors render, toggle nested branches, and support initial true", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__errors = [];
+    window.addEventListener("mochi:error", (event) => (window as any).__errors.push((event as CustomEvent).detail));
+  });
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("conditional-root");
+    await expect(root.locator(".hidden")).toHaveText("Hidden");
+    await root.locator(".toggle").click();
+    await expect(root.locator(".visible")).toHaveText("Visible");
+    await expect(root.locator(".nested")).toHaveText("Nested");
+    await root.locator(".toggle").click();
+    await expect(root.locator(".hidden")).toHaveText("Hidden");
+    const initiallyOpen = await page.evaluate(async () => {
+      const element = document.createElement("initially-open-conditional");
+      document.body.appendChild(element);
+      await (element as any)._mochiReady;
+      return element.shadowRoot.textContent;
+    });
+    expect(initiallyOpen).toContain("Initially visible");
+    expect(await page.evaluate(() => (window as any).__errors)).toEqual([]);
+  });
+  expect(runtimeErrors).toEqual([]);
+});

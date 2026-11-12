@@ -98,7 +98,14 @@ class ComponentGenerator
   end
 
   private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor)) : String
-    doc = Lexbor.new(html)
+    # Lexbor's document parser drops comments at the body boundary. Mochi uses
+    # comment anchors as binding targets, so preserve those markers as inert
+    # elements while traversing and restore their exact comment markup after.
+    source = html.gsub(/<!--(if-anchor-\d+|each-anchor-\d+)-->/) do |_, match|
+      anchor = match[1]
+      "<mochi-template-#{anchor}></mochi-template-#{anchor}>"
+    end
+    doc = Lexbor.new(source)
     body = doc.body
 
     if body
@@ -107,7 +114,11 @@ class ComponentGenerator
       end
     end
 
-    body ? body.inner_html : ""
+    return "" unless body
+
+    body.inner_html.gsub(/<mochi-template-(if-anchor-\d+|each-anchor-\d+)><\/mochi-template-\1>/) do |_, match|
+      "<!--#{match[1]}-->"
+    end
   end
 
   def rewrite_ruby(
@@ -135,6 +146,11 @@ class ComponentGenerator
 
     if tag == "_em_comment"
       collect_anchor_binding(node.tag_text, path, bindings, events)
+      return
+    end
+
+    if match = tag.match(/^mochi-template-(if-anchor-\d+|each-anchor-\d+)$/)
+      collect_anchor_binding(match[1], path, bindings, events)
       return
     end
 

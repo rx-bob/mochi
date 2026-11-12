@@ -6,6 +6,30 @@ require "../../src/ruby/ruby_understander"
 require "../code_test_utils"
 
 describe ComponentGenerator do
+  it "preserves conditional binding anchors when fragment contains only root comments" do
+    source = %({if @open}<div>Visible</div>{elsif @other}<span>Other</span>{else}<i>Closed</i>{end})
+    conditionals = ConditionalProcessor.extract_conditionals(source)
+    processed = ConditionalProcessor.process(source).html
+
+    manifest = ComponentGenerator.new.generate(
+      "ConditionalRoot",
+      "conditional-root",
+      "",
+      processed,
+      "[]",
+      {} of String => String,
+      conditionals
+    )
+
+    manifest.html_template.should contain("<!--if-anchor-0-->")
+    binding = manifest.bindings.find! { |item| item.kind == "cond" }
+    binding.path.should eq([0])
+    binding.branches.size.should eq(3)
+    binding.branches[0].html_template.should contain("Visible")
+    binding.branches[1].html_template.should contain("Other")
+    binding.branches[2].html_template.should contain("Closed")
+  end
+
   it "builds a static manifest with child-node paths and event attributes" do
     html = %(<h1>Count: {@count}</h1><button onclick="{increment}">Increment</button>)
     gen = ComponentGenerator.new
