@@ -48,20 +48,29 @@ Measured 2026-11-12 on the repository toolchain:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 406,031 | 137,349 | 3 |
-| Minimal initial | 408,571 | 138,605 | 7 |
-| Feature initial | 409,378 | 138,790 | 7 |
+| Core runtime | 413,062 | 138,727 | 3 |
+| Minimal initial | 415,602 | 139,983 | 7 |
+| Feature initial | 416,409 | 140,168 | 7 |
 | Later feature load | 13,618 | 4,475 | 4 |
-| Feature total | 422,996 | 143,265 | 11 |
+| Feature total | 430,027 | 144,643 | 11 |
 
-The current baseline includes the opt-in routing contract. The loader owns one
-structured route state, push/replace history, explicit route subscribers, and
-stale-navigation guards. The VM adds `route_info`, `replace_route`, and
-`route_subscribe` builtins plus the `_mochi_set_route_info` export. Route
-matching itself stays in optional `AppRouter` Ruby bytecode, so the minimal and
-feature fixtures do not load a router package.
+The current baseline includes the opt-in routing contract and core storage
+subscriptions. The loader owns one structured route state, push/replace history,
+explicit route subscribers, and stale-navigation guards. The VM adds
+`route_info`, `replace_route`, and `route_subscribe` builtins plus the
+`_mochi_set_route_info` export. Route matching itself stays in optional
+`AppRouter` Ruby bytecode, so the minimal and feature fixtures do not load a
+router package.
 
-This intentional core cost is 5,339 raw bytes and 1,688 gzip bytes over the
+Storage stays in the core because `storage_get`, `storage_set`, and
+`storage_remove` were already VM builtins. The subscription addition owns one
+subscriber map, one initial delivery, same-tab effective-change notification,
+cross-tab `storage` event handling, VM synchronization on removal, and unmount
+cleanup. The VM adds `storage_subscribe` and the `_mochi_remove_storage` export.
+The optional `MochiStore` Ruby battery is emitted only when an application
+mentions it, so neither payload fixture loads it.
+
+This intentional core cost is 7,031 raw bytes and 1,378 gzip bytes over the
 previous baseline. It belongs to the core runtime, not to either fixture's
 entry component or later feature load.
 
@@ -69,9 +78,9 @@ Core runtime:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 185,306 | 85,080 |
-| `mochi-gvm.js` | 62,850 | 17,548 |
-| `mochi-loader.js` | 157,875 | 34,721 |
+| `mochi-gvm.wasm` | 186,160 | 85,371 |
+| `mochi-gvm.js` | 62,944 | 17,568 |
+| `mochi-loader.js` | 163,958 | 35,788 |
 
 Minimal initial:
 

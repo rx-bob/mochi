@@ -711,6 +711,66 @@ Static hosts must rewrite extensionless application paths to `index.html` and
 use a `<base href="/">` (or absolute asset URLs) so deep links resolve assets
 from the application root. Hash routes need no server rewrite.
 
+### Storage and subscriptions
+
+Storage is a core VM capability. `Mochi.storage_get(key, default)`,
+`Mochi.storage_set(key, value)`, and `Mochi.storage_remove(key)` are available
+without an optional package; `get_storage`, `set_storage`, and
+`remove_storage` are aliases. Values are raw Strings. Numbers and booleans are
+converted to text, while Hash, Array, and `nil` become `""`; encode structured
+data yourself and validate it when it is read back.
+
+`Mochi.storage_subscribe(key, callback)` registers the current component and
+immediately delivers one initial payload:
+
+```ruby
+Mochi.storage_subscribe("cowboy_theme", "on_theme")
+
+def on_theme(payload)
+  # payload["value"], payload["previous"], payload["source"],
+  # payload["ok"], payload["error"]
+end
+```
+
+`source` is `"initial"`, `"same_tab"`, or `"external"`. Same-tab `storage_set`
+and `storage_remove` notify subscribers directly without waiting for a browser
+event. Other tabs are observed through the browser `storage` event. Equal
+writes produce no notification. Removing a key delivers `value: nil`, and the
+loader also clears the VM copy so `Mochi.storage_get` stays synchronized.
+Unmounting a component removes all of its storage subscriptions.
+
+The host seeds existing localStorage entries into the VM before component
+initialization, so a component can read the current value in `initialize` and
+then subscribe for later changes. Initial delivery reads the same source, so
+reloads resolve persisted values before dependent bindings render.
+
+Failures keep the previous value and produce one payload with `ok: false` and
+`error: "quota"` or `error: "unavailable"`. A quota failure rolls the VM copy
+back to the value still in storage. Inaccessible storage reports
+`error: "unavailable"` and leaves Ruby to apply its own default. Failures are
+also reported through the loader error hook with the `storage` phase.
+
+The optional `MochiStore` battery adds Ruby helpers for defaults, effective
+writes, and fallback after an error:
+
+```ruby
+store = MochiStore.build("cowboy_theme", "light")
+current = MochiStore.value(store)
+MochiStore.write(store, "dark")
+MochiStore.accept(store, payload)   # apply a subscription payload
+MochiStore.error(store)             # "", "quota", or "unavailable"
+MochiStore.clear(store)             # remove and return the default
+```
+
+It is emitted only when an application mentions `MochiStore`; applications
+that call the core builtins directly do not ship it. `MochiStore` does not
+define a global state framework and keeps one String value per key.
+
+Storage values are emitted in host command lines, so a value must fit the
+loader's bounded host buffer (16 KiB including the command envelope). Store
+small preferences, not documents. Invalid or unexpected text is not repaired
+by the host: normalize it in Ruby and write the corrected value back.
+
 ### Compiling
 Prerequisites:
 * <img alt="Crystal Icon" style="height: 16px;" src="https://crystal-lang.org/favicon.ico"/> [Crystal](https://crystal-lang.org/)

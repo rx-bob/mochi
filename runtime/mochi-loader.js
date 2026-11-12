@@ -38,6 +38,7 @@
     timers: new Map(),
     unmountedInstances: new Set(),
     routeSubscribers: new Set(),
+    storageSubscribers: new Map(),
     nextMountToken: 0,
     actionRouterInstalled: false,
     actionSupportCache: new Map(),
@@ -359,6 +360,118 @@
     }
   }
 
+  function storageErrorName(error) {
+    var name = error && error.name ? String(error.name) : "";
+    if (name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+        (error && (error.code === 22 || error.code === 1014))) {
+      return "quota";
+    }
+    return "unavailable";
+  }
+
+  function readStorageValue(key) {
+    if (!key || !global.localStorage || typeof global.localStorage.getItem !== "function") {
+      return { ok: false, value: null, error: "unavailable" };
+    }
+    try {
+      var value = global.localStorage.getItem(key);
+      return { ok: true, value: value === null ? null : String(value), error: "" };
+    } catch (error) {
+      return { ok: false, value: null, error: storageErrorName(error) };
+    }
+  }
+
+  function writeStorageValue(key, value) {
+    if (!key || !global.localStorage || typeof global.localStorage.setItem !== "function") {
+      return { ok: false, error: "unavailable" };
+    }
+    try {
+      global.localStorage.setItem(key, String(value));
+      return { ok: true, error: "" };
+    } catch (error) {
+      return { ok: false, error: storageErrorName(error) };
+    }
+  }
+
+  function removeStorageValue(key) {
+    if (!key || !global.localStorage || typeof global.localStorage.removeItem !== "function") {
+      return { ok: false, error: "unavailable" };
+    }
+    try {
+      global.localStorage.removeItem(key);
+      return { ok: true, error: "" };
+    } catch (error) {
+      return { ok: false, error: storageErrorName(error) };
+    }
+  }
+
+  function syncStorageValueToVm(module, key, value) {
+    if (!module || !key) return;
+    if (value === null || value === undefined) {
+      if (typeof module._mochi_remove_storage !== "function") return;
+      withUtf8(module, key, function (pointer, length) {
+        module._mochi_remove_storage(pointer, length);
+      });
+      return;
+    }
+    if (typeof module._mochi_seed_storage !== "function") return;
+    withUtf8(module, key, function (keyPointer, keyLength) {
+      withUtf8(module, String(value), function (valuePointer, valueLength) {
+        module._mochi_seed_storage(keyPointer, keyLength, valuePointer, valueLength);
+      });
+    });
+  }
+
+  function storagePayload(key, value, previous, source, ok, error) {
+    return {
+      key: key,
+      value: value === undefined ? null : value,
+      previous: previous === undefined ? null : previous,
+      source: source,
+      ok: ok,
+      error: error || ""
+    };
+  }
+
+  function deliverStorageTo(info, instanceKey, callback) {
+    var element = state.elements.get(String(instanceKey));
+    if (!element || element._mochiDisconnected || element._mochiUnmounted) return false;
+    if (!callback) return false;
+    element._dispatchAction({ action: callback, payload: info, hasPayload: true });
+    return true;
+  }
+
+  function notifyStorageChange(info) {
+    var subscribers = state.storageSubscribers.get(info.key);
+    if (!subscribers) return;
+    Array.from(subscribers.entries()).forEach(function (record) {
+      deliverStorageTo(info, record[0], record[1]);
+    });
+  }
+
+  function handleStorageEvent(event) {
+    if (!event) return;
+    var module = state.activeModule;
+    if (event.key === null) {
+      state.storageSubscribers.forEach(function (_subscribers, key) {
+        var current = readStorageValue(key);
+        if (current.ok) syncStorageValueToVm(module, key, current.value);
+        notifyStorageChange(storagePayload(
+          key, current.value, null, "external", current.ok, current.error));
+      });
+      return;
+    }
+    if (typeof event.key !== "string") return;
+    var value = event.newValue === undefined || event.newValue === null
+      ? null
+      : String(event.newValue);
+    var previous = event.oldValue === undefined || event.oldValue === null
+      ? null
+      : String(event.oldValue);
+    syncStorageValueToVm(module, event.key, value);
+    notifyStorageChange(storagePayload(event.key, value, previous, "external", true, ""));
+  }
+
   function deliverRouteTo(info, instanceKey) {
     var element = state.elements.get(String(instanceKey));
     if (!element || element._mochiDisconnected || element._mochiUnmounted) return false;
@@ -402,6 +515,9 @@
       });
       global.addEventListener("hashchange", function () {
         notifyRouteChange(currentRouteInfo());
+      });
+      global.addEventListener("storage", function (event) {
+        handleStorageEvent(event);
       });
     }
 
@@ -779,23 +895,58 @@
   function handleHostCommand(module, entry) {
     var hostKind = entry.__host;
     if (hostKind === "storage_set") {
-      try {
-        if (global.localStorage && typeof entry.key === "string") {
-          global.localStorage.setItem(entry.key, String(entry.value !== undefined ? entry.value : ""));
-        }
-      } catch (error) {
-        reportError(null, "storage", "storage_set", error);
+      var setKey = typeof entry.key === "string" ? entry.key : "";
+      var setValue = String(entry.value !== undefined ? entry.value : "");
+      var previous = readStorageValue(setKey);
+      if (previous.ok && previous.value === setValue) return;
+      var written = writeStorageValue(setKey, setValue);
+      if (!written.ok) {
+        var fallback = previous.ok ? previous.value : null;
+        syncStorageValueToVm(module, setKey, fallback);
+        notifyStorageChange(storagePayload(
+          setKey, fallback, previous.value, "same_tab", false, written.error));
+        reportError(null, "storage", "storage_set", new Error(written.error));
+        return;
       }
+      notifyStorageChange(storagePayload(
+        setKey, setValue, previous.value, "same_tab", true, ""));
       return;
     }
     if (hostKind === "storage_remove") {
-      try {
-        if (global.localStorage && typeof entry.key === "string") {
-          global.localStorage.removeItem(entry.key);
-        }
-      } catch (error) {
-        reportError(null, "storage", "storage_remove", error);
+      var removeKey = typeof entry.key === "string" ? entry.key : "";
+      var removed = readStorageValue(removeKey);
+      if (removed.ok && removed.value === null) return;
+      var deletion = removeStorageValue(removeKey);
+      if (!deletion.ok) {
+        var kept = removed.ok ? removed.value : null;
+        syncStorageValueToVm(module, removeKey, kept);
+        notifyStorageChange(storagePayload(
+          removeKey, kept, removed.value, "same_tab", false, deletion.error));
+        reportError(null, "storage", "storage_remove", new Error(deletion.error));
+        return;
       }
+      notifyStorageChange(storagePayload(
+        removeKey, null, removed.value, "same_tab", true, ""));
+      return;
+    }
+    if (hostKind === "storage_subscribe") {
+      var subscribeKey = typeof entry.key === "string" ? entry.key : "";
+      var callback = typeof entry.callback === "string" ? entry.callback : "";
+      var subscriber = entry.instance === undefined || entry.instance === null
+        ? ""
+        : String(entry.instance);
+      if (!subscribeKey || !callback || !subscriber) return;
+      var bucket = state.storageSubscribers.get(subscribeKey);
+      if (!bucket) {
+        bucket = new Map();
+        state.storageSubscribers.set(subscribeKey, bucket);
+      }
+      bucket.set(subscriber, callback);
+      var current = readStorageValue(subscribeKey);
+      if (current.ok) syncStorageValueToVm(module, subscribeKey, current.value);
+      deliverStorageTo(storagePayload(
+        subscribeKey, current.value, null, "initial", current.ok, current.error),
+        subscriber, callback);
       return;
     }
     if (hostKind === "set_route" || hostKind === "replace_route") {
@@ -3903,6 +4054,9 @@
         });
         if (state.elements.get(key) === this) state.elements.delete(key);
         state.routeSubscribers.delete(key);
+        state.storageSubscribers.forEach(function (subscribers) {
+          subscribers.delete(key);
+        });
 
         try {
           if (hasMethod(module, instance, "unmounted")) {

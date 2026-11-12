@@ -3,6 +3,7 @@ require "file"
 require "file_utils"
 require "../../../../fragments/vendor/libpftrace/bindings/crystal/src/pftrace"
 require "../../generated/app_router_rb"
+require "../../generated/store_rb"
 require "../../generated/money_rb"
 require "../../generated/format_rb"
 require "../../sorbet/project_typechecker"
@@ -48,6 +49,13 @@ class BuildMain
     # mention AppRouter do not pay for a route table or parameter parser.
     if all_rb_sources.includes?("AppRouter")
       File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_app_router.rb", AppRouterRbFragment.get_ruby_code)
+    end
+
+    # Storage defaults, effective-change checks, and error fallback are optional
+    # Ruby bytecode. The host subscription primitive stays in the core because
+    # the VM already owns storage.
+    if all_rb_sources.includes?("MochiStore")
+      File.write("#{builder_man.pre_tp_dir}/lib/mochi_builtin_store.rb", MochiStoreRbFragment.get_ruby_code)
     end
 
     # Exact money arithmetic is ordinary Ruby bytecode. Emit it only for

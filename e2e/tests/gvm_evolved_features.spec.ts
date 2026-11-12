@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test, expect } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { setupConsoleLogging } from "./test_utils";
 
 test.use({ channel: "chrome" });
@@ -1617,6 +1618,79 @@ test("Sencha frontend-mochi showcase works across all 8 screens with zero errors
     await expect(root.locator("settings-screen h1")).toHaveText("Settings");
     expect(errors).toEqual([]);
   } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("GVM theme storage reaches shell and overlays across reload and tabs", async ({ page, context }) => {
+  test.skip(!fs.existsSync(senchaDistDir), "sencha/frontend-mochi/dist not built");
+  setupConsoleLogging(page);
+  const { server, baseURL } = await startStaticServer(senchaDistDir, { spaFallback: true });
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message));
+  const second = await context.newPage();
+  setupConsoleLogging(second);
+  second.on("pageerror", (err) => errors.push(err.message));
+
+  const surfaceOf = (locator: Locator) => locator.evaluate((element) => (
+    getComputedStyle(element).getPropertyValue("--surface").trim()
+  ));
+
+  try {
+    await page.goto(`${baseURL}/settings`);
+    const root = page.locator("z-root");
+    const shell = root.locator(".shell");
+    await expect(root.locator("settings-screen h1")).toHaveText("Settings");
+    await expect(shell).not.toHaveClass(/dark/);
+    const lightSurface = await surfaceOf(shell);
+    expect(lightSurface).not.toBe("");
+
+    await root.locator("settings-screen").locator('button[data-action="dark"]').click();
+    await expect(shell).toHaveClass(/dark/);
+    const darkSurface = await surfaceOf(shell);
+    expect(darkSurface).not.toBe(lightSurface);
+
+    const modal = root.locator(".shell modal-container .modal");
+    await root.locator("top-bar").locator('button[data-action="profile"]').click();
+    await expect(modal).toBeVisible();
+    expect(await surfaceOf(modal)).toBe(darkSurface);
+    await root.locator("modal-container .modal-backdrop").click({ position: { x: 5, y: 5 } });
+    await expect(modal).toHaveCount(0);
+
+    await root.locator("top-bar").locator('button[data-screen="queues"]').click();
+    const queues = root.locator("queues-screen");
+    await expect(queues.locator("h1")).toHaveText("Queues");
+    await queues.locator('button[data-action="refresh"]').click();
+    const toast = root.locator(".shell toast-stack .toast").first();
+    await expect(toast).toBeVisible();
+    expect(await surfaceOf(toast)).toBe(darkSurface);
+
+    await root.locator("top-bar").locator('button[data-screen="settings"]').click();
+    await expect(root.locator("settings-screen h1")).toHaveText("Settings");
+    await page.reload();
+    await expect(root.locator(".shell")).toHaveClass(/dark/);
+    await expect(root.locator("settings-screen h1")).toHaveText("Settings");
+
+    await second.goto(`${baseURL}/settings`);
+    const secondRoot = second.locator("z-root");
+    const secondShell = secondRoot.locator(".shell");
+    await expect(secondShell).toHaveClass(/dark/);
+
+    await root.locator("settings-screen").locator('button[data-action="light"]').click();
+    await expect(shell).not.toHaveClass(/dark/);
+    await expect(secondShell).not.toHaveClass(/dark/);
+
+    await secondRoot.locator("settings-screen").locator('button[data-action="dark"]').click();
+    await expect(secondShell).toHaveClass(/dark/);
+    await expect(shell).toHaveClass(/dark/);
+
+    await page.evaluate(() => localStorage.setItem("cowboy_theme", "sepia"));
+    await page.reload();
+    await expect(root.locator(".shell")).not.toHaveClass(/dark/);
+    await expect(root.locator(".shell")).toHaveAttribute("data-storage-error", "invalid");
+    expect(errors).toEqual([]);
+  } finally {
+    await second.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

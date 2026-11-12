@@ -197,6 +197,8 @@ function fakeModule(log) {
   log.methods = new Set(["mounted", "increment", "reset"]);
   log.routeStates = [];
   log.routeInfos = [];
+  log.storageSeeds = [];
+  log.storageRemoves = [];
   let nextSymbol = 100;
   let nextPointer = 1024;
   let nextInstance = 1;
@@ -223,6 +225,15 @@ function fakeModule(log) {
     _mochi_set_route_info(pointer, length) {
       log.routeInfos.push(JSON.parse(decoder.decode(
         module.HEAPU8.slice(pointer, pointer + length))));
+    },
+    _mochi_seed_storage(pointer, length, valuePointer, valueLength) {
+      log.storageSeeds.push([
+        decoder.decode(module.HEAPU8.slice(pointer, pointer + length)),
+        decoder.decode(module.HEAPU8.slice(valuePointer, valuePointer + valueLength)),
+      ]);
+    },
+    _mochi_remove_storage(pointer, length) {
+      log.storageRemoves.push(decoder.decode(module.HEAPU8.slice(pointer, pointer + length)));
     },
     _mochi_load_irep(pointer, length) {
       log.loads.push(module.HEAPU8.slice(pointer, pointer + length));
@@ -403,6 +414,7 @@ async function setup(components, options) {
   global.MouseEvent = dom.window.MouseEvent;
   global.CustomEvent = dom.window.CustomEvent;
   global.CSSStyleSheet = dom.window.CSSStyleSheet;
+  global.localStorage = dom.window.localStorage;
 
   delete global.MochiHostAdapter;
   const log = {
@@ -637,6 +649,201 @@ test("popstate resynchronizes the route and notifies subscribers", async () => {
     search: "level=warn",
     hash: false,
     href: "http://localhost/logs?level=warn",
+  }]);
+});
+
+test("storage subscribers receive one deterministic initial value and effective changes", async () => {
+  const { module, log, dom } = await setup([COMPONENT]);
+  dom.window.localStorage.setItem("cowboy_theme", "light");
+  log.methods.add("on_theme");
+  log.requiredArgs.set("on_theme", 1);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit(JSON.stringify({
+    __host: "storage_subscribe",
+    key: "cowboy_theme",
+    instance: String(element._mochiInstance),
+    callback: "on_theme",
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(log.dispatchedArgs.length, 1);
+  assert.deepEqual(log.dispatchedArgs[0].args, [{
+    key: "cowboy_theme",
+    value: "light",
+    previous: null,
+    source: "initial",
+    ok: true,
+    error: "",
+  }]);
+
+  module.queueEmit('{"__host":"storage_set","key":"cowboy_theme","value":"dark"}\n');
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.deepEqual(log.dispatchedArgs[1].args, [{
+    key: "cowboy_theme",
+    value: "dark",
+    previous: "light",
+    source: "same_tab",
+    ok: true,
+    error: "",
+  }]);
+
+  module.queueEmit('{"__host":"storage_set","key":"cowboy_theme","value":"dark"}\n');
+  element._dispatchAction({ action: "increment" });
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.equal(dom.window.localStorage.getItem("cowboy_theme"), "dark");
+});
+
+test("storage delivers raw text so Ruby owns corrupt-value fallback", async () => {
+  const { module, log, dom } = await setup([COMPONENT]);
+  dom.window.localStorage.setItem("cowboy_theme", "sepia");
+  log.methods.add("on_theme");
+  log.requiredArgs.set("on_theme", 1);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit(JSON.stringify({
+    __host: "storage_subscribe",
+    key: "cowboy_theme",
+    instance: String(element._mochiInstance),
+    callback: "on_theme",
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(log.dispatchedArgs.length, 1);
+  assert.equal(log.dispatchedArgs[0].args[0].value, "sepia");
+  assert.equal(log.dispatchedArgs[0].args[0].ok, true);
+
+  module.queueEmit('{"__host":"storage_set","key":"cowboy_theme","value":"light"}\n');
+  element._dispatchAction({ action: "increment" });
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.equal(log.dispatchedArgs[1].args[0].previous, "sepia");
+  assert.equal(log.dispatchedArgs[1].args[0].value, "light");
+});
+
+test("storage events update the VM, removals reach subscribers, and unmount unsubscribes", async () => {
+  const { module, log, dom } = await setup([COMPONENT]);
+  dom.window.localStorage.setItem("cowboy_theme", "light");
+  log.methods.add("on_theme");
+  log.requiredArgs.set("on_theme", 1);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit(JSON.stringify({
+    __host: "storage_subscribe",
+    key: "cowboy_theme",
+    instance: String(element._mochiInstance),
+    callback: "on_theme",
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+  assert.equal(log.dispatchedArgs.length, 1);
+
+  dom.window.localStorage.setItem("cowboy_theme", "dark");
+  dom.window.dispatchEvent(new dom.window.StorageEvent("storage", {
+    key: "cowboy_theme",
+    oldValue: "light",
+    newValue: "dark",
+    storageArea: dom.window.localStorage,
+  }));
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.equal(log.dispatchedArgs[1].args[0].source, "external");
+  assert.equal(log.dispatchedArgs[1].args[0].value, "dark");
+  assert.deepEqual(log.storageSeeds[log.storageSeeds.length - 1], ["cowboy_theme", "dark"]);
+
+  dom.window.localStorage.removeItem("cowboy_theme");
+  dom.window.dispatchEvent(new dom.window.StorageEvent("storage", {
+    key: "cowboy_theme",
+    oldValue: "dark",
+    newValue: null,
+    storageArea: dom.window.localStorage,
+  }));
+  assert.equal(log.dispatchedArgs.length, 3);
+  assert.equal(log.dispatchedArgs[2].args[0].value, null);
+  assert.equal(log.storageRemoves[log.storageRemoves.length - 1], "cowboy_theme");
+
+  element.remove();
+  await flushLifecycle();
+  dom.window.dispatchEvent(new dom.window.StorageEvent("storage", {
+    key: "cowboy_theme",
+    oldValue: null,
+    newValue: "light",
+    storageArea: dom.window.localStorage,
+  }));
+  assert.equal(log.dispatchedArgs.length, 3);
+});
+
+test("storage failures roll back the VM value and reach Ruby as one error payload", async () => {
+  const { module, log, dom } = await setup([COMPONENT]);
+  dom.window.localStorage.setItem("cowboy_theme", "light");
+  log.methods.add("on_theme");
+  log.requiredArgs.set("on_theme", 1);
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit(JSON.stringify({
+    __host: "storage_subscribe",
+    key: "cowboy_theme",
+    instance: String(element._mochiInstance),
+    callback: "on_theme",
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+
+  const backing = new Map([["cowboy_theme", "light"]]);
+  global.localStorage = {
+    get length() { return backing.size; },
+    key(index) { return Array.from(backing.keys())[index] || null; },
+    getItem(key) { return backing.has(key) ? backing.get(key) : null; },
+    setItem() {
+      const error = new Error("quota");
+      error.name = "QuotaExceededError";
+      throw error;
+    },
+    removeItem(key) { backing.delete(key); },
+  };
+
+  module.queueEmit('{"__host":"storage_set","key":"cowboy_theme","value":"dark"}\n');
+  element._dispatchAction({ action: "increment" });
+
+  assert.equal(log.dispatchedArgs.length, 2);
+  assert.deepEqual(log.dispatchedArgs[1].args, [{
+    key: "cowboy_theme",
+    value: "light",
+    previous: "light",
+    source: "same_tab",
+    ok: false,
+    error: "quota",
+  }]);
+  assert.deepEqual(log.storageSeeds[log.storageSeeds.length - 1], ["cowboy_theme", "light"]);
+
+  global.localStorage = {
+    getItem() {
+      const error = new Error("blocked");
+      error.name = "SecurityError";
+      throw error;
+    },
+  };
+  module.queueEmit(JSON.stringify({
+    __host: "storage_subscribe",
+    key: "cowboy_theme",
+    instance: String(element._mochiInstance),
+    callback: "on_theme",
+  }) + "\n");
+  element._dispatchAction({ action: "increment" });
+  assert.equal(log.dispatchedArgs.length, 3);
+  assert.deepEqual(log.dispatchedArgs[2].args, [{
+    key: "cowboy_theme",
+    value: null,
+    previous: null,
+    source: "initial",
+    ok: false,
+    error: "unavailable",
   }]);
 });
 
