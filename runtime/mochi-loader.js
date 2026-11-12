@@ -35,6 +35,8 @@
     tags: new Set(),
     elements: new Map(),
     pendingFetches: [],
+    activeFetches: new Map(),
+    latestFetches: new Map(),
     timers: new Map(),
     unmountedInstances: new Set(),
     routeSubscribers: new Set(),
@@ -566,11 +568,13 @@
         return null;
       }
       if (!parsed || typeof parsed !== "object" ||
-          typeof parsed.instance !== "string" ||
-          typeof parsed.url !== "string" ||
-          typeof parsed.callback !== "string") {
+          typeof parsed.instance !== "string" || !Number.isFinite(parsed.id) || parsed.id <= 0) {
         return null;
       }
+      if (parsed.cancel === true) {
+        return { id: parsed.id, instance: parsed.instance, cancel: true };
+      }
+      if (typeof parsed.url !== "string" || typeof parsed.callback !== "string") return null;
       return {
         id: parsed.id,
         instance: parsed.instance,
@@ -603,6 +607,49 @@
       return null;
     }
     return element;
+  }
+
+  function fetchRequestKey(request) {
+    return String(request.instance) + ":" + String(request.id);
+  }
+
+  function latestFetchKey(request) {
+    return String(request.instance) + ":" + String(request.mountToken) + ":" +
+      String(request.requestKey);
+  }
+
+  function forgetFetch(request) {
+    state.activeFetches.delete(fetchRequestKey(request));
+    if (request.requestKey !== undefined) {
+      var key = latestFetchKey(request);
+      if (state.latestFetches.get(key) === fetchRequestKey(request)) {
+        state.latestFetches.delete(key);
+      }
+    }
+  }
+
+  function cancelFetch(request) {
+    var key = fetchRequestKey(request);
+    var active = state.activeFetches.get(key);
+    if (active) {
+      active.cancelled = true;
+      if (active.controller) active.controller.abort();
+      forgetFetch(active.request);
+    }
+    state.pendingFetches = state.pendingFetches.filter(function (pending) {
+      return fetchRequestKey(pending) !== key;
+    });
+  }
+
+  function cancelOwnerFetches(instance) {
+    state.activeFetches.forEach(function (active) {
+      if (String(active.request.instance) === String(instance)) {
+        cancelFetch(active.request);
+      }
+    });
+    state.pendingFetches = state.pendingFetches.filter(function (request) {
+      return String(request.instance) !== String(instance);
+    });
   }
 
   function fetchResponseData(body, contentType) {
@@ -678,8 +725,11 @@
   }
 
   function deliverFetch(module, element, request, envelope) {
+    var active = state.activeFetches.get(fetchRequestKey(request));
+    if (active && active.cancelled) return;
     var liveElement = fetchElement(request);
     if (!liveElement || liveElement !== element) return;
+    forgetFetch(request);
     try {
       writeFetchEnvelope(module, element, request, envelope);
       if (!element._mochiDisconnected) {
@@ -696,32 +746,55 @@
     // Capture the mount attempt so a response that arrives after disposal
     // cannot reach a later component that reused the VM instance slot.
     request.mountToken = element._mochiMountToken;
+    var options = request.options && typeof request.options === "object" ? request.options : {};
+    request.requestKey = typeof options.key === "string" ? options.key :
+      (typeof options.request_key === "string" ? options.request_key : undefined);
+    if (request.requestKey !== undefined) {
+      var latestKey = latestFetchKey(request);
+      var previousKey = state.latestFetches.get(latestKey);
+      if (previousKey !== undefined) {
+        var previous = state.activeFetches.get(previousKey);
+        if (previous) cancelFetch(previous.request);
+        else state.latestFetches.delete(latestKey);
+      }
+      state.latestFetches.set(latestKey, fetchRequestKey(request));
+    }
+    var active = { request: request, controller: null, cancelled: false };
+    state.activeFetches.set(fetchRequestKey(request), active);
     if (typeof global.fetch !== "function") {
       deliverFetch(module, element, request, fetchNetworkEnvelope("fetch unavailable"));
       return;
     }
 
-    var options = request.options && typeof request.options === "object" ? request.options : {};
+    var fetchOptions = Object.assign({}, options);
+    delete fetchOptions.key;
+    delete fetchOptions.request_key;
+    if (typeof global.AbortController === "function") {
+      active.controller = new global.AbortController();
+      fetchOptions.signal = active.controller.signal;
+    }
     var responsePromise;
     try {
-      responsePromise = global.fetch(request.url, options);
+      responsePromise = global.fetch(request.url, fetchOptions);
     } catch (error) {
       deliverFetch(module, element, request, fetchNetworkEnvelope(error));
       return;
     }
 
     Promise.resolve(responsePromise).then(function (response) {
-      if (!fetchElement(request)) return null;
+      if (active.cancelled || !fetchElement(request)) return null;
       var bodyPromise = response && typeof response.text === "function"
         ? response.text()
         : Promise.resolve("");
       return Promise.resolve(bodyPromise).then(function (body) {
-        if (!fetchElement(request)) return;
+        if (active.cancelled || !fetchElement(request)) return;
         deliverFetch(module, element, request, fetchResponseEnvelope(response, body));
       });
     }).catch(function (error) {
-      if (!fetchElement(request)) return;
+      if (active.cancelled || !fetchElement(request)) return;
       deliverFetch(module, element, request, fetchNetworkEnvelope(error));
+    }).finally(function () {
+      if (active.cancelled) forgetFetch(request);
     });
   }
 
@@ -863,6 +936,10 @@
       }
     }
     requests.forEach(function (request) {
+      if (request.cancel) {
+        cancelFetch(request);
+        return;
+      }
       var element = fetchElement(request);
       if (element) {
         startFetch(module, request, element);
@@ -4043,9 +4120,7 @@
 
         var key = String(instance);
         state.unmountedInstances.add(key);
-        state.pendingFetches = state.pendingFetches.filter(function (request) {
-          return String(request.instance) !== key;
-        });
+        cancelOwnerFetches(key);
         state.timers.forEach(function (record, timerId) {
           if (record.instance === key) clearTimerEntry(timerId);
         });
