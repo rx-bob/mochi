@@ -480,7 +480,11 @@ class Compiler
 
     # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
     attr_hash_result = AttributeHashExtractor.process(html)
-    html = ComponentGenerator.escape_double_braces(attr_hash_result.html)
+    protected_rows, each_blocks = AttributeScopeMask.protect(attr_hash_result.html)
+    html = AttributeScopeMask.restore(
+      ComponentGenerator.escape_double_braces(protected_rows),
+      each_blocks
+    )
 
     amped_ruby_code = AttributeHashGenerator.inject_methods_into_class(
       amped_ruby_code,
@@ -564,7 +568,8 @@ class Compiler
     manifest.method_lines = methods.transform_values(&.start_line)
 
     validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, declaration.attribute_readers)
-    validate_row_expressions(cls_name, generator.each_row_templates, methods.keys, declaration.attribute_readers)
+    row_generated_methods = EachMethodGenerator.generated_attribute_method_names(generator.each_row_templates)
+    validate_row_expressions(cls_name, generator.each_row_templates, methods.keys + row_generated_methods, declaration.attribute_readers)
 
     amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
       amped_ruby_code,

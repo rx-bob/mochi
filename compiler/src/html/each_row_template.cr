@@ -1,5 +1,7 @@
 require "./event_argument"
 require "./template_expression"
+require "./attribute_conditional_extractor"
+require "./attribute_hash_extractor"
 
 # One scalar expression inside a compiled list row. `slot` is the position in
 # the row's evaluated value array; `kind` is `text`, `html`, or `attr`.
@@ -82,6 +84,8 @@ class EachRowTemplate
   getter key_expression : String?
   # Source span of the list expression, used for runtime duplicate-key errors.
   getter span : TemplateSourceSpan?
+  getter attribute_conditionals : Array(ExtractedAttributeConditional)
+  getter attribute_hashes : Array(ExtractedAttributeHash)
 
   def initialize(
     @block_id : Int32,
@@ -96,6 +100,8 @@ class EachRowTemplate
     @scope : Array(EachRowScope),
     @key_expression : String? = nil,
     @span : TemplateSourceSpan? = nil,
+    @attribute_conditionals : Array(ExtractedAttributeConditional) = [] of ExtractedAttributeConditional,
+    @attribute_hashes : Array(ExtractedAttributeHash) = [] of ExtractedAttributeHash,
   )
   end
 

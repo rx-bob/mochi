@@ -136,6 +136,10 @@ class EachProcessor
     return result unless html.includes?("{each ")
 
     stack = [] of EachStackFrame
+    # `{end}` closes the most recently opened template block. Track non-each
+    # control blocks as well, or an `{if}` inside a row will truncate the row
+    # before its attributes can be lowered with the row's lexical scope.
+    block_stack = [] of Bool
     next_id = id_start
     pos = 0
 
@@ -146,19 +150,26 @@ class EachProcessor
 
       if match = try_match_each_token(html, pos)
         stack << EachStackFrame.new(match.loop_def, pos, match.content_start, next_id)
+        block_stack << true
         next_id += 1
         pos = match.content_start
+      elsif try_match_control_token(html, pos)
+        block_stack << false
+        pos += 1
       elsif try_match_end_token(html, pos)
-        unless stack.empty?
-          frame = stack.pop
-          result << EachBlock.new(
-            loop_def: frame.loop_def,
-            content: html[frame.content_start...pos],
-            start_pos: frame.start_pos,
-            end_pos: pos + END_TOKEN_LEN,
-            content_start_pos: frame.content_start,
-            id: frame.id
-          )
+        unless block_stack.empty?
+          closes_each = block_stack.pop
+          if closes_each && !stack.empty?
+            frame = stack.pop
+            result << EachBlock.new(
+              loop_def: frame.loop_def,
+              content: html[frame.content_start...pos],
+              start_pos: frame.start_pos,
+              end_pos: pos + END_TOKEN_LEN,
+              content_start_pos: frame.content_start,
+              id: frame.id
+            )
+          end
         end
         pos += END_TOKEN_LEN
       else
@@ -258,5 +269,11 @@ class EachProcessor
 
   def self.try_match_end_token(html : String, pos : Int32) : Bool
     html.index(END_TOKEN, pos) == pos
+  end
+
+  def self.try_match_control_token(html : String, pos : Int32) : Bool
+    {"{if ", "{unless ", "{with "}.any? do |token|
+      html.index(token, pos) == pos
+    end
   end
 end

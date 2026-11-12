@@ -1,3 +1,5 @@
+require "./attribute_scope_mask"
+
 class ExtractedAttributeHash
   property id : Int32
   property original_string : String
@@ -19,11 +21,12 @@ class AttributeHashExtractor
   def self.process(html : String) : AttributeHashResult
     hashes = [] of ExtractedAttributeHash
     return AttributeHashResult.new(html, hashes) unless html.includes?("{{")
+    protected_html, each_blocks = AttributeScopeMask.protect(html)
     next_id = 0
 
     # 1. Unquoted attribute={{...}}
     unquoted_regex = /([a-zA-Z0-9_\-\:]+)\s*=\s*\{\{(.*?)\}\}/m
-    processed_html = html.gsub(unquoted_regex) do |_, m|
+    processed_html = protected_html.gsub(unquoted_regex) do |_, m|
       attr_name = m[1]
       attr_value = "{{#{m[2]?}}}"
       cond = ExtractedAttributeHash.new(next_id, attr_value, attr_name)
@@ -49,6 +52,6 @@ class AttributeHashExtractor
       "#{attr_name}=#{quote}#{replaced_inner}#{quote}"
     end
 
-    AttributeHashResult.new(processed_html, hashes)
+    AttributeHashResult.new(AttributeScopeMask.restore(processed_html, each_blocks), hashes)
   end
 end

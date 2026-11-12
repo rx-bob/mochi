@@ -1,5 +1,7 @@
 require "../html/each_row_template"
 require "./inject_utils"
+require "./attribute_method_generator"
+require "./attribute_hash_generator"
 
 # Generates the Ruby side of compiled list rows. One getter per root each block
 # evaluates every scalar binding and every nested row tree inside the VM. Event
@@ -27,9 +29,40 @@ class EachMethodGenerator
     sections = [] of String
     rows.each do |row|
       sections << generate_rows_method(row)
+      row.each_template do |template|
+        template.attribute_conditionals.each do |conditional|
+          sections << AttributeMethodGenerator.generate_method(
+            conditional,
+            "__mochi_each_#{template.block_id}_attr_cond_#{conditional.id}",
+            template.scope
+          )
+        end
+        template.attribute_hashes.each do |hash|
+          sections << AttributeHashGenerator.generate_method(
+            hash,
+            "__mochi_each_#{template.block_id}_attr_hash_#{hash.id}",
+            template.scope
+          )
+        end
+      end
       row.all_events.each { |event| sections << generate_event_wrapper(event) }
     end
     sections.join("\n")
+  end
+
+  def self.generated_attribute_method_names(rows : Array(EachRowTemplate)) : Array(String)
+    names = [] of String
+    rows.each do |root|
+      root.each_template do |row|
+        row.attribute_conditionals.each do |conditional|
+          names << "__mochi_each_#{row.block_id}_attr_cond_#{conditional.id}"
+        end
+        row.attribute_hashes.each do |hash|
+          names << "__mochi_each_#{row.block_id}_attr_hash_#{hash.id}"
+        end
+      end
+    end
+    names
   end
 
   def self.generate_rows_method(row : EachRowTemplate) : String

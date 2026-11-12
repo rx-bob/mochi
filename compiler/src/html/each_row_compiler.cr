@@ -5,6 +5,8 @@ require "./each_row_template"
 require "./event_argument_extractor"
 require "./html_attributes"
 require "./template_expression"
+require "./attribute_conditional_extractor"
+require "./attribute_hash_extractor"
 
 # Compiles one each block into a static row template plus evaluated value
 # slots and nested row trees. Expression text stays in the compiler; the
@@ -52,6 +54,16 @@ class EachRowCompiler
     scope = parent_scope + [entry]
     scope_names = scope_names_for(scope)
     template = replace_nested_blocks(block)
+    if with_directive = template.match(/\{with(?:\s|})/)
+      span = parser.locator.try(&.locate(with_directive[0]))
+      raise TemplateExpressionError.new(
+        "the {with} directive is not supported; move the lookup into a Ruby helper method and call that method in the template",
+        span
+      )
+    end
+    hash_attributes = AttributeHashExtractor.process(template)
+    conditional_attributes = AttributeConditionalExtractor.process(hash_attributes.html)
+    template = rewrite_row_attribute_helpers(conditional_attributes.html, block.id, scope)
     if template.matches?(/\sref\s*=/)
       raise TemplateExpressionError.new(
         "ref is not supported inside each rows; place named refs in the static component template",
@@ -162,8 +174,23 @@ class EachRowCompiler
       children,
       scope,
       key_expression,
-      row_span
+      row_span,
+      conditional_attributes.conditionals,
+      hash_attributes.hashes
     )
+  end
+
+  private def self.rewrite_row_attribute_helpers(
+    template : String,
+    block_id : Int32,
+    scope : Array(EachRowScope),
+  ) : String
+    args = scope.flat_map { |entry| [entry.item_name, entry.index_name] }.join(", ")
+    template.gsub(/\{__mochi_attr_cond_(\d+)\}/) do |_, match|
+      "{__mochi_each_#{block_id}_attr_cond_#{match[1]}(#{args})}"
+    end.gsub(/\{__mochi_attr_hash_(\d+)\}/) do |_, match|
+      "{__mochi_each_#{block_id}_attr_hash_#{match[1]}(#{args})}"
+    end
   end
 
   private def self.replace_nested_blocks(block : EachBlock) : String

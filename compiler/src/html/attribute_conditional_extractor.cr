@@ -1,3 +1,5 @@
+require "./attribute_scope_mask"
+
 class ExtractedAttributeConditional
   property id : Int32
   property original_string : String
@@ -19,6 +21,7 @@ class AttributeConditionalExtractor
   def self.process(html : String) : AttributeConditionalResult
     conditionals = [] of ExtractedAttributeConditional
     return AttributeConditionalResult.new(html, conditionals) unless html.includes?("{if ") || html.includes?("{unless ")
+    protected_html, each_blocks = AttributeScopeMask.protect(html)
     next_id = 0
     
     # Regex finds attributes whose values contain `{if ` or `{unless `
@@ -27,7 +30,7 @@ class AttributeConditionalExtractor
     # Group 3: attribute value
     regex = /([a-zA-Z0-9_\-\:]+)\s*=\s*(["'])((?:(?!\2).)*(?:\{if |\{unless )(?:(?!\2).)*)\2/m
     
-    processed_html = html.gsub(regex) do |match, m|
+    processed_html = protected_html.gsub(regex) do |match, m|
       attr_name = m[1]
       quote = m[2]
       attr_value = m[3]
@@ -41,6 +44,6 @@ class AttributeConditionalExtractor
       "#{attr_name}=#{quote}#{replacement_value}#{quote}"
     end
 
-    AttributeConditionalResult.new(processed_html, conditionals)
+    AttributeConditionalResult.new(AttributeScopeMask.restore(processed_html, each_blocks), conditionals)
   end
 end

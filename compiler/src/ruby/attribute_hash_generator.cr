@@ -1,5 +1,6 @@
 require "./inject_utils"
 require "../html/attribute_hash_extractor"
+require "../html/each_row_template"
 
 class AttributeHashGenerator
   METHOD_PREFIX = "__mochi_attr_hash_"
@@ -22,17 +23,36 @@ class AttributeHashGenerator
     }.join("\n")
   end
 
-  def self.generate_method(cond : ExtractedAttributeHash) : String
-    method_name = "#{METHOD_PREFIX}#{cond.id}"
+  def self.generate_method(
+    cond : ExtractedAttributeHash,
+    method_name : String = "#{METHOD_PREFIX}#{cond.id}",
+    scope : Array(EachRowScope) = [] of EachRowScope,
+  ) : String
     attr_string = cond.original_string # e.g. {{ "a" => true }}
     
     # Extract the inner part from {{...}}
     inner_hash = attr_string.lchop("{{").rchop("}}").strip
     
+    params = [] of String
+    assignments = [] of String
+    scope.each_with_index do |entry, depth|
+      item_param = "__mochi_scope_#{depth}_item"
+      index_param = "__mochi_scope_#{depth}_index"
+      params << item_param << index_param
+      assignments << "    #{entry.item_name} = #{item_param}"
+      assignments << "    #{entry.index_name} = #{index_param}" unless entry.index_name == entry.item_name
+      unless entry.index_name == "index" || entry.item_name == "index"
+        assignments << "    index = #{index_param}"
+      end
+    end
+    prelude = assignments.join("\n")
+    signature = params.join(", ")
+
     <<-RUBY
 
   # auto-generated attribute hash method
-  def #{method_name}
+  def #{method_name}(#{signature})
+#{prelude}
     _hash = { #{inner_hash} }
     _hash.select { |k, v| v }.keys.join(" ")
   end

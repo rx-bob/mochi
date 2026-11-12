@@ -27,6 +27,49 @@ test("compiled Ruby child props update through an interactive parent", async ({ 
   expect(mochiErrors).toEqual([]);
 });
 
+test("row attributes and handlers keep the current lexical scope through updates", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const mochiErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__rowMochiErrors = [];
+    window.addEventListener("mochi:error", (event) => {
+      const detail = (event as CustomEvent).detail;
+      (window as any).__rowMochiErrors.push(detail?.message || JSON.stringify(detail));
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("row-scope-root");
+    const rows = root.locator("button.row");
+    const classMap = root.locator("span[data-row]");
+    await expect(rows.nth(0)).toHaveClass("row inactive");
+    await expect(rows.nth(0)).toHaveText("Alpha!");
+    await expect(rows.nth(0)).toHaveAttribute("title", "row-a");
+    await expect(classMap.nth(0)).toHaveClass("selected zero");
+    await expect(classMap.nth(1)).toHaveClass("");
+    await rows.nth(1).click();
+    await expect(root.locator("p.selected")).toHaveText("b:1");
+
+    await root.locator("button.activate").click();
+    await expect(rows.nth(0)).toHaveClass("row active");
+    await root.locator("button.reorder").click();
+    await expect(rows.nth(0)).toHaveAttribute("data-row", "b");
+    await rows.nth(0).click();
+    await expect(root.locator("p.selected")).toHaveText("b:0");
+    await root.locator("button.replace").click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveAttribute("data-row", "c");
+    await rows.first().click();
+    await expect(root.locator("p.selected")).toHaveText("c:0");
+    mochiErrors.push(...await page.evaluate(() => (window as any).__rowMochiErrors));
+  }, "<row-scope-root></row-scope-root>");
+
+  expect(pageErrors).toEqual([]);
+  expect(mochiErrors).toEqual([]);
+});
+
 test("root conditional anchors render, toggle nested branches, and support initial true", async ({ page }) => {
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));

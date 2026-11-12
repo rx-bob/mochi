@@ -10,7 +10,7 @@ end
 
 describe EachRowCompiler do
   it "keeps nested loop scopes distinct and compiles events with row arguments" do
-    row = compile_row_template(%Q{
+    row = compile_row_template(%(
       <ul>
         {each @events as ev, idx}
           <li data-id="{ev["id"]}">
@@ -20,7 +20,7 @@ describe EachRowCompiler do
           </li>
         {end}
       </ul>
-    })
+    ))
 
     row.block_id.should eq(0)
     row.items_expression.should eq("@events")
@@ -122,6 +122,39 @@ describe EachRowCompiler do
     kind_for.call("hidden").should eq("boolean")
     kind_for.call("aria-expanded").should eq("text")
     kind_for.call("data-count").should eq("text")
+  end
+
+  it "keeps conditional and hash class helpers in lexical row scope" do
+    row = compile_row_template(%(
+      {each @rows as row, idx}
+        <button class="item {if row['active']}active {row['label']}{else}inactive{end}"
+                data-classes={{ "enabled" => row['active'], "zero" => idx == 0 }}>
+          {row['label']}
+        </button>
+      {end}
+    ))
+
+    row.attribute_conditionals.size.should eq(1)
+    row.attribute_conditionals.first.original_string.should contain("row['active']")
+    row.attribute_hashes.size.should eq(1)
+    row.bindings.map(&.expression).should contain("__mochi_each_0_attr_cond_0(row, idx)")
+    row.bindings.map(&.expression).should contain("__mochi_each_0_attr_hash_0(row, idx)")
+    row.template.should_not contain("{if ")
+    row.template.should_not contain("{{")
+  end
+
+  it "gives an explicit unsupported diagnostic for with inside a row" do
+    source = %Q{
+      {each @rows as row}
+        {with row[:profile] as profile}<span>{profile[:name]}</span>{end}
+      {end}
+    }
+    parser = TemplateExpressionParser.new(TemplateSourceLocator.new(source, "views/rows.rb"))
+    blocks = EachProcessor.extract_each_blocks(source)
+
+    expect_raises(TemplateExpressionError, "Ruby helper method") do
+      EachRowCompiler.compile(EachProcessor.roots(blocks).first, parser)
+    end
   end
 
   it "compiles explicit key expressions and list source spans" do

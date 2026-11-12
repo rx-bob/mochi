@@ -127,6 +127,44 @@ describe EachMethodGenerator do
     code.should contain(%q{open_event(ev["id"], child, 7, "\#{danger}\"\\", __event)})
   end
 
+  it "generates attribute helpers for nested rows with the full lexical scope" do
+    outer_scope = [EachRowScope.new("row", "index", nil)]
+    inner_scope = outer_scope + [EachRowScope.new("child", "child_index", "child_index")]
+    inner = EachRowTemplate.new(
+      1,
+      "row[:children]",
+      "child",
+      "child_index",
+      "child_index",
+      "<button class=\"{__mochi_each_1_attr_cond_0(row, index, child, child_index)}\"></button>",
+      [] of EachRowBindingDescriptor,
+      [] of EachRowEventDescriptor,
+      [] of EachRowTemplate,
+      inner_scope,
+      nil,
+      nil,
+      [ExtractedAttributeConditional.new(0, "{if child[:active]}on{end}", "class")],
+      [ExtractedAttributeHash.new(0, "{{\"selected\" => row[:selected]}}", "class")]
+    )
+    outer = list_row(
+      0,
+      "@rows",
+      "row",
+      "index",
+      nil,
+      [] of EachRowBindingDescriptor,
+      [inner],
+      [] of EachRowEventDescriptor,
+      outer_scope
+    )
+
+    code = EachMethodGenerator.generate_all_methods([outer], "List")
+
+    code.should contain("def __mochi_each_1_attr_cond_0(__mochi_scope_0_item, __mochi_scope_0_index, __mochi_scope_1_item, __mochi_scope_1_index)")
+    code.should contain("child = __mochi_scope_1_item")
+    code.should contain("def __mochi_each_1_attr_hash_0(__mochi_scope_0_item, __mochi_scope_0_index, __mochi_scope_1_item, __mochi_scope_1_index)")
+  end
+
   it "injects rows and wrappers before the class terminator" do
     ruby_code = <<-RUBY
 class ItemList

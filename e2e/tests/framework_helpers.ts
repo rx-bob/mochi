@@ -8,7 +8,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const compiler = path.join(repoRoot, "compiler", "mochi");
 const fixture = path.join(__dirname, "..", "fixtures", "framework_contracts");
 
-export async function withFrameworkProject<T>(run: (baseURL: string) => Promise<T>): Promise<T> {
+export async function withFrameworkProject<T>(run: (baseURL: string) => Promise<T>, body = "<contract-root></contract-root>"): Promise<T> {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-framework-"));
   const bundle = path.join(project, "bundle");
   const server = http.createServer((request, response) => {
@@ -33,7 +33,7 @@ export async function withFrameworkProject<T>(run: (baseURL: string) => Promise<
 
   try {
     fs.cpSync(fixture, project, { recursive: true });
-    fs.writeFileSync(path.join(project, "index.html"), `<!doctype html><html><head><meta charset="utf-8"><script src="mochi-loader.js"></script></head><body><contract-root></contract-root></body></html>`);
+    fs.writeFileSync(path.join(project, "index.html"), `<!doctype html><html><head><meta charset="utf-8"><script src="mochi-loader.js"></script></head><body>${body}</body></html>`);
     fs.mkdirSync(bundle);
     execFileSync(compiler, ["-i", project, "-o", bundle], { cwd: repoRoot, stdio: "pipe" });
     await new Promise<void>((resolve, reject) => {
