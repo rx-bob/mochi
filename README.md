@@ -442,6 +442,48 @@ create an inexact ledger. Keep a ledger's `:numerator` and `:denominator`
 integer-valued if you edit its ordinary Hash fields directly. An operation
 that fails while reducing a result leaves its input ledger unchanged.
 
+#### Exact money to currency labels
+
+Accumulate exact minor units first, choose one named rounding mode at the
+display boundary, then pass the integer minor-unit result and explicit scale to
+`MochiFormat.currency`:
+
+```ruby
+def currency_label(ledger)
+  cents = MochiMoney.round_half_up(ledger)
+  MochiFormat.currency(cents, "USD", "en-US", 2)
+end
+
+charge = MochiMoney.amount(56_951, 1_000) # 56.951 cents, exact
+currency_label(charge) # "$0.57"
+
+adjusted = MochiMoney.ledger
+MochiMoney.merge(adjusted, charge)
+MochiMoney.add_ratio(adjusted, -951, 1_000) # negative adjustment
+currency_label(adjusted) # "$0.56"
+
+line_a = MochiMoney.amount(2, 5)
+line_b = MochiMoney.amount(2, 5)
+line_c = MochiMoney.amount(2, 5)
+total = MochiMoney.ledger
+MochiMoney.merge(total, line_a)
+MochiMoney.merge(total, line_b)
+MochiMoney.merge(total, line_c)
+
+currency_label(line_a) # "$0.00"
+currency_label(line_b) # "$0.00"
+currency_label(line_c) # "$0.00"
+currency_label(total)  # "$0.01"
+```
+
+The labels for individual lines are presentation only; never add them back
+into the ledger. The exact total is `6/5` cents even though each line displays
+as zero cents. Ordinary `Float#round` follows Ruby's floating-point rules and
+does not provide exact money accumulation. Keep money in `MochiMoney` ledgers
+until display, then use the resulting integer with the requested currency,
+locale, and scale. Both helpers load on demand when the component's Ruby code
+uses them; application code needs no JavaScript or adapter script tag.
+
 The helper performs no currency symbols, grouping, decimal separators, or
 locale lookup. Format the integer returned by a `round_*` method in your
 component. Applications that do not use `MochiMoney` pay no bytes for it; the
@@ -498,10 +540,12 @@ UTC. A date-only value such as `2026-10-11` is a calendar date and must use UTC;
 pass a full timestamp to format another timezone. Locale and timezone defaults
 are fixed so a label does not change with the machine's settings.
 
-`currency` takes an exact number of minor units and divides by `10^scale` at
-the display boundary. It accepts values up to
-1,000,000,000,000,000 minor units; larger values report an error instead of
-silently returning an imprecise JavaScript number. Use the
+`currency` takes an exact integer number of minor units and divides by
+`10^scale` at the display boundary. Floats (including `1.0`) and numeric
+strings are rejected with a `mochi:error` identifying the integer-minor-unit
+requirement. Scale must be an integer from 0 through 20. The absolute amount
+limit is 1,000,000,000,000,000 minor units; larger values report an error
+instead of silently returning an imprecise JavaScript number. Use the
 [money helpers](#money-helpers) for multi-step arithmetic and pass the rounded
 minor-unit total to `currency`.
 

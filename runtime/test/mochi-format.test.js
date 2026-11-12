@@ -58,6 +58,11 @@ test("currency formatting accepts exact minor units and validates the scale", ()
     currency: "USD",
     scale: 2,
   })), "$10,000,000,000,000.00");
+  assert.equal(host().format("number", exact("i64", "-1000000000000000"), JSON.stringify({
+    style: "currency",
+    currency: "USD",
+    scale: 2,
+  })), "-$10,000,000,000,000.00");
 
   assert.throws(
     () => number(1000000000000001, {
@@ -68,9 +73,47 @@ test("currency formatting accepts exact minor units and validates the scale", ()
     /currency amount exceeds exact formatting range/,
   );
   assert.throws(
+    () => host().format("number", exact("i64", "-1000000000000001"), JSON.stringify({
+      style: "currency",
+      currency: "USD",
+      scale: 2,
+    })),
+    /currency amount exceeds exact formatting range/,
+  );
+  assert.throws(
     () => number(1.5, { style: "currency", currency: "USD", scale: 2 }),
     /currency amount must be an Integer number of minor units/,
   );
+  assert.throws(
+    () => host().format("number", exact("f64", "1"), JSON.stringify({
+      style: "currency",
+      currency: "USD",
+      scale: 2,
+    })),
+    /currency amount must be an Integer number of minor units/,
+  );
+  assert.throws(
+    () => number("9.61", { style: "currency", currency: "USD", scale: 2 }),
+    /currency amount must be an Integer number of minor units/,
+  );
+  assert.throws(
+    () => number(100, { style: "currency", currency: "USD", scale: "2" }),
+    /currency scale must be an integer from 0 to 20/,
+  );
+  assert.equal(number(1, {
+    style: "currency",
+    currency: "USD",
+    scale: 0,
+    minimum_fraction_digits: 0,
+    maximum_fraction_digits: 0,
+  }), "$1");
+  assert.equal(number(1, {
+    style: "currency",
+    currency: "USD",
+    scale: 20,
+    minimum_fraction_digits: 20,
+    maximum_fraction_digits: 20,
+  }), "$0.00000000000000000001");
   assert.throws(
     () => number(100, { scale: 2 }),
     /scale is only supported for currency formatting/,

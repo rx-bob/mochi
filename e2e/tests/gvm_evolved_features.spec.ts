@@ -3182,6 +3182,7 @@ end
   expect(moneyManifest.schema_version).toBe(2);
   expect(moneyManifest.prelude).toBeUndefined();
   expect(moneyManifest.format_host).toBeUndefined();
+  expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(false);
   expect(readComponentDescriptor(bundleDir, moneyManifest, "money-ledger").formatting).toBeUndefined();
   const moneyPackages = Object.entries(moneyManifest.packages).map(([id, pkg]: [string, any]) => ({
     id,
@@ -3355,6 +3356,39 @@ class FormatScreen
   @date_zone
   @exact
   @money
+  @fractional
+  @adjusted
+  @adjusted_label
+  @event_money
+  @line_total_label
+  @line_a_label
+  @line_b_label
+  @line_c_label
+  @currency_boundary
+  @currency_boundary_negative
+
+  def currency_label(ledger)
+    cents = MochiMoney.round_half_up(ledger)
+    MochiFormat.currency(cents, "USD", "en-US", 2)
+  end
+
+  def apply_adjustment
+    adjusted = MochiMoney.amount(56951, 1000)
+    MochiMoney.add_ratio(adjusted, -951, 1000)
+    @event_money = currency_label(adjusted)
+  end
+
+  def bad_currency_float
+    MochiFormat.currency(1.0, "USD", "en-US", 2)
+  end
+
+  def bad_currency_string
+    MochiFormat.currency("9.61", "USD", "en-US", 2)
+  end
+
+  def bad_currency_range
+    MochiFormat.currency(1_000_000_000_000_001, "USD", "en-US", 2)
+  end
 
   def initialize
     @rows = [
@@ -3370,7 +3404,25 @@ class FormatScreen
     @exact = MochiFormat.decimal(9223372036854775807, "en-US")
     cost = MochiMoney.ledger
     MochiMoney.add_ratio(cost, 202_000 * 300, 1_000_000)
-    @money = MochiFormat.currency(MochiMoney.round_half_up(cost), "USD", "en-US", 2)
+    @money = currency_label(cost)
+    @fractional = MochiMoney.amount(56951, 1000)
+    @adjusted = MochiMoney.amount(56951, 1000)
+    MochiMoney.add_ratio(@adjusted, -951, 1000)
+    @adjusted_label = currency_label(@adjusted)
+    line_a = MochiMoney.amount(2, 5)
+    line_b = MochiMoney.amount(2, 5)
+    line_c = MochiMoney.amount(2, 5)
+    line_total = MochiMoney.ledger
+    MochiMoney.merge(line_total, line_a)
+    MochiMoney.merge(line_total, line_b)
+    MochiMoney.merge(line_total, line_c)
+    @line_a_label = currency_label(line_a)
+    @line_b_label = currency_label(line_b)
+    @line_c_label = currency_label(line_c)
+    @line_total_label = currency_label(line_total)
+    @currency_boundary = MochiFormat.currency(1_000_000_000_000_000, "USD", "en-US", 2)
+    @currency_boundary_negative = MochiFormat.currency(-1_000_000_000_000_000, "USD", "en-US", 2)
+    @event_money = "pending"
   end
 
   def row_label(value)
@@ -3391,6 +3443,15 @@ class FormatScreen
       <p class="date-zone">{@date_zone}</p>
       <p class="exact">{@exact}</p>
       <p class="money">{@money}</p>
+      <p class="fractional-money">{currency_label(@fractional)}</p>
+      <p class="adjusted-money">{@adjusted_label}</p>
+      <p class="event-money">{@event_money}</p>
+      <p class="line-a">{@line_a_label}</p>
+      <p class="line-b">{@line_b_label}</p>
+      <p class="line-c">{@line_c_label}</p>
+      <p class="line-total">{@line_total_label}</p>
+      <p class="currency-boundary">{@currency_boundary}</p>
+      <p class="currency-boundary-negative">{@currency_boundary_negative}</p>
       <p class="binding">{MochiFormat.compact(1234567, "en-US")}</p>
       <ul class="rows">
         {each @rows as row}
@@ -3398,6 +3459,10 @@ class FormatScreen
         {end}
       </ul>
       <button class="bad" onclick="{bad_locale}">Bad locale</button>
+      <button class="adjust" onclick="{apply_adjustment}">Apply adjustment</button>
+      <button class="bad-currency-float" onclick="{bad_currency_float}">Bad float currency</button>
+      <button class="bad-currency-string" onclick="{bad_currency_string}">Bad string currency</button>
+      <button class="bad-currency-range" onclick="{bad_currency_range}">Currency range overflow</button>
     }
   end
 end
@@ -3436,6 +3501,8 @@ end
   expect(formatDescriptor.formatting).toBe(true);
   expect(formatDescriptor.capabilities).toContain("formatting");
   expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(true);
+  const formatPackages = Object.values(formatManifest.packages) as any[];
+  expect(formatPackages.some((pkg) => (pkg.exports || []).includes("MochiMoney"))).toBe(true);
 
   const requested: string[] = [];
   page.on("request", (request) => requested.push(request.url()));
@@ -3456,6 +3523,15 @@ end
     await expect(host.locator("p.date-zone")).toHaveText("Nov 10, 2026, 8:30 AM");
     await expect(host.locator("p.exact")).toHaveText("9,223,372,036,854,775,807");
     await expect(host.locator("p.money")).toHaveText("$0.61");
+    await expect(host.locator("p.fractional-money")).toHaveText("$0.57");
+    await expect(host.locator("p.adjusted-money")).toHaveText("$0.56");
+    await expect(host.locator("p.event-money")).toHaveText("pending");
+    await expect(host.locator("p.line-a")).toHaveText("$0.00");
+    await expect(host.locator("p.line-b")).toHaveText("$0.00");
+    await expect(host.locator("p.line-c")).toHaveText("$0.00");
+    await expect(host.locator("p.line-total")).toHaveText("$0.01");
+    await expect(host.locator("p.currency-boundary")).toHaveText("$10,000,000,000,000.00");
+    await expect(host.locator("p.currency-boundary-negative")).toHaveText("-$10,000,000,000,000.00");
     await expect(host.locator("p.binding")).toHaveText("1.2M");
     await expect(host.locator("li.row")).toHaveCount(2);
     await expect(host.locator("li.row").nth(0)).toHaveText("1.234,5");
@@ -3470,11 +3546,38 @@ end
         (window as any).__mochiFormatErrors.push(event.detail);
       });
     });
-    await host.locator("button.bad").click();
+    await host.locator("button.adjust").click();
+    await expect(host.locator("p.event-money")).toHaveText("$0.56");
+    await host.locator("button.bad-currency-float").click();
     await expect.poll(async () => page.evaluate(
       () => (window as any).__mochiFormatErrors.length,
     )).toBe(1);
-    const formatError = await page.evaluate(() => (window as any).__mochiFormatErrors[0]);
+    const floatCurrencyError = await page.evaluate(() => (window as any).__mochiFormatErrors[0]);
+    expect(floatCurrencyError.phase).toBe("event");
+    expect(floatCurrencyError.message).toMatch(/currency amount must be an Integer number of minor units/);
+    expect(floatCurrencyError.message).toMatch(/FormatScreen\.rb/);
+    await host.locator("button.bad-currency-string").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiFormatErrors.length,
+    )).toBe(2);
+    const stringCurrencyError = await page.evaluate(() => (window as any).__mochiFormatErrors[1]);
+    expect(stringCurrencyError.phase).toBe("event");
+    expect(stringCurrencyError.message).toMatch(/currency amount must be an Integer number of minor units/);
+    expect(stringCurrencyError.message).toMatch(/FormatScreen\.rb/);
+    await host.locator("button.bad-currency-range").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiFormatErrors.length,
+    )).toBe(3);
+    const currencyRangeError = await page.evaluate(() => (window as any).__mochiFormatErrors[2]);
+    expect(currencyRangeError.phase).toBe("event");
+    expect(currencyRangeError.message).toMatch(/currency amount exceeds exact formatting range/);
+    expect(currencyRangeError.message).toMatch(/FormatScreen\.rb/);
+
+    await host.locator("button.bad").click();
+    await expect.poll(async () => page.evaluate(
+      () => (window as any).__mochiFormatErrors.length,
+    )).toBe(4);
+    const formatError = await page.evaluate(() => (window as any).__mochiFormatErrors[3]);
     expect(formatError.phase).toBe("event");
     expect(formatError.message).toMatch(/invalid locale/);
     expect(formatError.message).toMatch(/en_US/);

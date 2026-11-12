@@ -142,7 +142,11 @@
     }
   }
 
-  function currencyNumber(value, scale) {
+  function currencyNumber(rawValue, scale) {
+    if (rawValue && typeof rawValue === "object" && rawValue.__mochi_number === "f64") {
+      fail("currency amount must be an Integer number of minor units");
+    }
+    var value = decodeValue(rawValue);
     if (typeof value === "bigint") {
       if (value < BigInt(-MAX_EXACT_CURRENCY_MINOR) ||
           value > BigInt(MAX_EXACT_CURRENCY_MINOR)) {
@@ -175,7 +179,7 @@
       fail("scale is only supported for currency formatting");
     }
     if (style === "currency") {
-      value = currencyNumber(value, options.scale === undefined ? 2 : Number(options.scale));
+      value = currencyNumber(rawValue, options.scale === undefined ? 2 : options.scale);
     } else if (typeof value !== "number" && typeof value !== "bigint") {
       fail("number value must be a Number or Integer");
     }
