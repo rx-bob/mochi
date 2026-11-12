@@ -125,6 +125,18 @@ icons named by `MochiIcons.icon("...")` or a matching source string into
 source location. No CDN or global Feather object is required. `Mochi.raw` is
 still required because ordinary template values stay text.
 
+Icon URLs come from the manifest's `resources` entries. The loader resolves
+each selected icon file relative to the manifest URL, just as it does for
+component descriptors, bytecode, styles, and adapters. Serve the bundle
+together under one URL prefix, or place its files in a subdirectory and point
+`data-mochi-manifest` at that manifest. Automatic boot finds the default
+manifest beside the loader script; an explicit manifest path resolves relative
+to that script. This works on deep routes and does not require a `<base>` tag;
+existing deliberate base tags remain in effect for
+ordinary document links. Route links should use app-appropriate paths. Static
+hosts must rewrite deep page requests to the app entry page; resolving asset
+URLs does not configure that server behavior.
+
 ### Trusted markup
 
 Template values are text by default, whether they stand alone, sit inside a

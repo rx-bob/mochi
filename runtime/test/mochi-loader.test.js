@@ -533,7 +533,7 @@ async function setup(components, options) {
   else if (options.fetch) loader.hostModuleFactory = async (url) =>
     url.endsWith("mochi-fetch.js") ? networkAdapter(global.fetch) : null;
 
-  await loader.boot("mochi-manifest.json");
+  await loader.boot(options.manifestUrl || "mochi-manifest.json");
   return { dom, loader, module, log };
 }
 
@@ -3886,6 +3886,37 @@ test("html and attribute patches update their cached targets", async () => {
   loader.applyPatches(attrElement);
   assert.equal(link.hasAttribute("href"), false);
   assert.equal(attrElement.bindingTargets[0], link);
+});
+
+test("trusted Ruby icon markup resolves against manifest location", async () => {
+  const component = {
+    tag_name: "manifest-icon",
+    class_name: "ManifestIcon",
+    chi_file: "manifest-icon.chi",
+    html_template: '<span class="icon">{rendered_svg}</span>',
+    css: "",
+    bindings: [
+      { id: 0, path: [0, 0], kind: "html", trusted_markup: true, attr_name: null, template_text: "{rendered_svg}", getter_sym: "__mochi_bind_0" },
+    ],
+    events: [],
+  };
+  const body = manifest([component], {
+    "icon:home": { kind: "icon", file: "static/mochi-icons/home.svg" },
+  });
+  const { loader, module } = await setup([component], {
+    manifest: body,
+    url: "http://localhost/tenant/deep/page?tab=2#view",
+  });
+  module.patchQueue.push({
+    patches: [{ id: 0, value: '<svg><use href="__MOCHI_ICON__home__#mochi-icon"></use></svg>' }],
+  });
+  const element = document.createElement("manifest-icon");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  assert.equal(
+    element.shadowRoot.querySelector("use").getAttribute("href"),
+    "http://localhost/static/mochi-icons/home.svg#mochi-icon"
+  );
 });
 
 test("ordinary text bindings stay literal and only trusted markup creates elements", async () => {

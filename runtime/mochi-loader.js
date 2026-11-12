@@ -1572,6 +1572,44 @@
     return descriptor;
   }
 
+  // Ruby's icon helper emits a compiler-owned marker instead of a route-
+  // relative URL. Resolve markers while loading descriptors or inserting
+  // trusted Ruby markup; rendered DOM is never scanned or rewritten. Resource
+  // paths are owned by the manifest and resolve beside it, like styles,
+  // bytecode, and adapters.
+  function resolveIconAssetReferences(markup, manifest, manifestUrl) {
+    return String(markup).replace(/__MOCHI_ICON__([a-z0-9][a-z0-9-]*)__/g, function (reference, name) {
+      var id = "icon:" + name;
+      var resources = manifest && manifest.resources;
+      var resource = resources && resources[id];
+      if (!resource || resource.kind !== "icon" || typeof resource.file !== "string") {
+        throw new Error("component references missing icon resource " + id);
+      }
+      return absoluteUrl(resource.file, manifestUrl);
+    });
+  }
+
+  function resolveDescriptorAssetReferences(descriptor, manifest, manifestUrl) {
+    function resolveTemplate(template) {
+      return resolveIconAssetReferences(template, manifest, manifestUrl);
+    }
+    function resolveBindings(bindings) {
+      (bindings || []).forEach(function (binding) {
+        (binding.branches || []).forEach(function (branch) {
+          if (typeof branch.html_template === "string") {
+            branch.html_template = resolveTemplate(branch.html_template);
+          }
+          resolveBindings(branch.bindings);
+        });
+      });
+    }
+    if (typeof descriptor.html_template === "string") {
+      descriptor.html_template = resolveTemplate(descriptor.html_template);
+    }
+    resolveBindings(descriptor.bindings);
+    return descriptor;
+  }
+
   function loadComponentDescriptor(entry, manifest, manifestUrl) {
     var url = componentDescriptorUrl(entry, manifestUrl);
     var existing = state.descriptorPromises.get(url);
@@ -1585,7 +1623,11 @@
       }
       return response.json();
     }).then(function (descriptor) {
-      return validateComponentDescriptor(descriptor, entry, url, manifest);
+      return resolveDescriptorAssetReferences(
+        validateComponentDescriptor(descriptor, entry, url, manifest),
+        manifest,
+        manifestUrl
+      );
     }).then(function (descriptor) {
       var styleIds = descriptor.style_resources || [];
       return Promise.all(styleIds.map(function (id) {
@@ -3058,7 +3100,11 @@
     }
     if (target.__mochiHtmlValue === value) return;
     target.__mochiHtmlValue = value;
-    target.innerHTML = displayBindingValue(value);
+    target.innerHTML = resolveIconAssetReferences(
+      displayBindingValue(value),
+      state.manifest,
+      state.manifestUrl
+    );
   }
 
   var BOOLEAN_ATTRIBUTES = {
@@ -4603,8 +4649,9 @@
     var script = global.document.currentScript;
     if (script.dataset.mochiAutoBoot !== "false") {
       var manifestPath = script.dataset.mochiManifest || DEFAULT_MANIFEST;
+      var manifestUrl = absoluteUrl(manifestPath, script.src || global.document.baseURI);
       var start = function () {
-        boot(manifestPath).catch(function (error) {
+        boot(manifestUrl).catch(function (error) {
           reportError(null, "boot", "", error);
         });
       };
