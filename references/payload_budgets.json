@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "compression": {
+    "format": "gzip",
+    "level": 9,
+    "mtime": 1
+  },
+  "gzip_tolerance": {
+    "minimum_bytes": 64,
+    "ratio": 0.01
+  },
+  "baselines": {
+    "core": {
+      "raw": 400692,
+      "gzip": 135661
+    },
+    "minimal_initial": {
+      "raw": 403232,
+      "gzip": 136917
+    },
+    "feature_initial": {
+      "raw": 404039,
+      "gzip": 137102
+    },
+    "feature_later": {
+      "raw": 13618,
+      "gzip": 4475
+    },
+    "feature_total": {
+      "raw": 417657,
+      "gzip": 141577
+    }
+  }
+}

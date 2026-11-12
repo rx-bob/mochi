@@ -1,0 +1,110 @@
+# Payload budgets
+
+These are artifact acceptance checks, not benchmarks. They build checked-in
+fixtures with the real compiler, enumerate the generated files from the
+compiler manifest, and fail when membership, determinism, or byte ceilings
+change.
+
+Run:
+
+```sh
+task build
+ruby scripts/payload_check.rb
+```
+
+`task check` runs the same script. The script needs no browser, monitoring
+service, or timing harness.
+
+## Exact inputs
+
+Fixtures:
+
+- `compiler/spec/fixtures/payload/minimal` — one `MyCounter` entry component.
+- `compiler/spec/fixtures/payload/feature` — the same entry component plus a
+  later `FormatBadge` component that calls `MochiFormat`.
+
+Both fixtures are compiled twice in separate temporary roots. The script
+requires byte-identical file sets and SHA-256 hashes for both builds.
+
+The compiler copies the current runtime artifacts:
+
+- `../mochi-gvm/dist/mochi-gvm.wasm`
+- `../mochi-gvm/dist/mochi-gvm.js`
+- `runtime/mochi-loader.js`
+- `runtime/mochi-format.js` when the formatting capability is reachable
+
+Compression uses Ruby `Zlib::GzipWriter` at level 9 with the gzip modification
+time fixed to 1. Raw byte counts are file sizes.
+
+The initial file set is derived from the generated manifest and the component
+tags present in `index.html`. Later files are the referenced files outside that
+initial dependency closure. This makes `components/format-badge.json`,
+`components/format-badge.chi`, the formatting Ruby package, and
+`mochi-format.js` later feature files for the feature fixture.
+
+## Baselines
+
+Measured 2026-11-12 on the repository toolchain:
+
+| Set | Raw bytes | Gzip bytes | Files |
+| --- | ---: | ---: | ---: |
+| Core runtime | 400,692 | 135,661 | 3 |
+| Minimal initial | 403,232 | 136,917 | 7 |
+| Feature initial | 404,039 | 137,102 | 7 |
+| Later feature load | 13,618 | 4,475 | 4 |
+| Feature total | 417,657 | 141,577 | 11 |
+
+Core runtime:
+
+| File | Raw | Gzip |
+| --- | ---: | ---: |
+| `mochi-gvm.wasm` | 184,207 | 84,473 |
+| `mochi-gvm.js` | 62,756 | 17,532 |
+| `mochi-loader.js` | 153,729 | 33,656 |
+
+Minimal initial:
+
+| File | Raw | Gzip |
+| --- | ---: | ---: |
+| `index.html` | 170 | 132 |
+| `mochi-manifest.json` | 500 | 233 |
+| `components/my-counter.chi` | 511 | 282 |
+| `components/my-counter.json` | 1,359 | 609 |
+
+Feature initial adds only manifest metadata:
+
+| File | Raw | Gzip |
+| --- | ---: | ---: |
+| `mochi-manifest.json` | 1,307 | 418 |
+
+The feature manifest is 807 raw bytes and 185 gzip bytes larger than the
+minimal manifest. This is capability metadata, not the adapter implementation.
+
+Later feature load:
+
+| File | Raw | Gzip |
+| --- | ---: | ---: |
+| `mochi-format.js` | 10,578 | 3,022 |
+| `components/format-badge.chi` | 284 | 235 |
+| `components/format-badge.json` | 662 | 359 |
+| `components/ruby-*.chi` | 2,094 | 859 |
+
+The exact Ruby package digest is checkout independent and is asserted by the
+manifest audit.
+
+## Ceilings
+
+`references/payload_budgets.json` is the machine-readable source of truth.
+
+- Raw ceilings equal the measured baseline. Any raw growth requires an
+  explicit budget update and a stated semantic reason.
+- Gzip ceilings allow the larger of 64 bytes or 1 percent of the baseline to
+  absorb compressor implementation differences. This is not headroom for code
+  growth.
+- The script also rejects unexpected files, missing referenced files, duplicate
+  package/resource files, and initial/later set overlap.
+- An exclusion self-check injects the real `mochi-format.js` and an orphan
+  stylesheet into a copied minimal bundle. The audit must reject both.
+
+Update a budget only for an intentional artifact change. State whether the
+cost belongs to the core runtime, entry component, or later feature load.

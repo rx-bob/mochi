@@ -2715,6 +2715,7 @@ end
     expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(0);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(0);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(0);
+    expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(0);
 
     await page.evaluate(() => {
       document.body.appendChild(document.createElement("lazy-format"));
@@ -2723,6 +2724,7 @@ end
     expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(1);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(1);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(1);
+    expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(1);
 
     await page.evaluate(async () => {
       document.querySelector("lazy-format")?.remove();
@@ -2732,6 +2734,7 @@ end
     await expect(page.locator("lazy-format").locator("p.lazy")).toHaveText("1,234.5");
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(1);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(1);
+    expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(projectDir, { recursive: true, force: true });

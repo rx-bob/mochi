@@ -656,6 +656,8 @@ The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js
 
 `mochi-manifest.json` is the compact entry index for the bundle. It records a `schema_version` for the bundle format and lists each component's identity, dependency package, and descriptor location. Templates, local styles, bindings, props, and events live in the per-component descriptor instead of the entry manifest. A loader that does not support the bundle schema fails before it runs Ruby bytecode, and a descriptor whose schema does not match the entry manifest fails with the component name. Each component descriptor names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. An optional capability is a versioned record with a local adapter location and an explicit table of synchronous or asynchronous operations. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
 
+`task payload` builds the checked-in minimal and optional-feature fixtures twice, verifies byte-identical artifacts, audits the generated file sets against the manifest, rejects unused adapters and styles, and enforces raw and gzip ceilings. It does not run a benchmark or collect runtime metrics. Exact inputs, baselines, and the budget update policy live in [references/PAYLOAD_BUDGETS.md](references/PAYLOAD_BUDGETS.md). Browser tests separately prove that an unused adapter and its Ruby package are never requested, while a used feature loads each resource once.
+
 On first use, the loader fetches that component's descriptor, its shared style files, its host adapters, and its dependency closure before mounting. Descriptor, package bytecode, style text, registered host adapters, and parsed template data are cached immutably, while every component instance keeps its own VM state. Concurrent instances share one request per resource, failed downloads are evicted so a reconnect can retry, and a component removed during loading is never mounted. Adapter loading failures name the component and capability instead of falling back to a global script or arbitrary JavaScript evaluation.
 
 ### Compiler Tasks
@@ -673,7 +675,8 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task gvm:wasm` | Rebuild the `mochi-gvm` WASM and JS artifacts |
 | `task generate-batteries` | Regenerate the built-in battery sources |
 | `task runtime:test` | Run the loader and host adapter Node tests |
-| `task check` | Run runtime tests, compiler specs, GVM tests, and the GVM end-to-end test |
+| `task payload` | Check deterministic bundle membership and payload ceilings |
+| `task check` | Run runtime tests, compiler specs, payload checks, GVM tests, and the GVM end-to-end test |
 
 ### Usage
 

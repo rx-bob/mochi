@@ -151,6 +151,8 @@ test.afterAll(async () => {
 test("mounts my-counter, clicks increment/decrement, and preserves button nodes", async ({ page }) => {
   setupConsoleLogging(page);
   const errors: string[] = [];
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("response", (response) => {
     if (response.status() >= 400 && !response.url().endsWith("/favicon.ico")) {
@@ -168,6 +170,8 @@ test("mounts my-counter, clicks increment/decrement, and preserves button nodes"
   const decrement = counter.locator("button").nth(1);
 
   await expect(heading).toHaveText("Count: 0");
+  expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(0);
+  expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(0);
   await expect(state).toHaveClass(/\bneutral\b/);
   await expect(mode).not.toHaveClass(/\bactive\b/);
   await expect(increment).toHaveText("Increment");
