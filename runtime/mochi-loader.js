@@ -12,7 +12,10 @@
     drag: { payload_bytes: "host_drag_payload_bytes" },
     files: {
       handles: "host_file_handles",
-      metadata_bytes: "host_event_args_bytes"
+      metadata_bytes: "host_event_args_bytes",
+      readers: "host_file_readers",
+      chunk_bytes: "host_file_chunk_bytes",
+      envelope_bytes: "host_fetch_envelope_bytes"
     },
     network: {
       pending_requests: "host_network_pending_requests",
@@ -1144,7 +1147,9 @@
   }
 
   function deliverHostResult(module, element, request, envelope) {
-    state.pendingHostRequests.delete(hostRequestKey(request));
+    var key = hostRequestKey(request);
+    if (!state.pendingHostRequests.has(key)) return;
+    state.pendingHostRequests.delete(key);
     var liveElement = hostRequestElement(request);
     if (!liveElement || liveElement !== element) return;
     try {
@@ -1174,6 +1179,7 @@
     var element = hostRequestElement(request);
     if (!element) return;
     request.mountToken = element._mochiMountToken;
+    state.pendingHostRequests.set(hostRequestKey(request), request);
 
     var adapter = state.hostAdapters.get(request.capability);
     var operation = adapter && adapter.async && adapter.async[request.operation];
@@ -1187,10 +1193,10 @@
       return;
     }
 
-    state.pendingHostRequests.set(hostRequestKey(request), request);
     var argsJson;
     try {
       argsJson = JSON.stringify(entry.args === undefined ? [] : entry.args);
+      request.argsJson = argsJson;
     } catch (error) {
       deliverHostResult(module, element, request, {
         ok: false,
@@ -1203,7 +1209,9 @@
 
     var result;
     try {
-      result = operation.call(adapter.async, argsJson, adapter.limits);
+      result = operation.call(adapter.async, argsJson, adapter.limits, {
+        owner: String(request.instance), mountToken: request.mountToken, request: request
+      });
     } catch (error) {
       deliverHostResult(module, element, request, {
         ok: false,
@@ -1426,11 +1434,34 @@
     var element = state.elements.get(ownerKey);
     var adapter = state.hostAdapters.get("files");
     if (!element || element._mochiDisconnected || !element.isConnected ||
-        String(element._mochiInstance) !== ownerKey || !adapter ||
-        typeof adapter.release !== "function") {
+        String(element._mochiInstance) !== ownerKey || !adapter) {
       throw new Error("mochi-files: component mount is stale or files capability is unavailable");
     }
-    adapter.release(String(entry.handle || ""), ownerKey, element._mochiMountToken);
+    var handle = String(entry.handle || "");
+    var mountToken = element._mochiMountToken;
+    function cancelPendingRead() {
+      state.pendingHostRequests.forEach(function (request, key) {
+        if (request.capability !== "files" || String(request.instance) !== ownerKey ||
+            request.mountToken !== mountToken) return;
+        try {
+          if (JSON.parse(request.argsJson || "[]")[0] === handle) {
+            state.pendingHostRequests.delete(key);
+          }
+        } catch (_) {}
+      });
+    }
+    if (entry.__host === "file_release") {
+      adapter.release(handle, ownerKey, mountToken);
+      cancelPendingRead();
+      return;
+    }
+    var operation = entry.__host === "file_reader_open" ? "open" :
+      (entry.__host === "file_reader_close" ? "close" : "");
+    if (!operation || !adapter.sync || typeof adapter.sync[operation] !== "function") {
+      throw new Error("mochi-files: reader operation is unavailable");
+    }
+    adapter.sync[operation](handle, ownerKey, mountToken, adapter.limits);
+    if (operation === "close") cancelPendingRead();
   }
 
   function handleHostCommand(module, entry) {
@@ -1447,7 +1478,8 @@
       handleDragCommand(module, entry);
       return;
     }
-    if (hostKind === "file_release") {
+    if (hostKind === "file_release" || hostKind === "file_reader_open" ||
+        hostKind === "file_reader_close") {
       handleFileCommand(entry);
       return;
     }

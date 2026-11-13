@@ -1541,9 +1541,15 @@ test("file input and drop handlers receive synchronous metadata and unmount rele
     files: {
       version: 1,
       host: "mochi-files.js",
-      operations: { release: "sync" },
+      operations: { release: "sync", open: "sync", close: "sync", read_next: "async" },
       packages: [],
-      limits: { handles: TEST_HOST_CAPACITIES.host_file_handles, metadata_bytes: TEST_HOST_CAPACITIES.host_event_args_bytes },
+      limits: {
+        handles: TEST_HOST_CAPACITIES.host_file_handles,
+        metadata_bytes: TEST_HOST_CAPACITIES.host_event_args_bytes,
+        readers: TEST_HOST_CAPACITIES.host_file_readers,
+        chunk_bytes: TEST_HOST_CAPACITIES.host_file_chunk_bytes,
+        envelope_bytes: TEST_HOST_CAPACITIES.host_fetch_envelope_bytes,
+      },
     },
   };
   const adapter = require("../mochi-files.js");
@@ -6493,6 +6499,62 @@ test("async host capability errors reach the Ruby callback", async () => {
     value: null,
     error: "probe unavailable",
   });
+});
+
+test("closing a file reader suppresses its pending Ruby callback", async () => {
+  let resolveRead;
+  const pending = new Promise((resolve) => { resolveRead = resolve; });
+  const component = { ...PROBE_COMPONENT, tag_name: "file-reader-panel", capabilities: ["files"] };
+  const base = manifest([component]);
+  base.capabilities = {
+    files: {
+      version: 1,
+      host: "mochi-files.js",
+      operations: { release: "sync", open: "sync", close: "sync", read_next: "async" },
+      packages: [],
+      limits: {
+        handles: TEST_HOST_CAPACITIES.host_file_handles,
+        metadata_bytes: TEST_HOST_CAPACITIES.host_event_args_bytes,
+        readers: TEST_HOST_CAPACITIES.host_file_readers,
+        chunk_bytes: TEST_HOST_CAPACITIES.host_file_chunk_bytes,
+        envelope_bytes: TEST_HOST_CAPACITIES.host_fetch_envelope_bytes,
+      },
+    },
+  };
+  const { loader, module, log } = await setup([component], {
+    manifest: base,
+    hostModuleFactory: async () => ({
+      name: "files",
+      version: 1,
+      sync: { release() {}, open() {}, close() {} },
+      async: { read_next: () => pending },
+    }),
+  });
+  log.methods.add("next");
+  log.methods.add("close");
+  module.reuseInstance(110);
+  const element = document.createElement("file-reader-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit(JSON.stringify({
+    __host: "capability_async", id: 77, instance: "110", capability: "files",
+    operation: "read_next", args: ["reader-1"], callback: "on_read",
+  }) + "\n");
+  element._dispatchAction({ action: "next" });
+  await flushLifecycle();
+  assert.equal(loader.debugStats().pendingHostRequests, 1);
+
+  module.queueEmit(JSON.stringify({
+    __host: "file_reader_close", instance: "110", handle: "reader-1",
+  }) + "\n");
+  element._dispatchAction({ action: "close" });
+  await flushLifecycle();
+  assert.equal(loader.debugStats().pendingHostRequests, 0);
+
+  resolveRead({ state: "chunk", bytes: { __mochi_bytes: "AA==" } });
+  await flushLifecycle();
+  assert.equal(log.deliveredHostResults.length, 0);
 });
 
 test("a host result for a disposed component is dropped", async () => {

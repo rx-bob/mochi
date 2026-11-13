@@ -78,12 +78,65 @@ unmount.
 The full metadata batch is checked before handles are published. The default
 `host_file_handles` capacity is 128 active handles, and serialized metadata is
 bounded by `host_event_args_bytes`. If either limit is exceeded, the handler
-gets one error and no handle from that batch remains registered. Contents and
-bounded read operations are covered by E9.S3–E9.S4.
+gets one error and no handle from that batch remains registered.
+
+### Bounded byte streaming
+
+Open a reader for a file handle, then request one chunk at a time. A chunk is
+an ordinary binary Ruby String. `bytesize` reports its byte count and
+`getbyte(index)` returns a byte value from 0 through 255, including for NUL
+and invalid UTF-8 data. Consume the current chunk before requesting another.
+
+```ruby
+def start_file(file)
+  @reader = MochiFiles.open(file["handle"])
+  @byte_count = 0
+  @checksum = 0
+  MochiFiles.read_next(@reader, :on_file_read)
+end
+
+def on_file_read(result)
+  unless result["ok"]
+    @file_error = result["error"]
+    return
+  end
+
+  read = result["value"]
+  if read["state"] == "chunk"
+    bytes = read["bytes"]
+    index = 0
+    while index < bytes.bytesize
+      @checksum = (@checksum * 31 + bytes.getbyte(index)) % 2147483647
+      @byte_count += 1
+      index += 1
+    end
+    MochiFiles.read_next(@reader, :on_file_read)
+  else # "eof"
+    @offset = read["offset"]
+    MochiFiles.close(@reader)
+  end
+end
+```
+
+`read_next` returns a result Hash with `"ok"`, `"value"`, and `"error"`.
+Successful values have `"state"` equal to `"chunk"` or `"eof"`; chunks also
+include `"offset"`, `"next_offset"`, `"total"`, and binary `"bytes"`. Errors
+set `"ok"` to false and include a message. `cancel` and `close` are idempotent;
+closing during a read cancels it and suppresses its callback. EOF closes the
+reader automatically, and read errors close the reader before delivering the
+error result. Unmount and failed mount also close every reader and release its
+File reference.
+
+`host_file_readers` (default 4) and `host_file_chunk_bytes` (default 8,192)
+bound concurrent readers and each requested range. The loader also checks the
+serialized response against `host_fetch_envelope_bytes` before it enters the
+VM inbox. Oversized files are streamed without allocating a whole-file Ruby
+String. Applications must release file handles when they no longer need them.
 
 File support is a separate optional `files` adapter. File-input-only apps do
 not load drag handling, and text-only drag apps do not load file handling. A
 component that handles both kinds of transfer declares both capabilities.
+Applications do not receive the internal base64 wire representation.
 
 ### Native OS drop verification
 

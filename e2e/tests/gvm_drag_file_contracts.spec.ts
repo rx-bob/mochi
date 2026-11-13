@@ -49,7 +49,7 @@ test("Ruby transfers typed values and external text during native drag event win
   expect(errors).toEqual([]);
 });
 
-test("file inputs and controlled file drops expose bounded metadata-only mount handles", async ({ page }) => {
+test("file inputs and controlled file drops stream bounded bytes from mount-owned handles", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => {
@@ -65,19 +65,28 @@ test("file inputs and controlled file drops expose bounded metadata-only mount h
     expect(manifest.capabilities.files).toMatchObject({
       version: 1,
       host: "mochi-files.js",
-      operations: { release: "sync" },
-      limits: { handles: 128, metadata_bytes: 8192 },
+      operations: { release: "sync", open: "sync", close: "sync", read_next: "async" },
+      limits: {
+        handles: 128, metadata_bytes: 8192, readers: 4,
+        chunk_bytes: 8192, envelope_bytes: 65536,
+      },
     });
     expect(manifest.capabilities.drag).toBeUndefined();
 
     const input = page.locator("file-contract .file-input");
+    const streamBytes = Buffer.from(Array.from({ length: 65537 }, (_, index) => index % 256));
+    let checksum = 0;
+    for (const byte of streamBytes) checksum = (checksum * 31 + byte) % 2147483647;
     await input.setInputFiles([
       { name: "empty.bin", mimeType: "", buffer: Buffer.from("") },
       { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") },
+      { name: "large.bin", mimeType: "application/octet-stream", buffer: streamBytes },
     ]);
     const inputText = await page.locator("file-contract .input-files").textContent();
     expect(inputText).toContain("empty.bin:0::");
     expect(inputText).toContain("notes.txt:5:text/plain:");
+    expect(inputText).toContain("large.bin:65537:application/octet-stream:");
+    await expect(page.locator("file-contract .stream-result")).toHaveText(`eof:65537:${checksum}`);
     const inputHandles = [...(inputText || "").matchAll(/mochi-file-\d+/g)].map((match) => match[0]);
     expect(new Set(inputHandles).size).toBe(2);
 

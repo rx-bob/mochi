@@ -29,7 +29,131 @@
   function createAdapter() {
     var handles = new Map();
     var owners = new Map();
+    var readers = new Map();
     var nextId = 1;
+
+    function ownerMatches(record, context) {
+      return record && context && record.owner === String(context.owner) &&
+        record.mountToken === context.mountToken;
+    }
+
+    function cancelReader(handle, context) {
+      var reader = readers.get(handle);
+      if (!reader) return false;
+      if (context && !ownerMatches(reader, context)) fail("reader belongs to another component mount");
+      readers.delete(handle);
+      reader.closed = true;
+      if (reader.streamReader) {
+        try {
+          var cancellation = reader.streamReader.cancel();
+          if (cancellation && typeof cancellation.catch === "function") cancellation.catch(function () {});
+        } catch (_) {}
+      }
+      return true;
+    }
+
+    function openReader(handle, owner, mountToken, limits) {
+      if (typeof handle !== "string" || !handle) fail("open expects a file handle");
+      var file = handles.get(handle);
+      if (!file || file.owner !== String(owner) || file.mountToken !== mountToken) {
+        fail("file handle is stale or belongs to another component mount");
+      }
+      var existing = readers.get(handle);
+      if (existing) {
+        if (existing.inFlight) fail("reader already has a chunk in flight");
+        return handle;
+      }
+      if (readers.size >= limits.readers) fail("active readers exceed configured reader limit");
+      readers.set(handle, {
+        owner: String(owner), mountToken: mountToken, file: file.file,
+        offset: 0, inFlight: false, streamReader: null, closed: false
+      });
+      return handle;
+    }
+
+    function encodeBase64(bytes) {
+      var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+      var out = "";
+      for (var i = 0; i < bytes.length; i += 3) {
+        var a = bytes[i], hasB = i + 1 < bytes.length, hasC = i + 2 < bytes.length;
+        var b = hasB ? bytes[i + 1] : 0, c = hasC ? bytes[i + 2] : 0;
+        out += alphabet[a >> 2] + alphabet[((a & 3) << 4) | (b >> 4)] +
+          (hasB ? alphabet[((b & 15) << 2) | (c >> 6)] : "=") +
+          (hasC ? alphabet[c & 63] : "=");
+      }
+      return out;
+    }
+
+    function readNext(argsJson, limits, context) {
+      var args = JSON.parse(argsJson);
+      var handle = args && args[0];
+      var record = readers.get(handle);
+      if (!ownerMatches(record, context) || record.closed) fail("reader is stale or belongs to another mount");
+      if (record.inFlight) fail("reader already has a chunk in flight");
+      if (record.offset >= record.file.size) {
+        cancelReader(handle, context);
+        return Promise.resolve({ state: "eof", offset: record.offset, total: record.file.size });
+      }
+      var start = record.offset;
+      var end = Math.min(start + limits.chunk_bytes, record.file.size);
+      record.inFlight = true;
+      var generation = record;
+      var bytes = new Uint8Array(limits.chunk_bytes);
+      var used = 0;
+      var streamReader;
+      try {
+        var slice = record.file.slice(start, end);
+        if (!slice || typeof slice.stream !== "function") {
+          throw new Error("bounded file streaming is unavailable");
+        }
+        streamReader = slice.stream().getReader();
+      } catch (error) {
+        cancelReader(handle, context);
+        var message = error && error.message ? error.message : String(error);
+        return Promise.reject(new Error(message.slice(0, 128) || "file read failed"));
+      }
+      record.streamReader = streamReader;
+      function finish(value) {
+        if (readers.get(handle) !== generation || generation.closed) throw new Error("file reader was closed");
+        generation.streamReader = null;
+        generation.inFlight = false;
+        return value;
+      }
+      function pump() {
+        return streamReader.read().then(function (result) {
+          if (readers.get(handle) !== generation || generation.closed) throw new Error("file reader was closed");
+          if (result.done) {
+            if (used !== end - start) throw new Error("file source ended before the requested byte range");
+            var data = bytes.subarray(0, used);
+            var value = {
+              state: "chunk", offset: start, next_offset: start + used, total: generation.file.size,
+              bytes: { __mochi_bytes: encodeBase64(data) }
+            };
+            var envelope = { ok: true, value: value, error: null };
+            if (byteLength(JSON.stringify(envelope)) > limits.envelope_bytes) {
+              throw new Error("file chunk envelope exceeds configured host inbox capacity");
+            }
+            generation.offset = start + used;
+            return finish(value);
+          }
+          var value = result.value;
+          if (!value || !Number.isSafeInteger(value.length) || used + value.length > limits.chunk_bytes ||
+              used + value.length > end - start) {
+            throw new Error("file source exceeded configured chunk size");
+          }
+          bytes.set(value, used);
+          used += value.length;
+          return pump();
+        });
+      }
+      return pump().catch(function (error) {
+        if (readers.get(handle) === generation && !generation.closed) {
+          cancelReader(handle, context);
+        }
+        var message = error && error.message ? error.message : String(error);
+        throw new Error(message.slice(0, 128) || "file read failed");
+      });
+    }
 
     function snapshot(event, context, limits, input) {
       var files = filesFrom(event, input);
@@ -92,6 +216,7 @@
       if (record.owner !== String(owner) || record.mountToken !== mountToken) {
         fail("file handle belongs to another component mount");
       }
+      cancelReader(handle, { owner: owner, mountToken: mountToken });
       handles.delete(handle);
       var ownerHandles = owners.get(record.ownerKey);
       if (ownerHandles) {
@@ -103,6 +228,11 @@
 
     function releaseOwner(owner, mountToken) {
       var ownerKey = String(owner) + ":" + String(mountToken);
+      readers.forEach(function (reader, handle) {
+        if (reader.owner === String(owner) && reader.mountToken === mountToken) {
+          cancelReader(handle, { owner: owner, mountToken: mountToken });
+        }
+      });
       var ownerHandles = owners.get(ownerKey);
       if (!ownerHandles) return 0;
       ownerHandles.forEach(function (handle) { handles.delete(handle); });
@@ -136,7 +266,18 @@
       sync: {
         release: function (handle, owner, mountToken) {
           return release(handle, owner, mountToken);
+        },
+        open: openReader,
+        close: function (handle, owner, mountToken) {
+          var file = handles.get(handle);
+          if (!file || file.owner !== String(owner) || file.mountToken !== mountToken) {
+            fail("reader handle is stale or belongs to another mount");
+          }
+          return cancelReader(handle, { owner: owner, mountToken: mountToken });
         }
+      },
+      async: {
+        read_next: readNext
       },
       snapshotInput: function (event, context, limits) {
         return snapshot(event, context, limits, true);
@@ -147,9 +288,11 @@
       allowDrop: allowDrop,
       release: release,
       releaseOwner: releaseOwner,
+      disposeOwner: function (owner, mountToken) { releaseOwner(owner, mountToken); },
       discardBatch: discardBatch,
       get: function (handle) { return handles.get(handle); },
-      count: function () { return handles.size; }
+      count: function () { return handles.size; },
+      readerCount: function () { return readers.size; }
     };
   }
 

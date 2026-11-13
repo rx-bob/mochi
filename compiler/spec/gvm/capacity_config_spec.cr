@@ -37,7 +37,7 @@ describe CapacityConfig do
     }
 
     File.write(invalid, %({"schema_version":1,"capacities":{"host_file_readers":64}}))
-    expect_raises(Exception, /concurrent file chunks exceed host_file_buffer_bytes/) {
+    expect_raises(Exception, /concurrent file chunks and envelopes exceed host_file_buffer_bytes/) {
       CapacityConfig.read(invalid)
     }
 
@@ -52,11 +52,12 @@ describe CapacityConfig do
   it "accounts for wire metadata and every concurrent reservation" do
     {
       "host_network_response_bytes" => {5_441_i64, /JSON envelope expansion/},
-      "host_file_chunk_bytes" => {48_961_i64, /base64 expansion/},
-      "host_file_whole_read_bytes" => {48_961_i64, /base64 expansion/},
-      "host_file_buffer_bytes" => {32_767_i64, /concurrent file chunks/},
-      "host_network_buffer_bytes" => {1_279_999_i64, /concurrent network responses/},
-      "host_drag_payload_bytes" => {1_323_i64, /JSON escaping/},
+      "host_file_chunk_bytes"       => {48_961_i64, /base64 expansion/},
+      "scratch_bytes"               => {16_384_i64, /file chunk and decoded binary value/},
+      "host_file_whole_read_bytes"  => {48_961_i64, /base64 expansion/},
+      "host_file_buffer_bytes"      => {32_767_i64, /concurrent file chunks/},
+      "host_network_buffer_bytes"   => {1_279_999_i64, /concurrent network responses/},
+      "host_drag_payload_bytes"     => {1_323_i64, /JSON escaping/},
     }.each do |name, boundary|
       values = CapacityConfig::DEFAULTS.dup
       values[name] = boundary[0]
@@ -68,8 +69,8 @@ describe CapacityConfig do
     values["host_network_buffer_bytes"] = 256 * 5_440
     values["host_file_chunk_bytes"] = 48_960
     values["host_file_whole_read_bytes"] = 48_960
-    values["host_file_buffer_bytes"] = 4 * 48_960
-    CapacityConfig.new(values)["host_file_buffer_bytes"].should eq(195_840)
+    values["host_file_buffer_bytes"] = 4 * (48_960 + 65_536)
+    CapacityConfig.new(values)["host_file_buffer_bytes"].should eq(457_984)
   end
 end
 

@@ -62,3 +62,95 @@ test("file drops with no files do not claim the gesture", () => {
   assert.deepEqual(adapter.snapshotDrop(event, context, limits), { files: [] });
   assert.equal(prevented, false);
 });
+
+test("file readers pull bounded binary chunks and close idempotently", async () => {
+  const source = new Blob([Uint8Array.from({ length: 256 }, (_, index) => index)]);
+  Object.defineProperties(source, { name: { value: "bytes.bin" }, lastModified: { value: 0 } });
+  const context = { owner: "reader-owner", mountToken: 8 };
+  const readerLimits = { ...limits, readers: 1, chunk_bytes: 37, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, readerLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, readerLimits);
+  const seen = [];
+  let result;
+  do {
+    result = await adapter.async.read_next(JSON.stringify([metadata.handle]), readerLimits, context);
+    if (result.state === "chunk") {
+      const encoded = result.bytes.__mochi_bytes;
+      seen.push(...Buffer.from(encoded, "base64"));
+      assert.ok(result.next_offset - result.offset <= readerLimits.chunk_bytes);
+    }
+  } while (result.state === "chunk");
+  assert.deepEqual(seen, Array.from({ length: 256 }, (_, index) => index));
+  assert.equal(result.state, "eof");
+  assert.equal(adapter.readerCount(), 0);
+  adapter.sync.close(metadata.handle, context.owner, context.mountToken, readerLimits);
+  adapter.sync.close(metadata.handle, context.owner, context.mountToken, readerLimits);
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+});
+
+test("file reader slots are bounded and owner disposal cancels readers", () => {
+  const source = new Blob(["content"]);
+  Object.defineProperties(source, { name: { value: "owned.bin" }, lastModified: { value: 0 } });
+  const context = { owner: "reader-limit", mountToken: 9 };
+  const readerLimits = { ...limits, readers: 1, chunk_bytes: 4, envelope_bytes: 1024 };
+  const files = adapter.snapshotInput({ target: { files: [source, source] } }, context, readerLimits).files;
+  adapter.sync.open(files[0].handle, context.owner, context.mountToken, readerLimits);
+  assert.throws(() => adapter.sync.open(files[1].handle, context.owner, context.mountToken, readerLimits), /reader limit/);
+  adapter.disposeOwner(context.owner, context.mountToken);
+  assert.equal(adapter.readerCount(), 0);
+  assert.equal(adapter.count(), 0);
+});
+
+test("closing an in-flight pull cancels its bounded Blob reader", async () => {
+  let cancelled = false;
+  const source = {
+    name: "slow.bin", size: 4, lastModified: 0,
+    slice(start, end) {
+      assert.equal(end - start, 4);
+      return {
+        stream() {
+          return new ReadableStream({
+            pull() {},
+            cancel() { cancelled = true; },
+          });
+        },
+      };
+    },
+  };
+  const context = { owner: "slow-owner", mountToken: 10 };
+  const readerLimits = { ...limits, readers: 1, chunk_bytes: 4, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, readerLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, readerLimits);
+  const pending = adapter.async.read_next(JSON.stringify([metadata.handle]), readerLimits, context);
+  await Promise.resolve();
+  assert.throws(
+    () => adapter.async.read_next(JSON.stringify([metadata.handle]), readerLimits, context),
+    /in flight/,
+  );
+  adapter.sync.close(metadata.handle, context.owner, context.mountToken, readerLimits);
+  await assert.rejects(pending, /closed/);
+  assert.equal(cancelled, true);
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+});
+
+test("stream failures release the reader slot and return a deterministic error", async () => {
+  const source = {
+    name: "broken.bin", size: 4, lastModified: 0,
+    slice() {
+      return { stream: () => new ReadableStream({ start(controller) { controller.error(new Error("fixture read failure")); } }) };
+    },
+  };
+  const context = { owner: "error-owner", mountToken: 11 };
+  const readerLimits = { ...limits, readers: 1, chunk_bytes: 4, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, readerLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, readerLimits);
+  await assert.rejects(
+    adapter.async.read_next(JSON.stringify([metadata.handle]), readerLimits, context),
+    /fixture read failure/,
+  );
+  assert.equal(adapter.readerCount(), 0);
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, readerLimits);
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+});

@@ -6,43 +6,43 @@ require "digest/sha256"
 struct CapacityConfig
   SCHEMA_VERSION = 1
   DEFAULTS       = {
-    "scratch_bytes"       => 131_072_i64,
-    "scratch_objects"     => 2_048_i64,
-    "scratch_ivars"       => 2_048_i64,
-    "scratch_slots"       => 4_096_i64,
-    "state_classes"       => 512_i64,
-    "state_objects"       => 32_768_i64,
-    "state_ivars"         => 65_536_i64,
-    "state_slots"         => 131_072_i64,
-    "state_bytes"         => 8_388_608_i64,
-    "state_components"    => 1_024_i64,
-    "promotion_depth"     => 32_i64,
-    "bindings"            => 2_048_i64,
-    "abi_call_args"       => 8_i64,
-    "abi_bytecode_bytes"  => 4_194_304_i64,
-    "ivars_per_object"    => 256_i64,
-    "host_patch_bytes" => 65_536_i64,
-    "host_fetch_envelope_bytes" => 65_536_i64,
-    "host_emit_envelope_bytes" => 16_384_i64,
-    "host_event_args_bytes" => 8_192_i64,
-    "host_command_bytes" => 8_192_i64,
+    "scratch_bytes"                 => 131_072_i64,
+    "scratch_objects"               => 2_048_i64,
+    "scratch_ivars"                 => 2_048_i64,
+    "scratch_slots"                 => 4_096_i64,
+    "state_classes"                 => 512_i64,
+    "state_objects"                 => 32_768_i64,
+    "state_ivars"                   => 65_536_i64,
+    "state_slots"                   => 131_072_i64,
+    "state_bytes"                   => 8_388_608_i64,
+    "state_components"              => 1_024_i64,
+    "promotion_depth"               => 32_i64,
+    "bindings"                      => 2_048_i64,
+    "abi_call_args"                 => 8_i64,
+    "abi_bytecode_bytes"            => 4_194_304_i64,
+    "ivars_per_object"              => 256_i64,
+    "host_patch_bytes"              => 65_536_i64,
+    "host_fetch_envelope_bytes"     => 65_536_i64,
+    "host_emit_envelope_bytes"      => 16_384_i64,
+    "host_event_args_bytes"         => 8_192_i64,
+    "host_command_bytes"            => 8_192_i64,
     "host_network_pending_requests" => 256_i64,
-    "host_network_response_bytes" => 5_000_i64,
-    "host_network_buffer_bytes" => 4_194_304_i64,
-    "host_format_cache_entries" => 32_i64,
-    "host_event_queue_entries" => 256_i64,
-    "host_event_queue_bytes" => 2_097_152_i64,
-    "host_drag_payload_bytes" => 1_024_i64,
-    "host_file_handles" => 128_i64,
-    "host_file_readers" => 4_i64,
-    "host_file_chunk_bytes" => 8_192_i64,
-    "host_file_whole_read_bytes" => 48_000_i64,
-    "host_file_buffer_bytes" => 262_144_i64,
-    "goose_stack_bytes"   => 65_536_i64,
-    "goose_stack_regions" => 47_i64,
-    "goose_guard_bytes"   => 1_048_576_i64,
-    "wasm_stack_bytes"    => 1_048_576_i64,
-    "memory_bytes"        => 100_663_296_i64,
+    "host_network_response_bytes"   => 5_000_i64,
+    "host_network_buffer_bytes"     => 4_194_304_i64,
+    "host_format_cache_entries"     => 32_i64,
+    "host_event_queue_entries"      => 256_i64,
+    "host_event_queue_bytes"        => 2_097_152_i64,
+    "host_drag_payload_bytes"       => 1_024_i64,
+    "host_file_handles"             => 128_i64,
+    "host_file_readers"             => 4_i64,
+    "host_file_chunk_bytes"         => 8_192_i64,
+    "host_file_whole_read_bytes"    => 48_000_i64,
+    "host_file_buffer_bytes"        => 262_144_i64,
+    "goose_stack_bytes"             => 65_536_i64,
+    "goose_stack_regions"           => 47_i64,
+    "goose_guard_bytes"             => 1_048_576_i64,
+    "wasm_stack_bytes"              => 1_048_576_i64,
+    "memory_bytes"                  => 100_663_296_i64,
   }
 
   getter values : Hash(String, Int64)
@@ -146,18 +146,18 @@ struct CapacityConfig
 
   def validate_host_capacities! : Nil
     {
-      "host_patch_bytes" => 1_024_i64,
-      "host_fetch_envelope_bytes" => 1_024_i64,
-      "host_emit_envelope_bytes" => 1_024_i64,
-      "host_event_args_bytes" => 512_i64,
-      "host_command_bytes" => 512_i64,
+      "host_patch_bytes"            => 1_024_i64,
+      "host_fetch_envelope_bytes"   => 1_024_i64,
+      "host_emit_envelope_bytes"    => 1_024_i64,
+      "host_event_args_bytes"       => 512_i64,
+      "host_command_bytes"          => 512_i64,
       "host_network_response_bytes" => 1_i64,
-      "host_network_buffer_bytes" => 1_i64,
-      "host_event_queue_bytes" => 1_i64,
-      "host_drag_payload_bytes" => 1_i64,
-      "host_file_chunk_bytes" => 1_i64,
-      "host_file_whole_read_bytes" => 1_i64,
-      "host_file_buffer_bytes" => 1_i64,
+      "host_network_buffer_bytes"   => 1_i64,
+      "host_event_queue_bytes"      => 1_i64,
+      "host_drag_payload_bytes"     => 1_i64,
+      "host_file_chunk_bytes"       => 1_i64,
+      "host_file_whole_read_bytes"  => 1_i64,
+      "host_file_buffer_bytes"      => 1_i64,
     }.each do |name, minimum|
       raise "capacity '#{name}' must be at least #{minimum}" if @values[name] < minimum
     end
@@ -174,10 +174,12 @@ struct CapacityConfig
     raise "network response capacity exceeds the fetch envelope after JSON envelope expansion" if response_wire_bytes > fetch_envelope
     chunk_wire_bytes = ((@values["host_file_chunk_bytes"] + 2) // 3) * 4 + 256
     raise "file chunk capacity exceeds the fetch envelope after base64 expansion" if chunk_wire_bytes > fetch_envelope
+    raise "file chunk and decoded binary value exceed scratch_bytes" if @values["host_file_chunk_bytes"] + chunk_wire_bytes > @values["scratch_bytes"]
     whole_wire_bytes = ((@values["host_file_whole_read_bytes"] + 2) // 3) * 4 + 256
     raise "whole-file capacity exceeds the fetch envelope after base64 expansion" if whole_wire_bytes > fetch_envelope
-    file_reservation = @values["host_file_readers"] * @values["host_file_chunk_bytes"]
-    raise "concurrent file chunks exceed host_file_buffer_bytes" if file_reservation > @values["host_file_buffer_bytes"]
+    file_reservation = @values["host_file_readers"] *
+                       (@values["host_file_chunk_bytes"] + chunk_wire_bytes)
+    raise "concurrent file chunks and envelopes exceed host_file_buffer_bytes" if file_reservation > @values["host_file_buffer_bytes"]
     raise "whole-file capacity exceeds host_file_buffer_bytes" if @values["host_file_whole_read_bytes"] > @values["host_file_buffer_bytes"]
     drag_wire_bytes = @values["host_drag_payload_bytes"] * 6 + 256
     raise "drag payload capacity exceeds host_event_args_bytes after JSON escaping" if drag_wire_bytes > @values["host_event_args_bytes"]

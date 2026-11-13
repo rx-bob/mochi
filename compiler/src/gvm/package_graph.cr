@@ -77,10 +77,13 @@ module MochiPackaging
       1,
       "mochi-files.js",
       "MochiFiles",
-      [CapabilityOperation.new("release", "sync")],
+      [CapabilityOperation.new("release", "sync"), CapabilityOperation.new("open", "sync"), CapabilityOperation.new("close", "sync"), CapabilityOperation.new("read_next", "async")],
       [
         {"handles", "host_file_handles"},
         {"metadata_bytes", "host_event_args_bytes"},
+        {"readers", "host_file_readers"},
+        {"chunk_bytes", "host_file_chunk_bytes"},
+        {"envelope_bytes", "host_fetch_envelope_bytes"},
       ]
     ),
   ]
