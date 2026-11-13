@@ -10,7 +10,7 @@ const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
-test("inspector renders exactly 12 of 48 records without browser errors @ui-inspector", async ({ page }, testInfo) => {
+test("inspector renders exactly 12 of 480 records without browser errors @ui-inspector", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -22,7 +22,7 @@ test("inspector renders exactly 12 of 48 records without browser errors @ui-insp
     await attachArtifacts(testInfo, fixture, bundle);
     await page.goto(baseURL);
     await expect(page.locator("inspector-root .record")).toHaveCount(12);
-    await expect(page.locator("inspector-root .total")).toHaveText("48");
+    await expect(page.locator("inspector-root .total")).toHaveText("480");
     await expect(page.locator("inspector-root .record").first()).toHaveAttribute("data-id", "record-1");
     await expect(page.locator("inspector-root .record").last()).toHaveAttribute("data-id", "record-12");
     expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);

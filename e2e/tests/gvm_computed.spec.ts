@@ -6,6 +6,60 @@ import { computedFixtureVM } from "./computed_fixture_vm";
 
 const fixture = path.join(__dirname, "../fixtures/ui_contracts/probes/12-computed");
 
+test("inspector and graph reuse only their affected projections @ui-inspector @ui-graph", async ({ page }) => {
+  test.setTimeout(180_000);
+  const methods = ["filtered_records", "visible_records", "selected_record", "detail_fields", "selected_detail", "rendered_edges"];
+  const vm = computedFixtureVM(methods);
+  try {
+    await withCompiledProject(path.join(__dirname, "../fixtures/ui_contracts"), async (url, bundle) => {
+      for (const name of ["mochi-gvm.js", "mochi-gvm.wasm"]) fs.copyFileSync(path.join(vm.directory, name), path.join(bundle, name));
+      await page.route("**/mochi-gvm.js", async route => {
+        const response = await route.fetch();
+        await route.fulfill({ response, body: await response.text() + `\nconst fixtureFactory = MochiModule; MochiModule = async function(options) { const mod = await fixtureFactory(options); window.__projectionCounts = () => Array.from({length:6}, (_, index) => mod._goose_fixture_computed_count(index)); return mod; };` });
+      });
+      await page.goto(url);
+      const inspector = page.locator("inspector-root");
+      const graph = page.locator("editable-graph-root");
+      await expect(inspector.locator(".record")).toHaveCount(12);
+      await expect(graph.locator(".edge")).toHaveCount(3);
+      const counts = () => page.evaluate(() => (window as any).__projectionCounts());
+      expect(await counts()).toEqual([1, 1, 1, 1, 1, 1]);
+      await inspector.locator(".toggle-details").click();
+      await inspector.locator(".toggle-details").click();
+      expect(await counts()).toEqual([1, 1, 1, 1, 1, 1]);
+      await inspector.locator(".next").click();
+      await expect(inspector.locator(".page")).toHaveText("2");
+      expect(await counts()).toEqual([1, 2, 1, 1, 1, 1]);
+      await inspector.locator("[data-id='record-13'] .message").click();
+      await expect(inspector.locator(".selected-detail")).toHaveText("worker-1:13");
+      expect(await counts()).toEqual([1, 2, 2, 2, 2, 1]);
+      await inspector.locator(".filter").fill("Record 48");
+      await expect(inspector.locator(".matched")).toHaveText("2");
+      expect(await counts()).toEqual([2, 3, 2, 2, 2, 1]);
+      const retained = await inspector.locator("[data-id='record-480']").elementHandle();
+      await inspector.locator(".append").click();
+      await expect(inspector.locator(".matched")).toHaveText("3");
+      expect(await counts()).toEqual([3, 4, 3, 3, 3, 1]);
+      expect(await retained!.evaluate(node => node.isConnected && node === (node.getRootNode() as ShadowRoot).querySelector("[data-id='record-480']"))).toBe(true);
+      await graph.locator(".pan").click();
+      await graph.locator(".toggle").click();
+      await graph.locator(".toggle").click();
+      expect(await counts()).toEqual([3, 4, 3, 3, 3, 1]);
+      const edge = graph.locator(".edge").first();
+      const original = await edge.getAttribute("d");
+      await graph.locator(".move").click();
+      await expect(edge).not.toHaveAttribute("d", original!);
+      expect(await counts()).toEqual([3, 4, 3, 3, 3, 2]);
+      await graph.locator(".undo").click();
+      await expect(edge).toHaveAttribute("d", original!);
+      expect(await counts()).toEqual([3, 4, 3, 3, 3, 3]);
+      await graph.locator(".redo").click();
+      await expect(edge).not.toHaveAttribute("d", original!);
+      expect(await counts()).toEqual([3, 4, 3, 3, 3, 4]);
+    }, "<inspector-root></inspector-root><editable-graph-root></editable-graph-root>");
+  } finally { vm.cleanup(); }
+});
+
 test("explicit computed values share evaluations and recover @ui-inspector", async ({ page }) => {
   test.setTimeout(180_000);
   const vm = computedFixtureVM();

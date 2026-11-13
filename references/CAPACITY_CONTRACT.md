@@ -12,10 +12,28 @@ its first read; the separate cache-entry table is bounded by the profile's
 entries**, with requested/used/capacity values. It does not consume a binding
 registration. Definitions contain only interned symbols, bounded by the VM
 method limit and 256 root dependencies per computed method. No default
-arena capacity increases accompany computed support. The generated Goose
-region count is corrected from 47 to 50 for the three computed tables, and
-minimum-memory validation includes their bounded storage. The total memory
-maximum remains 96 MiB; the profile fingerprint changes with this accounting.
+arena capacity increases accompany computed support. Minimum-memory validation
+includes computed storage. The total memory maximum remains 96 MiB.
+
+The 480-record inspector exposed a browser backing-storage defect: growable
+persistent tables could exceed their small Goose region reservation before
+reaching the advertised arena limit. WebAssembly does not enforce the native
+guard pages, so the richer fixture stalled instead of reporting an error.
+Persistent objects, ivars, slots, bytes, and GC free/mark tables now have inline
+storage at their configured limits. No application capacity was raised.
+The generated region count falls from 50 to 40. Corrected storage widths,
+GC bookkeeping, and the initial heap produce an 82,313,216-byte default memory
+estimate. The default profile fingerprint changes with region accounting.
+
+Goose v2026.4 initializes bounded globals through temporary copies. The WASM
+build validates and lowers the ten default-zero persistent-array sequences to
+direct static initialization, preserving root references and stack watermarks.
+Unexpected generated initialization fails the build. This avoids placing
+multi-megabyte temporary arrays on small data stacks. Initial heap sizing lets
+the linker account for actual static storage; the maximum remains unchanged.
+Fresh collection promotion appends directly into unpublished storage, avoiding
+mutation-notification scans until a value is published. Published aliases still
+notify their owning roots.
 
 Root writes invalidate affected entries immediately and release their result
 references. Successful recomputation promotes the result before retaining it;

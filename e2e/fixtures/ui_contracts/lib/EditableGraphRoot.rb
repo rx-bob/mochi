@@ -23,6 +23,8 @@ class EditableGraphRoot
   @drag_moved
   @terminal_reason
 
+  computed :rendered_edges, depends_on: [:@nodes, :@edges]
+
   def initialize
     @nodes = [
       {"id" => "a", "label" => "Start", "x" => 40, "y" => 50, "radius" => 12},
@@ -68,6 +70,10 @@ class EditableGraphRoot
     from = node_for(edge["from"])
     to = node_for(edge["to"])
     "M #{from['x']} #{from['y']} L #{to['x']} #{to['y']}"
+  end
+
+  def rendered_edges
+    @edges.map { |item| {"id" => item["id"], "path" => edge_path(item)} }
   end
 
   def select_node(event)
@@ -299,8 +305,8 @@ class EditableGraphRoot
           <defs><marker id="arrowhead" viewBox="0 0 8 8" refX="{@arrow_size}" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 Z" fill="currentColor"></path></marker></defs>
           <g class="scene" transform="translate({@offset_x} {@offset_y})">
             <g class="edges" fill="none" stroke="currentColor" stroke-width="2">
-              {each @edges as item, key: item["id"]}
-                <path class="edge" data-edge="{item['id']}" d="{edge_path(item)}" marker-end="url(#arrowhead)"></path>
+              {each rendered_edges as item, key: item["id"]}
+                <path class="edge" data-edge="{item['id']}" d="{item['path']}" marker-end="url(#arrowhead)"></path>
               {end}
             </g>
             <g class="nodes">

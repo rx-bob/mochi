@@ -2,7 +2,22 @@
 
 This is one Mochi project: Ruby components in `lib/`, authored browser scenarios in `test/`, and isolated feedback probes in `probes/`. No external application checkout or network service is required. Compilation and browser servers use temporary directories; checked-in build artifacts are not modified.
 
-E1.S1 supplies the inspector: 48 structured records, 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. E2.S1 supplies the nested form described below. E3.S1 adds the editable graph geometry slice described below.
+The inspector retains 480 structured records with 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. E2.S1 supplies the nested form described below. E3.S1 adds the editable graph geometry slice described below.
+
+E4.S2 separates computed filtered records, visible page, selected record, and
+detail fields. All detail bindings share the selected-record lookup. Paging
+reuses the filtered array; toggling details does not scan records. Initialization
+publishes each completed record before constructing the next, keeping temporary
+scratch small. Deterministic append replaces the root and keeps the newest 480
+records. Filtering retains selection; removal or retention eviction clears it.
+Nested attributes remain Ruby arrays/hashes. Tests visit all forty pages and
+check append, eviction, removal, page clamping, and detail values.
+
+Graph paths use one computed projection of node/edge roots. Model edits,
+dragging, undo, and redo replace roots; pan, selection, and open/close reuse
+geometry. Test-only VM counters verify projection evaluation counts without
+adding shipped instrumentation. No manual cache, epoch, feed timer, index,
+virtualization layer, or serialized record representation is involved.
 
 E1.S2 pages with ordinary `Array#slice`. The inspector target also runs
 `probes/02-array-contexts/test/array_slice_test.rb`: native Ruby boundary

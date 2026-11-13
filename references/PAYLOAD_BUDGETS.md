@@ -52,20 +52,40 @@ initial dependency closure. This makes `components/format-badge.json`,
 
 ## Baselines
 
-Measured 2026-11-13 on the repository toolchain, after rebuilding compiler and
+Measured 2026-11-14 on the repository toolchain, after rebuilding compiler and
 WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 504,586 | 163,563 | 3 |
-| Minimal initial | 508,264 | 165,266 | 7 |
-| Feature initial | 509,076 | 165,453 | 7 |
+| Core runtime | 497,681 | 161,170 | 3 |
+| Minimal initial | 501,359 | 162,875 | 7 |
+| Feature initial | 502,171 | 163,062 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 523,312 | 170,054 | 11 |
-| Network initial | 513,399 | 166,765 | 8 |
-| Network total | 513,399 | 166,765 | 8 |
+| Feature total | 516,407 | 167,663 | 11 |
+| Network initial | 506,494 | 164,373 | 8 |
+| Network total | 506,494 | 164,373 | 8 |
 
-### Explicit computed values (E4.S1)
+### Structured computed fixtures and persistent storage (E4.S2)
+
+The 480-record fixture reproduced a WASM backing-storage overrun before its
+declared state limit. Persistent arenas and GC bookkeeping now have bounded
+inline storage, initialized directly in their static destinations. Promotion
+fills new collections without scanning published roots for every copied slot.
+These correctness changes reduce core payload by **6,905 raw / 2,393 gzip bytes**
+against E4.S1: WASM is **212,866 raw / 96,509 gzip bytes**. Loader and JS glue are
+unchanged. Fixture projections and test counters add no production adapter.
+The exact ceilings above are tightened to measured values.
+
+The physical backing has a memory cost: on this toolchain, a fresh initialized
+Node-hosted WASM grows to **80,084,992 bytes**, versus **66,453,504** before the
+fix. Both remain under the unchanged 96 MiB maximum. Link-time initial memory
+is **26,738,688 bytes**, including the static arenas; the build specifies a
+4 MiB initial heap separately. These are linear-memory measurements, not RSS
+or a claim that arbitrary data fits. The corrected profile accounts for 40
+Goose regions and a minimum of **82,313,216 bytes**. All application arena
+limits remain unchanged. See [capacity contracts](CAPACITY_CONTRACT.md).
+
+### Explicit computed values (E4.S1 historical delta)
 
 Core grows **7,484 raw / 3,236 gzip bytes** against E3.S3. This is an explicit
 core cost for lazy per-instance caching, root-write invalidation, binding-mask

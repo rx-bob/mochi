@@ -20,7 +20,7 @@ It also sets host fetch, emit, event, drag, formatting-cache, and file
 handle/reader/chunk/whole-read limits. Only the subset used by a declared host
 capability is copied into that capability's manifest entry and passed to its
 adapter. Adapters cannot select a larger limit at runtime.
-The default Goose binary has 50 stack regions and a fixed 1 MiB guard per
+The default Goose binary has 40 stack regions and a fixed 1 MiB guard per
 region; the compiler rejects attempts to change those implementation bounds.
 Smaller profiles may compile to fewer regions; accounting retains the default
 upper bound.
@@ -47,9 +47,14 @@ building the runtime.
 
 Computed cache entries have a separate table bounded by `bindings`; their
 results use the ordinary persistent arenas. The memory estimate includes this
-table and bounded computed dependency metadata. The 50-region count includes
+table and bounded computed dependency metadata. The 40-region count includes
 three dedicated computed storage regions; this is generated VM accounting,
 not an increase to application arenas or the 96 MiB memory maximum.
+
+Persistent arenas and GC bookkeeping have inline backing at their configured
+limits. They do not rely on native virtual-memory guard behavior in a browser.
+The build initializes those arrays directly in static storage and rejects
+unexpected generated initialization. See [capacity recovery](../references/CAPACITY_CONTRACT.md).
 
 The compiler normalizes the configuration and hashes the normalized values.
 Custom artifacts are built in an isolated copy of the GVM source, then cached

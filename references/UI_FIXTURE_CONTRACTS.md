@@ -6,9 +6,9 @@ The source reports are the twelve files in `/Users/bob/repos/sencha/feedback/`, 
 
 ## Runnable baseline
 
-[InspectorRoot.rb](../e2e/fixtures/ui_contracts/lib/InspectorRoot.rb) generates 48 deterministic records, each with a stable string ID, severity, message, and nested source/sequence details. It renders 12 records per page, filters by a literal message substring, clamps page bounds including empty results, and retains selection by ID. Records remain hashes throughout. It uses no service, external asset, app-authored JavaScript, or optional browser capability.
+[InspectorRoot.rb](../e2e/fixtures/ui_contracts/lib/InspectorRoot.rb) retains 480 deterministic records, each with a stable string ID, severity, message, nested source/sequence/timestamp details, and an array of attributes. It renders 12 records per page, filters by a literal message substring, and clamps page bounds including empty results. Filtering retains selection; removing or evicting the selected record clears it. Records remain arrays/hashes throughout. It uses no service, external asset, app-authored JavaScript, or optional browser capability.
 
-The E1.S1 baseline used a bounded scalar-index loop for page extraction. E1.S2 now uses `matches.slice(@page * 12, 12)` and verifies first, middle, last, filtered, and empty pages. E1.S3 now owns generation and filtering through `RecordData`, with qualified page-size constants; E4.S1/E4.S2 own computed projections. These stages are explicit, not claims that the missing facilities are already supported.
+The E1.S1 baseline used a bounded scalar-index loop for page extraction. E1.S2 introduced ordinary slicing and E1.S3 moved generation/filtering into `RecordData`. E4.S2 uses shared computed filtering, page slicing, selection, and details. Graph geometry also uses a computed projection of node and edge roots.
 
 [inspector_test.rb](../e2e/fixtures/ui_contracts/test/inspector_test.rb) is authored in Mochi's existing Ruby browser DSL. It checks all twelve first-page IDs/messages/severities, nested details, pagination, literal filtering, empty results, recovery, and stable selection. The framework test additionally counts actual DOM rows rather than trusting the fixture's displayed count.
 
@@ -816,3 +816,66 @@ Production WASM SHA-256:
 `89c1f41e995a6af60c897020d81d3580b1e09451706d30a04be375004ca3418c`.
 
 Next story: E4.S2 — use computed projections in the inspector and graph.
+
+## E4.S2 — computed inspector and graph projections
+
+The inspector now retains **480 records**, including nested attribute arrays,
+and renders only **12 rows**. Separate computed values own filtering, visible
+page, selected record, and detail projections. Detail bindings share one
+lookup. Literal input is bound once before page reset; no parsing loop or
+serialized record format is used. Initialization publishes each completed
+record into durable state before constructing the next.
+
+Append replaces the root and retains the newest 480 records. Filtering keeps
+selection even when it is outside the visible result. Explicit removal and
+retention eviction clear selected details. Removal clamps the current page.
+Ruby scenarios visit every ID across forty pages, inspect nested values,
+exercise empty/last filtered pages, and repeat append/removal actions.
+
+The graph computes edge paths from node/edge roots. Existing immutable edits,
+dragging, forty-snapshot history, undo, and redo now drive that projection.
+Pan and branch toggles reuse it. There are no epochs, manual projection caches,
+feed timers, indexes, or virtual scrolling. A temporary instrumented VM counts
+individual computed evaluations: paging only slices, detail toggles do not
+filter or scan selection, root replacement refreshes each affected projection
+once, and graph edits/undo/redo refresh geometry once. Production has no counters.
+
+This workload reproduced a default-browser VM defect: persistent growable
+tables outgrew their physical Goose regions before the configured state limit.
+Native execution passed; 360 rich browser records mounted, but 480 stalled.
+Backing the persistent arenas and GC tables at their declared capacities fixes
+the overrun. The checked WASM build also lowers generated default-zero array
+initialization directly into static storage, avoiding oversized temporary copies.
+Unexpected generated initialization fails the build. Fresh promotion no longer
+scans published roots for each field; publication and later alias mutations
+retain their notifications. Native real-bytecode and browser fixtures cover
+the complete record shape. See [capacity details](CAPACITY_CONTRACT.md).
+
+Validation on 2026-11-14:
+
+- Compiler: **564 examples**, all passed, including isolated custom-profile
+  builds, initialization layout checks, and embedded profile identity.
+- GVM: **226 cases / 21,037 assertions**, all passed; initialization-lowering
+  checks rerun after the final validation guard. Goose formatting passed.
+- Runtime: **202 tests**, all passed.
+- Framework browsers: **312 main + 60 asset/install/evolved checks**, all
+  passed across Chromium, Firefox, and WebKit. Capacity boundaries: **33 passed**.
+  The matrix includes all authored inspector/graph scenarios and projection counts.
+- Payload determinism, membership, and tightened ceilings passed. Core is
+  **497,681 raw / 161,170 gzip bytes**, down **6,905 / 2,393** from E4.S1.
+- Compile-time rejection test passed; all 15 minimal cold/warm/edit builds
+  were **145.1–177.8 ms**, below the strict 1,000 ms limit.
+
+Application capacities and the 96 MiB maximum remain unchanged. Correct backing
+raises measured initialized WASM linear memory from 66,453,504 to 80,084,992
+bytes. The corrected estimate is 82,313,216 bytes with 40 Goose regions.
+This does not establish that arbitrary 480-record shapes fit, or close E4.S3's
+three-fixture capacity/lifecycle work. [Payload evidence](PAYLOAD_BUDGETS.md)
+records both download and memory costs. No commits were made.
+
+Production WASM SHA-256:
+`d00028ccb934321f36835354b94de14177e832ce14576f920f5f29b493deafc7`.
+Default capacity profile:
+`4c12f87f5b1adbd1b7165dd6e2c0ff988d982c63c46baaa6b80e3984a992f7cf`.
+
+Next story: E4.S3 — exercise capacity failures and lifecycle reuse in the three fixtures.
