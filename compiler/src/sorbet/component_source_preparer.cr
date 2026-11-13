@@ -1,4 +1,5 @@
 require "../tree-sitter/property_extractor"
+require "../gvm/computed_source"
 
 # Adapt compiler-owned declarations only in Sorbet's isolated source view.
 # Boolean is metadata, not a global Ruby constant or a shipped runtime class.
@@ -26,6 +27,7 @@ class ComponentTypecheckSource
   end
 
   def self.prepare_with_map(source : String, file : String) : Prepared
+    source = ComputedSource.prepare(source, file, erase: true)
     tree = TreeSitter::RubyParser.new.parse(source)
     edits = [] of Tuple(Int32, Int32, String)
     visit(tree.root_node, file, edits)

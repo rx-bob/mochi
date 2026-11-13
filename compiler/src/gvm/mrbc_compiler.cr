@@ -378,7 +378,7 @@ class MrbcCompiler
     source_line_offset : Int32 = 1,
   ) : String
     source = SorbetTypeStripper.strip(ruby_code)
-    source = GvmSourcePreparer.strip_class_ivars(source)
+    source = GvmSourcePreparer.strip_class_ivars(source, source_path || label, source_line_offset)
     GvmSourcePreparer.validate_control_flow!(source, source_path || label, source_line_offset)
 
     prefix = "mochi-#{safe_name(label)}"

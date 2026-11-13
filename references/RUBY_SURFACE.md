@@ -4,6 +4,55 @@ Mochi implements a practical Ruby interface for browser applications. This
 document records supported forms and explicit VM limits. It does not promise
 full MRI, Enumerable, or arbitrary-precision compatibility.
 
+## Explicit computed values
+
+Declare a pure, zero-argument component method and its dependencies:
+
+```ruby
+computed :visible_rows, depends_on: [:@records, :@query, :@page, :@page_size]
+computed :selected_label, depends_on: [:selected_record]
+computed :selected_record, depends_on: [:@records, :@selected_id]
+```
+
+`:@name` names an instance-variable root (including a declared prop); `:name`
+names another computed method declared in the same class. Declaration order
+does not matter. Root names must appear in the component source or its prop
+declarations. Methods must exist in that class and accept no arguments;
+`initialize` cannot be computed. Cycles, unknown dependencies, undeclared
+reads/calls visible in component methods, and detectable state writes or host
+effects fail with Ruby source locations. Dependencies through arbitrary helper
+code are not inferred: authors must declare every input and keep helpers pure.
+
+Evaluation is lazy. Each instance retains one result until a declared root
+changes; all callers and bindings share that result. Unrelated state changes
+do not recompute it. Computed dependencies expand to their root dependencies;
+ordinary Ruby calls determine lazy evaluation order. Merely listing a computed
+dependency does not eagerly call it. An inherited computed method retains its
+contract; an ordinary subclass override replaces that declaration.
+
+**Replace the owning root to publish nested changes.** For example:
+
+```ruby
+@records = @records.map do |record|
+  record["id"] == edited_id ? record.merge({"label" => new_label}) : record
+end
+```
+
+In-place Ruby mutation remains supported outside computed evaluation, but
+hidden nested changes do not promise computed invalidation. Reassigning the
+same collection handle does not count as replacement. Distinct arrays/hashes
+do; scalars and strings use the existing state equality rules. Treat cached
+collections as read-only inputs and construct replacements for edits.
+
+Getters may construct and mutate fresh local arrays/hashes. They must not write
+component state, mutate retained collections (including aliases), or call host
+operations/native adapters. Runtime guards cover indirect helper effects and
+reentrant evaluation. Errors retain source context, invalidate the failed
+evaluation, and permit retry after a valid input change. Cached graphs survive
+GC; invalidation and unmount release their retained references. See the
+[computed probe](../e2e/fixtures/ui_contracts/probes/12-computed/lib/ProbeRoot.rb)
+and [capacity contract](CAPACITY_CONTRACT.md).
+
 ## Template loops and conditional branches
 
 `{each ... as item, index, key: ...}` and `{if ...}` / `{elsif ...}` /

@@ -1,4 +1,5 @@
 require "../tree-sitter/ruby_parser"
+require "./computed_source"
 
 # Removes class-body instance variables before compiling a component with mrbc.
 #
@@ -21,7 +22,8 @@ class GvmSourcePreparer
     node.each_named_child { |child| reject_redo(child, path, line_offset) }
   end
 
-  def self.strip_class_ivars(source : String) : String
+  def self.strip_class_ivars(source : String, path : String = "(component)", offset : Int32 = 1) : String
+    source = ComputedSource.prepare(source, path, offset)
     parser = TreeSitter::RubyParser.new
     parsed = parser.parse(source)
     ranges = [] of Tuple(Int32, Int32)

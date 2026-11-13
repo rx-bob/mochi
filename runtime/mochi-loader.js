@@ -206,6 +206,10 @@
       detail = detail ? detail + ": " + vmText : vmText;
     }
     if (!detail) detail = phase + " failed";
+    // A handler can fail while flushing a computed getter. Prefer the VM's
+    // authored method when this component has its source map.
+    var failedMethod = methodFromError({ message: vmText }, method);
+    if (component && component.methods && component.methods[failedMethod]) method = failedMethod;
     var source = component && component.source;
     var line = source && source.line;
     if (source && component.methods && method) {

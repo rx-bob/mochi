@@ -11,7 +11,7 @@ describe CapacityConfig do
     second = CapacityConfig.new(CapacityConfig::DEFAULTS.dup)
 
     first.values.should eq(CapacityConfig::DEFAULTS)
-    first.fingerprint.should eq("ca1ab3a36bdb2da78e5960cdd94765b452ef749f9961c25a38465a7a5e934118")
+    first.fingerprint.should eq("8b48ea60102176d9c990ae775ae77eb368dcbbe43cb0638708f8383fe12d8731")
     first.fingerprint.should eq(second.fingerprint)
   end
 
@@ -95,6 +95,11 @@ describe CapacityArtifactBuilder do
       profile["fingerprint"].as_s.should eq(config.fingerprint)
       profile["capacities"]["state_objects"].as_i.should eq(config["state_objects"])
       profile["capacities"]["state_bytes"].as_i.should eq(config["state_bytes"])
+      generated = File.read(File.join(File.dirname(artifacts.wasm), "goose_vm.c"))
+      regions = generated.match(/gs_rt_init\(argc, argv, \d+, (\d+),/).not_nil![1].to_i
+      # Smaller profiles can let Goose eliminate temporary storage regions;
+      # the fixed accounting bound must cover every generated artifact.
+      regions.should be <= config["goose_stack_regions"]
     end
     built[0][1].wasm.should_not eq(built[1][1].wasm)
     first_artifacts = built.find { |config, _| config.fingerprint == profiles.first.fingerprint }.not_nil![1]

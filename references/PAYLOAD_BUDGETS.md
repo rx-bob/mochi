@@ -57,13 +57,43 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 497,102 | 160,327 | 3 |
-| Minimal initial | 500,780 | 162,033 | 7 |
-| Feature initial | 501,592 | 162,218 | 7 |
+| Core runtime | 504,586 | 163,563 | 3 |
+| Minimal initial | 508,264 | 165,266 | 7 |
+| Feature initial | 509,076 | 165,453 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 515,828 | 166,819 | 11 |
-| Network initial | 505,915 | 163,531 | 8 |
-| Network total | 505,915 | 163,531 | 8 |
+| Feature total | 523,312 | 170,054 | 11 |
+| Network initial | 513,399 | 166,765 | 8 |
+| Network total | 513,399 | 166,765 | 8 |
+
+### Explicit computed values (E4.S1)
+
+Core grows **7,484 raw / 3,236 gzip bytes** against E3.S3. This is an explicit
+core cost for lazy per-instance caching, root-write invalidation, binding-mask
+propagation, GC retention/disposal, and runtime purity/reentry guards. The VM
+dispatch, state and collector seams must cooperate; they are core semantics.
+Declarations and projection bodies remain application bytecode, emitted only
+when used. There is no added host adapter, production counter or telemetry.
+The browser counter exists only in a separately built temporary test runtime.
+
+| Artifact | Before raw / gzip | After raw / gzip | Delta raw / gzip |
+| --- | ---: | ---: | ---: |
+| WASM | 212,593 / 95,768 | 219,771 / 98,902 | +7,178 / +3,134 |
+| Loader | 221,339 / 46,950 | 221,645 / 47,052 | +306 / +102 |
+| VM JS glue | 63,170 / 17,609 | 63,170 / 17,609 | 0 / 0 |
+
+The loader delta maps failures during a computed flush to the authored method
+instead of its triggering event handler. The three computed storage tables
+raise the generated Goose region count from 47 to 50; the capacity fingerprint
+and minimum-memory estimate now account for that storage. Application arena
+limits and the 96 MiB maximum are unchanged. Default minimum-memory accounting
+is 83,230,720 bytes. Small profiles may compile fewer temporary regions;
+compiler specs verify their generated counts stay within the accounting bound.
+
+The exact measured baselines above replace the previous ceilings, with no extra
+raw headroom and unchanged gzip tolerance. Later formatting resources remain
+14,236 raw / 4,601 gzip bytes. Repeated builds remain byte-identical, and the
+existing optional-capability membership checks pass. The few-byte compressed
+manifest changes reflect the new capacity fingerprint.
 
 ### Graph history and pointer fixture cost
 

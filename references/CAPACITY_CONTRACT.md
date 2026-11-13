@@ -5,6 +5,30 @@ runtime artifact carry the same capacity profile fingerprint; the loader rejects
 an artifact mismatch before it starts the VM. See [fixed capacities](../docs/fixed-capacities.md)
 for configuration and the complete default profile.
 
+Computed results use the same persistent object, slot, byte and ivar pools as
+component state. Each live component/method pair allocates one cache entry on
+its first read; the separate cache-entry table is bounded by the profile's
+`bindings` limit (2,048 by default). Exhaustion reports **computed cache
+entries**, with requested/used/capacity values. It does not consume a binding
+registration. Definitions contain only interned symbols, bounded by the VM
+method limit and 256 root dependencies per computed method. No default
+arena capacity increases accompany computed support. The generated Goose
+region count is corrected from 47 to 50 for the three computed tables, and
+minimum-memory validation includes their bounded storage. The total memory
+maximum remains 96 MiB; the profile fingerprint changes with this accounting.
+
+Root writes invalidate affected entries immediately and release their result
+references. Successful recomputation promotes the result before retaining it;
+failed evaluation or promotion never marks an entry valid. Unmount removes
+the component's entries before GC, so nested cached graphs can be reclaimed.
+GC-safe retention and release reuse the existing collector and signal masks.
+Computed methods cannot mutate retained state or emit host effects, including
+through indirect helpers. Failed computed evaluation publishes no successful
+patch batch. This does not roll back a handler's earlier root assignments;
+normal failure/retry semantics below still apply. See
+[explicit computed values](RUBY_SURFACE.md#explicit-computed-values) for the
+root-replacement boundary.
+
 The build profile also contains host bounds for bridge envelopes, fetches,
 formatting cache entries, events, drag payloads, and file handles/readers.
 Manifest metadata copies only the limits required by each declared capability.

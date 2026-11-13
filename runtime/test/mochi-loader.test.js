@@ -1782,6 +1782,27 @@ test("runtime failures report one source-mapped error and clear on remount", asy
   assert.equal(element.mochiError, undefined);
 });
 
+test("computed failures use the VM method source instead of the triggering handler", async () => {
+  const component = {
+    ...COMPONENT,
+    source: { file: "lib/counter.rb", line: 3 },
+    methods: { initialize: 8, increment: 12, rows: 20 },
+  };
+  const { log } = await setup([component]);
+  const details = [];
+  document.addEventListener("mochi:error", event => details.push(event.detail));
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  log.errorText = "MyCounter#rows (binding 1): division by zero";
+  log.failDispatch.add("increment");
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(details.length, 1);
+  assert.equal(details[0].method, "rows");
+  assert.equal(details[0].source, "lib/counter.rb:20");
+});
+
 test("capacity errors include the compiled profile and failed outboxes are discarded", async () => {
   const component = {
     ...COMPONENT,

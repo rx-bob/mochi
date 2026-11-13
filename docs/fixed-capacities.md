@@ -20,8 +20,10 @@ It also sets host fetch, emit, event, drag, formatting-cache, and file
 handle/reader/chunk/whole-read limits. Only the subset used by a declared host
 capability is copied into that capability's manifest entry and passed to its
 adapter. Adapters cannot select a larger limit at runtime.
-The current Goose binary has 47 stack regions and a fixed 1 MiB guard per
+The default Goose binary has 50 stack regions and a fixed 1 MiB guard per
 region; the compiler rejects attempts to change those implementation bounds.
+Smaller profiles may compile to fewer regions; accounting retains the default
+upper bound.
 Fields omitted from a version 1 file use the defaults in
 the example. Unknown fields, non-positive values, integer overflow, and
 incompatible combinations fail before output cleanup or compilation.
@@ -42,6 +44,12 @@ that are part of the WASM bridge also count toward the minimum-memory check.
 Relationships between fetch envelope size, JSON escaping, file base64
 expansion, concurrent readers, and reserved host buffers are validated before
 building the runtime.
+
+Computed cache entries have a separate table bounded by `bindings`; their
+results use the ordinary persistent arenas. The memory estimate includes this
+table and bounded computed dependency metadata. The 50-region count includes
+three dedicated computed storage regions; this is generated VM accounting,
+not an increase to application arenas or the 96 MiB memory maximum.
 
 The compiler normalizes the configuration and hashes the normalized values.
 Custom artifacts are built in an isolated copy of the GVM source, then cached

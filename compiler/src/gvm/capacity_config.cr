@@ -39,7 +39,7 @@ struct CapacityConfig
     "host_file_whole_read_bytes"    => 48_000_i64,
     "host_file_buffer_bytes"        => 262_144_i64,
     "goose_stack_bytes"             => 65_536_i64,
-    "goose_stack_regions"           => 47_i64,
+    "goose_stack_regions"           => 50_i64,
     "goose_guard_bytes"             => 1_048_576_i64,
     "wasm_stack_bytes"              => 1_048_576_i64,
     "memory_bytes"                  => 100_663_296_i64,
@@ -132,7 +132,7 @@ struct CapacityConfig
     raise "capacity 'promotion_depth' must not exceed 256" if @values["promotion_depth"] > 256
     raise "capacity 'abi_call_args' is fixed at 8 by the runtime ABI" unless @values["abi_call_args"] == 8
     raise "capacity 'ivars_per_object' is fixed at 256 by the runtime ivar mask" unless @values["ivars_per_object"] == 256
-    raise "capacity 'goose_stack_regions' is fixed at 47 by the compiled VM" unless @values["goose_stack_regions"] == 47
+    raise "capacity 'goose_stack_regions' is fixed at 50 by the compiled VM" unless @values["goose_stack_regions"] == 50
     raise "capacity 'goose_guard_bytes' is fixed at 1048576 by the Goose runtime" unless @values["goose_guard_bytes"] == 1_048_576
     raise "capacity 'goose_stack_bytes' must be at least 65536" if @values["goose_stack_bytes"] < 65_536
     raise "capacity 'memory_bytes' must be a multiple of 65536" unless @values["memory_bytes"] % 65_536 == 0
@@ -207,6 +207,9 @@ struct CapacityConfig
                      @values["host_emit_envelope_bytes"] + @values["host_event_args_bytes"] +
                      @values["host_command_bytes"] * 2 + 262_144
     abi_and_bridge = @values["abi_bytecode_bytes"] + bridge_buffers
-    ((scratch + state + stack + abi_and_bridge + 65_535) // 65_536) * 65_536
+    # Cache entries, method descriptors and flattened root symbols. These are
+    # bounded metadata, outside the ordinary persistent object/slot arenas.
+    computed = @values["bindings"] * 64 + 4_096 * (24 + 256 * 4)
+    ((scratch + state + stack + abi_and_bridge + computed + 65_535) // 65_536) * 65_536
   end
 end

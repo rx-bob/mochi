@@ -11,6 +11,9 @@ const capacities = {
   scratch_objects: 128, scratch_bytes: 8192, scratch_slots: 256,
   scratch_ivars: 32, state_components: 2, bindings: 4, host_patch_bytes: 1024,
   host_emit_envelope_bytes: 1024,
+  // Keep the optional file decoder's reservation valid under the deliberately
+  // tiny scratch byte pool; this suite does not exercise file capabilities.
+  host_file_chunk_bytes: 2048,
 };
 const probe = `class CapacityProbe
   @tag_name = "capacity-probe"

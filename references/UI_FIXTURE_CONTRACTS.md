@@ -732,3 +732,87 @@ WASM SHA-256 remains
 `c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
 Per-probe artifact identities remain attached to browser reports.
 Next story: E4.S1 — explicit computed values and root-state invalidation.
+
+## E4.S1 — explicit computed values and root-state invalidation
+
+The Ruby contract is now
+`computed :visible_rows, depends_on: [:@records, :@query, :@page, :@page_size]`.
+Symbols beginning with `@` name state roots; other symbols name computed
+methods. Dependencies are explicit, flattened and checked for unknown names
+and cycles. Declaration order is independent of method evaluation order.
+The compiler preserves authored method lines and removes declarations only
+from Sorbet's isolated view. It checks visible reads, writes and effects through
+component helpers, including helper defaults, while respecting lexical locals.
+
+The VM stores one lazy result per component/method and invalidates it only
+after a changed declared root write. Cache hits preserve the existing binding
+read mask; two consumers share the same result. Nested computed methods retain
+ordinary Ruby call order. Inherited computed methods remain guarded/cached;
+an ordinary override replaces the inherited declaration. There is no additional
+reactive scheduler or arbitrary dependency inference.
+
+Root replacement is the published nested-state contract. In-place Ruby mutation
+still works outside computed evaluation, but does not promise computed
+invalidation. Reassigning the same collection is not replacement. Cached
+collections should be treated as read-only inputs. The complete contract and
+example appear in [Ruby surface](RUBY_SURFACE.md#explicit-computed-values).
+
+Successful results are promoted into persistent state and marked through the
+existing collector. Invalidation clears retained results; unmount removes
+entries before collection. Failed evaluation/promotion never publishes a valid
+cache. Component writes, retained collection mutation, native/host calls and
+reentry fail before their effects. Fresh local collection construction remains
+valid. Binding failures identify the authored computed method, discard the
+patch batch, and recover after a valid input change.
+
+The isolated [computed probe](../e2e/fixtures/ui_contracts/probes/12-computed/lib/ProbeRoot.rb)
+uses two instances, three consumers, unrelated writes, root replacement, two
+dependency changes before a flush, division failure/retry, indirect mutation
+rejection, and unmount/remount. Browser tests build a temporary instrumented VM
+to count actual evaluations; production source/artifacts have no counter or
+telemetry. The inspector/graph migration remains E4.S2.
+
+Resource accounting: cache entries have their own table bounded by the profile's
+`bindings` limit; result graphs consume existing persistent arenas. No
+application arena or total-memory maximum was increased. Generated Goose
+storage grows from 47 to 50 regions; the profile identity and conservative
+minimum-memory estimate include this cost. Current capacity fingerprint:
+`8b48ea60102176d9c990ae775ae77eb368dcbbe43cb0638708f8383fe12d8731`.
+Detailed byte deltas and exact budget refresh are in
+[payload budgets](PAYLOAD_BUDGETS.md#explicit-computed-values-e4s1).
+
+Validation on 2026-11-13:
+
+- Compiler: **564 examples passed**, covering declaration syntax, transitive roots, unknown names,
+  cycles, purity, helper defaults, lexical scopes and preserved source lines.
+- Goose: **222 cases / 21,014 assertions passed**. Seven computed tests cover
+  shared bindings, separate instances, forced GC with nested arrays/hashes,
+  inheritance, reentry/effects, failed promotion, bounded cache entries,
+  invalid metadata and reclamation after disposal.
+- Runtime: **202 tests passed**, including computed source attribution.
+- Full framework browser gate: **369 checks passed** across Chromium, Firefox,
+  and WebKit (309 main checks plus 60 asset/install/evolved checks).
+- Final computed browser/typecheck probe: **six checks passed** after the last
+  compiler validation change. The separate tiny-profile capacity suite needed
+  its unused file-chunk reservation lowered to 2,048 bytes to remain valid
+  under its existing 8,192-byte scratch limit; no tested bound was enlarged.
+  All **33 capacity checks passed** across Chromium, Firefox and WebKit.
+- Compile-time unit gate passes; all **15** framework builds pass in
+  **136.9–151.3 ms**, below the unchanged 1,000 ms limit. This follows prior
+  compiler runs and does not establish a historical first-launch-outlier fix.
+- Payload membership, determinism and refreshed exact ceilings pass. Core is
+  **504,586 raw / 163,563 gzip bytes**, up **7,484 / 3,236**. Later optional
+  formatting resources remain unchanged. Default minimum-memory estimate is
+  **83,230,720 bytes**, below the unchanged **100,663,296-byte** maximum.
+- Goose formatting and both repository whitespace checks pass. Context and
+  read-only implementation review informed inheritance, lexical-scope,
+  helper-default and error-unwind regressions. No commits were made.
+
+Compiler SHA-256:
+`0a9721fdb60947e20aadd897bfe35c626d1e64fdd8c36bb9a22acb941f45f0e9`.
+Loader SHA-256:
+`c74ac792cb25dcfb4064fdae284350b32e938e014e5ae5943dde99d908fa0aab`.
+Production WASM SHA-256:
+`89c1f41e995a6af60c897020d81d3580b1e09451706d30a04be375004ca3418c`.
+
+Next story: E4.S2 — use computed projections in the inspector and graph.
