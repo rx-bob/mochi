@@ -57,13 +57,26 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 494,862 | 159,867 | 3 |
-| Minimal initial | 498,540 | 161,573 | 7 |
-| Feature initial | 499,352 | 161,758 | 7 |
+| Core runtime | 495,225 | 159,929 | 3 |
+| Minimal initial | 498,903 | 161,635 | 7 |
+| Feature initial | 499,715 | 161,820 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 513,588 | 166,359 | 11 |
-| Network initial | 503,675 | 163,071 | 8 |
-| Network total | 503,675 | 163,071 | 8 |
+| Feature total | 513,951 | 166,421 | 11 |
+| Network initial | 504,038 | 163,133 | 8 |
+| Network total | 504,038 | 163,133 | 8 |
+
+### Bound event composition cost
+
+UI-contract story E2.S3 adds **363 raw / 62 gzip bytes** to the loader,
+from 219,099 / 46,490 to 219,462 / 46,552. Row templates retain property
+slots and update bound input/select/checkbox properties through the existing
+property writer. These shared DOM operations belong in the core. Ordered
+setter/callback actions compile into one Ruby entrypoint per used event;
+there is no browser action interpreter or new VM ABI. Generated wrappers ship
+only in components using composed bindings. WASM, JS glue, optional modules,
+capacity defaults, and later feature downloads are unchanged. Baselines rise
+by exactly the measured loader delta, with no additional headroom. The failure
+probe's larger scratch/event buffers and smaller state pool are test-only.
 
 ### Mixed structural fragment cost
 

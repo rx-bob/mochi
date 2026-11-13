@@ -26,8 +26,8 @@ class InspectorRoot
     @visible_records = matches.slice(@page * RecordData::PAGE_SIZE, RecordData::PAGE_SIZE)
   end
 
-  def filter(event)
-    @query = event["value"]
+  def filter
+    @page = 0
     refresh_page
   end
 
@@ -54,7 +54,7 @@ class InspectorRoot
   def html
     %Q{
       <h1>Record inspector</h1>
-      <label>Literal message filter <input class="filter" oninput="{filter($event)}"></label>
+      <label>Literal message filter <input class="filter" oninput="{filter}" bind:value="{@query}"></label>
       <p>Total <span class="total">{@records.length}</span>; matching <span class="matched">{@matched_count}</span></p>
       <p>Page <span class="page">{@page + 1}</span>; visible <span class="visible-count">{@visible_records.length}</span></p>
       <button class="previous" onclick="{previous_page}">Previous</button>

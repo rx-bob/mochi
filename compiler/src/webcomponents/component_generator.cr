@@ -7,6 +7,7 @@ require "../html/each_row_compiler"
 require "../html/event_argument_extractor"
 require "../html/html_attributes"
 require "../html/template_expression"
+require "../ruby/event_action_generator"
 
 class ComponentGenerator
   CONTROL_TEMPLATE_PREFIXES = ["if ", "unless ", "elsif ", "each "]
@@ -19,6 +20,7 @@ class ComponentGenerator
   @conditionals : Array(ConditionalBlock) = [] of ConditionalBlock
   @next_binding_id : Int32 = 0
   @next_each_id : Int32 = 0
+  @next_action_id : Int32 = 0
   @mochi_cmp_name : String = ""
   @ref_names : Array(String) = [] of String
   @expression_parser : TemplateExpressionParser
@@ -63,6 +65,7 @@ class ComponentGenerator
     @each_blocks = each_blocks
     @each_row_templates.clear
     @next_binding_id = 0
+    @next_action_id = 0
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
     @ref_names.clear
     @expression_parser = expression_parser || TemplateExpressionParser.new(source_locator)
@@ -146,7 +149,15 @@ class ComponentGenerator
     methods : Hash(String, RubyDef),
   ) : String
     removed = ["html", "css"].compact_map { |name| methods[name]? }
-    RubyBindingRewriter.rewrite(ruby_code, class_name, manifest.bindings, removed)
+    rewritten = RubyBindingRewriter.rewrite(ruby_code, class_name, manifest.bindings, removed)
+    actions = manifest.all_events.select { |event| !event.actions.empty? && !event.method_sym.starts_with?("__mochi_each_") }
+    return rewritten if actions.empty?
+    arities = EventActionGenerator.required_arguments(methods)
+    generated = actions.map do |event|
+      "\n  def #{event.method_sym}(__event)\n#{EventActionGenerator.statements(event.actions, arities, "    ")}\n  end\n"
+    end.join
+    insertion = InjectUtils.find_insertion_point(rewritten, class_name, "end", 1)
+    insertion ? InjectUtils.insert_code(rewritten, insertion, generated) : rewritten
   end
 
   private def walk(
@@ -262,10 +273,11 @@ class ComponentGenerator
         events << EventDescriptor.new(
           path,
           event.event,
-          event.handler,
+          event.actions.empty? ? event.handler : event.wrapper_sym,
           event.args,
           component: event.component,
-          modifiers: event.modifiers
+          modifiers: event.modifiers,
+          actions: event.actions
         )
       end
 
@@ -314,6 +326,8 @@ class ComponentGenerator
     attrs = node.attributes
     additions = [] of Tuple(String, String)
     removals = [] of String
+    bound_events = attrs.keys.select { |name| name == "bind:value" || name == "bind:checked" }
+      .map { |name| BoundProperty.event(name[5..], node.tag_name) }
 
     attrs.each do |name, value|
       if name.starts_with?("bind:")
@@ -326,7 +340,7 @@ class ComponentGenerator
         additions << {attr_name, normalized_value}
         removals << name
         if attr_name == "value" || attr_name == "checked"
-          add_two_way_binding(path, attr_name, normalized_value, bindings, events, additions)
+          add_two_way_binding(path, attr_name, normalized_value, bindings, events, additions, node.tag_name)
         else
           add_attribute_binding(path, attr_name, normalized_value, bindings)
         end
@@ -367,13 +381,14 @@ class ComponentGenerator
           removals << name
           args = event_args(attrs, event_name)
           events << EventDescriptor.new(path, event_name, method_name, args, modifiers: call.modifiers)
-          args.each { |arg| add_event_expression_binding(path, arg, bindings) }
+          args.each { |arg| add_event_expression_binding(path, arg, bindings) } unless bound_events.includes?(event_name)
         end
       elsif value.includes?("{")
         add_attribute_binding(path, name, value, bindings)
       end
     end
 
+    compose_bound_events(path, bindings, events, additions, removals)
     removals.each { |name| node.attribute_remove(name) }
     additions.each { |name, value| node.attribute_add(name, value) }
   end
@@ -445,22 +460,38 @@ class ComponentGenerator
     bindings : Array(BindingDescriptor),
     events : Array(EventDescriptor),
     additions : Array(Tuple(String, String)),
+    tag : String,
   )
-    matches = @expression_parser.scan(value, "prop")
-    if matches.size != 1
-      raise "bind:#{attr_name} requires exactly one @ivar placeholder"
-    end
-
-    expression = matches.first
-    unless expression.source.matches?(/\A@[a-zA-Z_][a-zA-Z0-9_]*\z/)
-      raise "bind:#{attr_name} requires an instance variable, got #{expression.source}"
-    end
+    expression = BoundProperty.expression(value, attr_name, @expression_parser)
 
     setter_sym = "__mochi_set_#{expression.source[1..].gsub(/[^a-zA-Z0-9_]/, "_")}"
-    event_name = attr_name == "checked" ? "change" : "input"
+    event_name = BoundProperty.event(attr_name, tag)
     bindings << new_expression_binding(path, "prop", attr_name, value, expression, setter_sym: setter_sym)
     events << EventDescriptor.new(path, event_name, setter_sym)
     additions << {"data-mochi-#{event_name}", setter_sym}
+  end
+
+  private def compose_bound_events(path, bindings, events, additions, removals)
+    properties = bindings.select { |binding| binding.path == path && binding.setter_sym }
+    setters = properties.map(&.setter_sym)
+    local = events.select { |event| event.path == path && !event.component }
+    local.group_by(&.event).each do |name, group|
+      writes = group.select { |event| setters.includes?(event.method_sym) }
+      calls = group.reject { |event| setters.includes?(event.method_sym) }
+      next if writes.empty? || calls.empty?
+      actions = writes.map do |event|
+        binding = properties.find! { |property| property.setter_sym == event.method_sym }
+        EventAction.new("set", binding.getter_expr.not_nil!, binding.attr_name, span: binding.span)
+      end
+      calls.each { |event| actions << EventAction.new("call", event.method_sym, args: event.args) }
+      method = "__mochi_action_#{@next_action_id}"
+      @next_action_id += 1
+      events.reject! { |event| group.includes?(event) }
+      modifiers = calls.flat_map(&.modifiers).uniq
+      events << EventDescriptor.new(path, name, method, modifiers: modifiers, actions: actions)
+      additions << {"data-mochi-#{name}", method}
+      removals << "data-mochi-args-#{name}"
+    end
   end
 
   # Event expressions such as `@query` need their value available to the
@@ -618,10 +649,11 @@ class ComponentGenerator
     return if method_names.empty?
 
     events.each do |event|
-      next if event.method_sym.starts_with?("__mochi_")
-      next if method_names.includes?(event.method_sym)
-
-      raise "Component '#{class_name}' has an undefined event handler: on#{event.event}=\"{#{event.method_sym}}\""
+      names = event.actions.empty? ? [event.method_sym] : event.actions.select { |action| action.kind == "call" }.map(&.target)
+      names.each do |name|
+        next if name.starts_with?("__mochi_") || method_names.includes?(name)
+        raise "Component '#{class_name}' has an undefined event handler: on#{event.event}=\"{#{name}}\""
+      end
     end
   end
 

@@ -9,8 +9,10 @@ struct TemplateAttribute
   getter value_start : Int32
   getter value_end : Int32
   getter quote : UInt8?
+  getter element_start : Int32
+  getter tag : String
 
-  def initialize(@name, @start, @finish, @value_start, @value_end, @quote)
+  def initialize(@name, @start, @finish, @value_start, @value_end, @quote, @element_start = 0, @tag = "")
   end
 
   def value(html : String) : String
@@ -35,10 +37,13 @@ class TemplateAttributes
         end
         next
       end
+      element_start = i
       i += 1
+      tag_start = i
       while i < html.bytesize && name_byte?(html.byte_at(i))
         i += 1
       end
+      tag = html.byte_slice(tag_start, i - tag_start)
       while i < html.bytesize
         while i < html.bytesize && TemplateExpressionParser.whitespace?(html.byte_at(i))
           i += 1
@@ -76,7 +81,7 @@ class TemplateAttributes
         end
         value_end = i
         i += 1 if quote && i < html.bytesize
-        attributes << TemplateAttribute.new(name, start, i, value_start, value_end, quote)
+        attributes << TemplateAttribute.new(name, start, i, value_start, value_end, quote, element_start, tag)
       end
     end
     attributes

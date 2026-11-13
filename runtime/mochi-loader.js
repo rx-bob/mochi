@@ -4006,7 +4006,7 @@
         return "<!--" + ROW_HTML_START_MARKER + binding.slot + "--><!--" +
           ROW_HTML_END_MARKER + binding.slot + "-->";
       }
-      if (binding.kind === "attr") return match;
+      if (binding.kind === "attr" || binding.kind === "prop") return match;
       return "<!--" + ROW_TEXT_MARKER + binding.slot + "-->";
     });
   }
@@ -4103,6 +4103,10 @@
           name: name,
           template: value,
           attrKind: rowAttributeKind(descriptor, name),
+          property: (descriptor.bindings || []).some(function (binding) {
+            return binding.kind === "prop" && binding.attr_name === name &&
+              value.indexOf("\uE002" + binding.slot + "\uE003") !== -1;
+          }),
           value: undefined
         });
       });
@@ -4209,7 +4213,9 @@
     if (host.value === next && host.removed === remove) return;
     host.value = next;
     host.removed = remove;
-    if (remove) {
+    if (host.property) {
+      applyPropPatch(host.element, { attr_name: host.name }, next);
+    } else if (remove) {
       host.element.removeAttribute(host.name);
     } else {
       host.element.setAttribute(host.name, next);

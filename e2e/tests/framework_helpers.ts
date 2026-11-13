@@ -24,7 +24,7 @@ export async function withFrameworkProject<T>(run: (baseURL: string) => Promise<
   return withCompiledProject(fixture, run, body);
 }
 
-export async function withCompiledProject<T>(fixture: string, run: (baseURL: string, bundle: string) => Promise<T>, body?: string): Promise<T> {
+export async function withCompiledProject<T>(fixture: string, run: (baseURL: string, bundle: string) => Promise<T>, body?: string, compilerArgs: string[] = []): Promise<T> {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-framework-"));
   const bundle = path.join(project, "bundle");
   const server = http.createServer((request, response) => {
@@ -52,7 +52,7 @@ export async function withCompiledProject<T>(fixture: string, run: (baseURL: str
     fs.cpSync(fixture, project, { recursive: true });
     if (body !== undefined) fs.writeFileSync(path.join(project, "index.html"), `<!doctype html><html><head><meta charset="utf-8"><script src="mochi-loader.js"></script></head><body>${body}</body></html>`);
     fs.mkdirSync(bundle);
-    execFileSync(compiler, ["-i", project, "-o", bundle], { cwd: repoRoot, stdio: "pipe" });
+    execFileSync(compiler, ["-i", project, "-o", bundle, ...compilerArgs], { cwd: repoRoot, stdio: "pipe" });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", resolve);

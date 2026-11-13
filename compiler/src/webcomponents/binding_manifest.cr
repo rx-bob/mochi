@@ -78,6 +78,7 @@ struct EventDescriptor
   # The loader reads the same list from `data-mochi-modifiers-<event>` so
   # branch and list-row nodes behave exactly like top-level nodes.
   property modifiers : Array(String)
+  property actions : Array(EventAction)
 
   def initialize(
     @path : Array(Int32),
@@ -86,6 +87,7 @@ struct EventDescriptor
     @args : Array(EventArgumentDescriptor) = [] of EventArgumentDescriptor,
     @component : Bool = false,
     @modifiers : Array(String) = [] of String,
+    @actions : Array(EventAction) = [] of EventAction,
   )
   end
 

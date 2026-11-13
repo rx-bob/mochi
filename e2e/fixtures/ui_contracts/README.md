@@ -32,8 +32,14 @@ that puts quotes, angle brackets, ampersands, entities, and braces into every
 field label. Ruby scenarios check static/conditional/row attributes, typed
 child props, and event arguments. Framework assertions verify these values
 create no extra elements. The original report 05 probes now render normally.
-Inputs still use explicit handlers: binding/handler composition and Boolean
-typechecking remain E2.S3/E2.S4.
+E2.S3 binds editor drafts before validation and inspector queries before a
+pagination reset. `BindingActionsRoot` and `test/binding_actions_test.rb` cover
+text, select, and checkbox controls in both attribute orders, current row
+arguments after keyed moves, property resets, branch recreation, and remount.
+The existing Ruby `fill` operation selects a value on a select and dispatches
+its native input/change sequence; `click` toggles a checkbox. The framework
+capacity probe fails the actual VM setter before its callback, then verifies
+recovery on a smaller input. Boolean typechecking remains E2.S4.
 
 From the Mochi repository root:
 

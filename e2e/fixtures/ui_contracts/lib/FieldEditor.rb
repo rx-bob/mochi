@@ -6,10 +6,12 @@ class FieldEditor
   event :edit, value: String
   @draft
   @mount_count
+  @validation
 
   def initialize
     @draft = ""
     @mount_count = 0
+    @validation = "Unedited"
   end
 
   def mounted
@@ -22,8 +24,8 @@ class FieldEditor
     @path = payload["path"]
   end
 
-  def edit(event)
-    @draft = event["value"]
+  def edit
+    @validation = @draft.empty? ? "Required" : "Valid: #{@draft}"
     emit("edit", {"value" => @draft})
   end
 
@@ -31,9 +33,10 @@ class FieldEditor
     %Q{
       <label class="editor" data-id="{@field_id}">
         <span class="label">{@label}</span>
-        <input class="draft" value="{@draft}" oninput="{edit($event)}">
+        <input class="draft" bind:value="{@draft}" oninput="{edit}">
       </label>
       <span class="mount-count">{@mount_count}</span>
+      <span class="draft-validation">{@validation}</span>
     }
   end
 end

@@ -6683,3 +6683,90 @@ test("failed capability callback drops its host batch", async () => {
   assert.equal(module._mochi_emit_outbox_len(), 0);
   assert.equal(localStorage.getItem("failed-capability"), null);
 });
+
+test("composed bindings use one event entry and flush, honor modifiers, and discard failed effects", async () => {
+  const component = {
+    tag_name: "ordered-bindings", class_name: "OrderedBindings", chi_file: "ordered.chi", css: "",
+    html_template: '<div data-mochi-input="__mochi_action_0" data-mochi-modifiers-input="self,prevent,stop"><input></div>',
+    bindings: [], events: [{ path: [0], event: "input", method_sym: "__mochi_action_0", args: [] }],
+  };
+  const { module, log } = await setup([component]);
+  log.methods.add("__mochi_action_0");
+  log.requiredArgs.set("__mochi_action_0", 1);
+  const element = document.createElement("ordered-bindings");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const target = element.shadowRoot.querySelector("div");
+  const child = target.querySelector("input");
+  const ignored = new global.Event("input", { bubbles: true, cancelable: true });
+  child.dispatchEvent(ignored);
+  assert.equal(ignored.defaultPrevented, false);
+  assert.equal(log.dispatchedArgs.length, 0);
+  let bubbled = 0;
+  document.addEventListener("input", () => { bubbled += 1; });
+  // Internal sequence models the generated Ruby entry; real ordering is also
+  // executed by compiler specs and the WASM browser fixture.
+  const actions = [];
+  log.onDispatch = (_name, _instance, args) => {
+    actions.push(["set", args[0].value]);
+    actions.push(["call", args[0].value]);
+  };
+  target.value = "fresh";
+  const flushes = log.flushes.length;
+  const event = new global.Event("input", { bubbles: true, cancelable: true, composed: true });
+  target.dispatchEvent(event);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(bubbled, 0);
+  assert.equal(log.dispatchedArgs.length, 1);
+  assert.deepEqual(actions, [["set", "fresh"], ["call", "fresh"]]);
+  assert.equal(log.flushes.length, flushes + 1);
+
+  module._mochi_dispatch_event_args = () => {
+    actions.push(["set failed"]);
+    module.queueEmit('{"__host":"event_publish","event":"must-not-run"}\n');
+    return 0;
+  };
+  log.errorText = "OrderedBindings#__mochi_action_0: state bytes exhausted";
+  target.dispatchEvent(new global.Event("input", { bubbles: true }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(actions.at(-1), ["set failed"]);
+  assert.equal(actions.length, 3);
+  assert.equal(log.flushes.length, flushes + 1);
+  assert.equal(module._mochi_emit_outbox_len(), 0);
+  assert.match(element.mochiError.message, /state bytes exhausted/);
+});
+
+test("row bound properties update edited controls without treating ordinary attributes as properties", async () => {
+  const component = {
+    tag_name: "row-properties", class_name: "RowProperties", chi_file: "row-properties.chi", css: "",
+    html_template: "<!--each-anchor-0-->", events: [],
+    bindings: [{ id: 0, path: [0], kind: "each", getter_sym: "__mochi_each_0_rows", each_rows: {
+      id: 0, template: '<input class="bound" value="\uE0020\uE003"><input class="plain" value="\uE0021\uE003"><input type="checkbox" checked="\uE0022\uE003">',
+      bindings: [{ slot: 0, kind: "prop", attr_name: "value" }, { slot: 1, kind: "attr", attr_name: "value" },
+        { slot: 2, kind: "prop", attr_name: "checked" }], children: [],
+    } }],
+  };
+  const { module, loader } = await setup([component]);
+  const patch = (value, checked) => module.patchQueue.push({ patches: [{ id: 0, value: JSON.stringify([["a", [value, value, checked]]]) }] });
+  patch("start", false);
+  const element = document.createElement("row-properties");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const bound = element.shadowRoot.querySelector(".bound");
+  const plain = element.shadowRoot.querySelector(".plain");
+  const check = element.shadowRoot.querySelector('[type="checkbox"]');
+  assert.equal(check.checked, false);
+  bound.value = plain.value = "edited";
+  check.checked = true;
+  patch("next", true);
+  loader.applyPatches(element);
+  assert.equal(bound.value, "next");
+  assert.equal(plain.value, "edited");
+  assert.equal(plain.getAttribute("value"), "next");
+  patch("reset", false);
+  loader.applyPatches(element);
+  assert.equal(bound.value, "reset");
+  assert.equal(check.checked, false);
+  assert.equal(element.shadowRoot.querySelector(".bound"), bound);
+});

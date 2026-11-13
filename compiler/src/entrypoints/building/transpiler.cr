@@ -567,15 +567,21 @@ class Compiler
     manifest.source_line = declaration.line
     manifest.style_resources = css_composition.resources
     manifest.method_lines = methods.transform_values(&.start_line)
+    manifest.all_events.each do |event|
+      if span = event.actions.first?.try(&.span)
+        manifest.method_lines[event.method_sym] = span.line
+      end
+    end
 
-    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, declaration.attribute_readers)
+    validate_binding_methods(cls_name, manifest.all_bindings, methods.keys, declaration.attribute_readers, manifest.all_events)
     row_generated_methods = EachMethodGenerator.generated_attribute_method_names(generator.each_row_templates)
     validate_row_expressions(cls_name, generator.each_row_templates, methods.keys + row_generated_methods, declaration.attribute_readers)
 
     amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
       amped_ruby_code,
       cls_name,
-      generator.each_row_templates
+      generator.each_row_templates,
+      EventActionGenerator.required_arguments(methods)
     )
 
     amped_ruby_code = PropMethodGenerator.inject_methods_into_class(
@@ -619,22 +625,27 @@ class Compiler
     bindings : Array(BindingDescriptor),
     method_names : Array(String),
     attribute_readers : Set(String),
+    events : Array(EventDescriptor) = [] of EventDescriptor,
   ) : Nil
     readable = Set(String).new
     method_names.each { |name| readable << name }
     attribute_readers.each { |name| readable << name }
 
-    bindings.each do |binding|
-      expression = binding.getter_expr
-      next unless expression
-
+    expressions = bindings.compact_map(&.getter_expr)
+    events.each do |event|
+      next if event.method_sym.starts_with?("__mochi_each_")
+      event.actions.each do |action|
+        action.args.each { |arg| expressions << arg.value.not_nil! if arg.kind == "expr" && arg.value }
+      end
+    end
+    expressions.each do |expression|
       name = expression.strip
       next if name.starts_with?("__mochi_")
       next unless name =~ /\A[a-z_][a-zA-Z0-9_]*[?!]?\z/
       next if BINDING_LITERALS.includes?(name)
       next if readable.includes?(name)
 
-      raise "Component '#{cls_name}' binds undefined method '#{name}' in #{binding.template_text.inspect}; use '@#{name}' for an instance variable"
+      raise "Component '#{cls_name}' binds undefined method '#{name}' in #{expression.inspect}; use '@#{name}' for an instance variable"
     end
   end
 

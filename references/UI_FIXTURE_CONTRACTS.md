@@ -47,7 +47,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `04-scratch-capacity.md` | Structured local data work either completes correctly or reports the actual configured resource; later valid work recovers. | **supported-in-isolation:** `04-structured-records` mounts 480 hashes with nested attribute arrays; `04-concatenation` builds 360 lines / 24,370 bytes; `04-repeated-split` evaluates 480-line splits in 20 bindings. No exhaustion occurs for these inputs. Original richer object/byte exhaustion and repeated-update/recovery behavior remain **unresolved**. Configurability is an existing, tested **intentional-contract**. | E4.S1–E4.S3 |
 | `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **supported, repaired by E2.S2:** both original probes render `Open record` with the `ghost` class and the expected aria-label. The nested form adds both quote styles, nested interpolation, escaped quotes, typed props, event arguments, literal braces/entities, and adversarial labels that remain text. Malformed expressions retain authored source diagnostics. | E2.S2 |
 | `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, repaired by E2.S1 shared fragment lowering:** dynamic SVG attributes are inert during parsing and receive evaluated values before insertion. `06-svg-each` checks both paths and zero console errors; structural context tests add circle/rect branches, toggles, and HTML inside foreignObject. The editable graph fixture remains E3.S1; SVG custom-element children remain explicitly deferred. | E2.S1 shared fix; E3.S1 graph |
-| `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **reproduced-defect:** `07-binding-handler` shows input value `needle`, Ruby query empty, and callback observation `:a`. **supported-in-isolation:** selecting `b` updates project and callback observation to `:b`. This separate native input/change sequence does not establish same-event composition or attribute-order independence. | E2.S3 |
+| `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **supported:** `07-binding-handler` observes `needle:a` on input and `needle:b` on select change. Shared Ruby scenarios cover both attribute orders, checkbox Booleans, current row arguments, property resets, branch recreation, and remount. `07-binding-failure` proves setter exhaustion blocks the callback and later events recover. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
 | `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
 | `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported:** `10-next` renders `alpha,beta`; E1.S3 adds nested `each`, `map` with `next value`, lexical-local updates, and continuation after iteration across helper/component contexts. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; E1.S3 covers helper parity in 03 and rejects unsupported nonlocal control flow before mounting. | E1.S2, E1.S3 |
@@ -346,3 +346,67 @@ WASM remains
 Per-probe artifacts remain attached to browser reports. No GVM or external
 application files changed, and no regression is skipped.
 Next in the recommended order: E2.S3.
+
+### E2.S3: bound state before explicit handlers
+
+The compiler retains ordered setter/callback actions and lowers each composed
+native event into one Ruby entrypoint. The setter runs first; explicit argument
+expressions evaluate afterward, so both the callback and its arguments see
+current state. One existing dispatch/flush boundary handles the whole sequence.
+The browser receives no action interpreter or expression source for these
+arguments. Original callback names and bare argument references remain
+validated. Generated entrypoints map diagnostics back to the bound expression.
+
+Text `bind:value` uses `input`; checkbox `bind:checked` and select `bind:value`
+use `change`. The select's native input/change pair therefore invokes its change
+callback once. Attribute order does not decide which action survives. Modifiers
+retain their existing synchronous behavior and implicit event payloads retain
+the VM's leading-required-parameter rule. Row event wrappers preserve current
+lexical scope, and property slots update edited controls through the existing
+property writer. Keyed moves, branch recreation, and remount retain single
+invocation behavior.
+
+`FieldEditor` now validates its bound draft and emits that value directly.
+`InspectorRoot` resets pagination from the current bound query, including a
+query whose result still spans multiple pages. Neither uses deferred timers.
+`BindingActionsRoot` adds Ruby-authored coverage for both attribute orders,
+text/select/checkbox events, fresh argument values, row moves, property resets,
+branch recreation, and remount. The original report 07 probe is now a passing
+acceptance assertion.
+
+The real VM failure probe admits a 310,000-byte event through a 400,000-byte
+bridge and 524,288-byte scratch arena, then fails persisting it in a 300,000-byte
+state pool. All three browsers observe the setter capacity error, unchanged
+query/callback count, no callback storage effect, and successful recovery with
+a small input. These capacities are isolated to that test bundle. This proves
+setter short-circuiting, not transaction rollback of earlier successful writes.
+
+Verification on 2026-11-13:
+
+- `task specs`: **542 examples passed**, no failures/errors/pending. Includes
+  execution of generated Ruby, setter abort, literal interpolation markers,
+  optional/rest arities, action descriptors, and row scope/property slots.
+- `task runtime:test`: **194 tests passed**, no skips. Added checks cover a
+  single dispatch/flush, modifiers, discarded failed effects, and row properties.
+- `task framework:e2e`: **327 checks passed** across Chromium, Firefox, WebKit
+  (267 main framework/UI checks plus 60 asset/install/evolved-feature checks).
+  This includes all **171 UI/workflow checks**; no regressions are skipped.
+- `task payload`: passed after increasing baselines by exactly **363 raw /
+  62 gzip bytes** for shared row property handling. Core is **495,225 raw /
+  159,929 gzip bytes**. WASM, JS glue, optional downloads, and default capacity
+  limits are unchanged. Ordered wrappers ship with using components only.
+- `task compile-time:framework`: all **15 builds passed**, **200.0–211.3 ms**,
+  below the unchanged 1,000 ms limit. This run occurred after browser/payload
+  builds had launched the compiler; it does not resolve the first-launch
+  outlier previously recorded in E2.S1/E2.S2.
+- Crystal formatting, Ruby/JavaScript syntax, documentation links, composed
+  argument diagnostics, and whitespace checks passed. No commits were made.
+
+Compiler SHA-256:
+`531c3996799934521d97becdbea95a64da0b0c6f5e7c947c8bdb0f5d8df18abd`.
+Loader SHA-256:
+`b37dc9282e324c2f3359e7a8ae4a0cd36ce0d88a60bfb755ef3573da1924bbde`.
+WASM SHA-256 remains
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe artifacts remain attached to browser reports. No GVM or external
+application source changed. Next in the recommended order: E2.S4.

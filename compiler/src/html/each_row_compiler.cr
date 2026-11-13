@@ -19,6 +19,7 @@ class EachRowCompiler
   SENTINEL_END     = "\u{E003}"
   SENTINEL_PATTERN = Regex.new(SENTINEL_START + "([0-9]+)" + SENTINEL_END)
   ARG_MARKER       = /\A__mochi_row_args_(\d+)__(.*)\z/m
+  BIND_MARKER      = /\A__mochi_bound_(\d+)__(.*)\z/m
   CONTROL_PREFIXES = ["if ", "unless ", "elsif ", "each "]
   CONTROL_KEYWORDS = ["else", "end"]
 
@@ -112,11 +113,17 @@ class EachRowCompiler
       )
     end
     template, preprocessed_args = extract_event_arguments(template, parser)
+    template, bound_actions = extract_bound_actions(template, parser)
     event_index = 0
     row_events = [] of EachRowEventDescriptor
 
     template, _calls = EventArgumentExtractor.rewrite(template, parser.locator, parser) do |call|
       handler = call.method_name
+      actions = [] of EventAction
+      if marker = handler.match(BIND_MARKER)
+        handler = marker[2]
+        actions = bound_actions[marker[1].to_i].dup
+      end
       arguments = [] of EventArgumentDescriptor
       if marker = handler.match(ARG_MARKER)
         handler = marker[2]
@@ -125,7 +132,8 @@ class EachRowCompiler
         arguments = call.arguments.map { |argument| EventArgumentDescriptor.parse(argument) }
       end
 
-      unless arguments.empty?
+      actions << EventAction.new("call", handler, args: arguments, span: call.span) unless actions.empty? || handler.empty?
+      unless arguments.empty? && actions.empty?
         if arguments.any? { |argument| argument.kind == "element" }
           raise TemplateExpressionError.new(
             "DOM elements cannot be passed to Ruby event handlers; use $event",
@@ -143,7 +151,8 @@ class EachRowCompiler
           scope.dup,
           call.span,
           call.component?,
-          call.modifiers
+          call.modifiers,
+          actions
         )
         %(data-mochi-#{call.event}="#{wrapper}"#{EventArgumentExtractor.render_modifiers(call)})
       else
@@ -182,7 +191,7 @@ class EachRowCompiler
         expression.span || row_span
       )
       trusted_source = TemplateExpressionParser.trusted_markup_source(expression.source)
-      if trusted_source && kind == "attr"
+      if trusted_source && {"attr", "prop"}.includes?(kind)
         raise TemplateExpressionError.new(
           "Mochi.raw is only supported in text content, not in the #{attr_name} attribute",
           expression.span
@@ -215,6 +224,9 @@ class EachRowCompiler
         compile_fragment(branch.content, ids.take, parser, scope, branch_context, ids, span)
       end
       EachRowConditional.new(id, conditions, branches, parser.locator.try(&.locate(block.condition)))
+    end
+    sentinel_template = TemplateAttributes.rewrite(sentinel_template, parser) do |attribute|
+      attribute.name.starts_with?("data-mochi-bind-") ? "" : nil
     end
     EachRowFragment.new(
       fragment_id,
@@ -314,6 +326,40 @@ class EachRowCompiler
 
   private def self.unescape_attribute(value : String) : String
     HTML.unescape(value)
+  end
+
+  # Group by element before lowering attributes, so authored order cannot
+  # choose whether a setter or callback survives. Mark property slots for the
+  # row classifier; these temporary markers never reach the browser.
+  private def self.extract_bound_actions(template : String, parser : TemplateExpressionParser)
+    actions = {} of Int32 => Array(EventAction)
+    replacements = {} of Int32 => String
+    TemplateAttributes.scan(template, parser).group_by(&.element_start).each_value do |attributes|
+      bindings = attributes.select { |attribute| {"bind:value", "bind:checked"}.includes?(attribute.name) }
+      bindings.group_by { |attribute| BoundProperty.event(attribute.name[5..], attribute.tag) }.each do |event, group|
+        marker = actions.size
+        actions[marker] = group.map do |attribute|
+          property = attribute.name[5..]
+          expression = BoundProperty.expression(attribute.value(template), property, parser)
+          replacements[attribute.start] = %(#{property}="{#{expression.source}}" data-mochi-bind-#{property}="")
+          EventAction.new("set", expression.source, property, span: expression.span)
+        end
+        explicit = attributes.find do |attribute|
+          EventArgumentExtractor::EVENT_NAME.matches?(attribute.name) &&
+            !attribute.name.starts_with?("on:") && EventCall.new(attribute.name, "", [] of String).event == event
+        end
+        if explicit
+          value = explicit.value(template).strip
+          handler = value.lchop('{').rchop('}')
+          replacements[explicit.start] = %(#{explicit.name}="{__mochi_bound_#{marker}__#{handler}}")
+        else
+          first = group.first
+          replacements[first.start] += %( on#{event}="{__mochi_bound_#{marker}__}")
+        end
+      end
+    end
+    rewritten = TemplateAttributes.rewrite(template, parser) { |attribute| replacements[attribute.start]? }
+    {rewritten, actions}
   end
 
   private def self.scope_names_for(scope : Array(EachRowScope)) : Array(String)
@@ -511,7 +557,7 @@ class EachRowCompiler
     if attrs = node.attributes
       attrs.each do |name, value|
         slots_in(value).each do |slot|
-          result[slot] = {"attr", name}
+          result[slot] = {attrs.has_key?("data-mochi-bind-#{name}") ? "prop" : "attr", name}
         end
       end
     end

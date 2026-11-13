@@ -27,8 +27,42 @@ expressions report authored source locations. SVG numeric/path attributes
 receive evaluated values before insertion, without parsing placeholder text
 as SVG values. This does not add SVG custom-element composition, slots, or
 automatic deep mutation observation. Replace root state to publish nested
-model changes. Same-event binding/handler composition retains its separately
-documented limitation.
+model changes.
+
+## Bound controls and explicit handlers
+
+`bind:value="{@draft}"` writes `@draft` on text input's `input` event;
+`bind:checked="{@enabled}"` writes the checked Boolean on `change`.
+A select's `bind:value` synchronizes on `change`. Bare `bind:value="@draft"`
+is also accepted. Binding targets must be a single component instance variable.
+
+When the same control also declares `oninput` or `onchange` for that event,
+Mochi writes the bound variable first, evaluates explicit Ruby arguments from
+that updated state, calls the handler once, then flushes through the existing
+VM entry. Attribute order does not affect this sequence. For example:
+
+```ruby
+def validate
+  @message = @draft.empty? ? "Required" : "Valid: #{@draft}"
+end
+
+def html
+  %q{<input oninput="{validate}" bind:value="{@draft}">}
+end
+```
+
+A select's native `input` event does not invoke its explicit `onchange`
+handler; its following `change` event synchronizes and invokes once. Existing
+`.self`, `.prevent`, and `.stop` modifiers run before the composed action.
+Bare handlers keep the existing implicit payload rule: one leading required
+positional parameter receives the event. Explicit `$event` remains supported.
+
+The same contract applies in conditional branches and keyed rows. Row arguments
+use current item/index scope after moves. Programmatic state changes update
+control properties. A failed setter stops the handler and skips the successful
+entry flush; failed host effects are discarded, and later valid events can
+recover. This does not add transaction rollback for earlier successful writes
+within a failing handler.
 
 ## Ruby expressions inside attributes
 

@@ -2,6 +2,7 @@ require "../html/each_row_template"
 require "./inject_utils"
 require "./attribute_method_generator"
 require "./attribute_hash_generator"
+require "./event_action_generator"
 
 # Generates the Ruby side of compiled list rows. One getter per root each block
 # evaluates every scalar binding and every nested row tree inside the VM. Event
@@ -15,17 +16,18 @@ class EachMethodGenerator
     ruby_code : String,
     class_name : String,
     rows : Array(EachRowTemplate),
+    arities : Hash(String, Int32) = {} of String => Int32,
   ) : String
     return ruby_code if rows.empty?
 
     insertion_point = InjectUtils.find_insertion_point(ruby_code, class_name, END_KEYWORD, FALLBACK_OFFSET)
     return ruby_code unless insertion_point
 
-    methods_code = generate_all_methods(rows, class_name)
+    methods_code = generate_all_methods(rows, class_name, arities)
     InjectUtils.insert_code(ruby_code, insertion_point, methods_code)
   end
 
-  def self.generate_all_methods(rows : Array(EachRowTemplate), class_name : String) : String
+  def self.generate_all_methods(rows : Array(EachRowTemplate), class_name : String, arities : Hash(String, Int32) = {} of String => Int32) : String
     sections = [] of String
     rows.each do |row|
       sections << generate_rows_method(row)
@@ -45,7 +47,7 @@ class EachMethodGenerator
           )
         end
       end
-      row.all_events.each { |event| sections << generate_event_wrapper(event) }
+      row.all_events.each { |event| sections << generate_event_wrapper(event, arities) }
     end
     sections.join("\n")
   end
@@ -76,7 +78,7 @@ class EachMethodGenerator
     end
   end
 
-  def self.generate_event_wrapper(event : EachRowEventDescriptor) : String
+  def self.generate_event_wrapper(event : EachRowEventDescriptor, arities : Hash(String, Int32) = {} of String => Int32) : String
     params = [] of String
     assignments = [] of String
 
@@ -97,7 +99,11 @@ class EachMethodGenerator
       io << "\n  # auto-generated list row event for " << event.event << "\n"
       io << "  def " << event.wrapper_sym << "(" << params.join(", ") << ")\n"
       assignments.each { |line| io << "    " << line << "\n" }
-      io << "    " << event.handler << "(" << arguments.join(", ") << ")\n"
+      if event.actions.empty?
+        io << "    " << event.handler << "(" << arguments.join(", ") << ")\n"
+      else
+        io << EventActionGenerator.statements(event.actions, arities, "    ") << "\n"
+      end
       io << "  end\n"
     end
   end

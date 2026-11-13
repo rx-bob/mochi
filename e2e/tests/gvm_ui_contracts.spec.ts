@@ -36,6 +36,7 @@ const rubySuites: Record<string, string> = {
   "inspector_test.rb": "@ui-inspector",
   "editable_graph_test.rb": "@ui-graph",
   "nested_form_test.rb": "@ui-form",
+  "binding_actions_test.rb": "@ui-form",
 };
 for (const file of fs.readdirSync(path.join(fixture, "test"), { recursive: true }).map(String).sort()
   .filter(file => file.endsWith("_test.rb"))) {
@@ -273,11 +274,11 @@ for (const name of runtimeProbes) {
       } else if (name === "07-binding-handler") {
         await root.locator("input").fill("needle");
         await expect(root.locator("input")).toHaveValue("needle");
-        await expect(root.locator(".query")).toHaveText(""); // E2.S3 oracle: needle
-        await expect(root.locator(".seen")).toHaveText(":a"); // E2.S3 oracle: needle:a
+        await expect(root.locator(".query")).toHaveText("needle");
+        await expect(root.locator(".seen")).toHaveText("needle:a");
         await root.locator("select").selectOption("b");
         await expect(root.locator(".project")).toHaveText("b");
-        await expect(root.locator(".seen")).toHaveText(":b");
+        await expect(root.locator(".seen")).toHaveText("needle:b");
       } else if (name === "08-event-dataset") {
         await root.locator("span").click();
         await expect(root.locator(".selected")).toHaveText(""); // target is span, intentionally empty
@@ -482,3 +483,37 @@ for (const open of [0, 1]) {
     }, `<probe-root open="${open}"></probe-root>`);
   });
 }
+
+test("bound setter capacity failure blocks callback and permits later valid events @ui-form", async ({ page }, testInfo) => {
+  test.setTimeout(240_000);
+  const source = path.join(fixture, "probes/07-binding-failure");
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(source, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, source, bundle);
+    await page.goto(baseURL);
+    const root = page.locator("probe-root");
+    await expect(root.locator(".query")).toHaveText("old");
+    // Fits the event bridge and scratch arena; fails while persisting @query.
+    await root.locator("input").fill("x".repeat(310000));
+    const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("state bytes exhausted");
+    expect(errors[0].phase).toBe("event");
+    expect(errors[0].method).toMatch(/^__mochi_action_/);
+    await expect(root.locator(".query")).toHaveText("old");
+    await expect(root.locator(".calls")).toHaveText("0");
+    expect(await page.evaluate(() => localStorage.getItem("bound-handler"))).toBeNull();
+    await settleConsole();
+    for (const error of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) {
+      expect(error).toContain("state bytes exhausted");
+    }
+    await root.locator("input").fill("recovered");
+    await expect(root.locator(".query")).toHaveText("recovered");
+    await expect(root.locator(".calls")).toHaveText("1");
+    expect(await page.evaluate(() => localStorage.getItem("bound-handler"))).toBe("recovered");
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<probe-root></probe-root>", ["--capacity-config", path.join(source, "capacity.json")]);
+});

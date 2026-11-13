@@ -1,4 +1,5 @@
 require "./event_argument"
+require "./event_action"
 require "./template_expression"
 require "./attribute_conditional_extractor"
 require "./attribute_hash_extractor"
@@ -62,6 +63,7 @@ struct EachRowEventDescriptor
   getter span : TemplateSourceSpan?
   getter component : Bool
   getter modifiers : Array(String)
+  getter actions : Array(EventAction)
 
   def initialize(
     @event : String,
@@ -72,6 +74,7 @@ struct EachRowEventDescriptor
     @span : TemplateSourceSpan? = nil,
     @component : Bool = false,
     @modifiers : Array(String) = [] of String,
+    @actions : Array(EventAction) = [] of EventAction,
   )
   end
 end
