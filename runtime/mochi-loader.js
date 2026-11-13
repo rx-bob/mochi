@@ -3101,6 +3101,9 @@
     if (binding.kind === "attr" || binding.kind === "prop") {
       targetText = binding.attr_name && node && typeof node.getAttribute === "function"
         ? node.getAttribute(binding.attr_name) : null;
+      if (targetText === null && node.namespaceURI === "http://www.w3.org/2000/svg" && binding.attr_name) {
+        targetText = node.getAttribute("data-mochi-svg-" + binding.attr_name.toLowerCase());
+      }
     } else {
       targetText = node && typeof node.textContent === "string" ? node.textContent : null;
     }
@@ -3810,10 +3813,18 @@
     return text !== "" && text !== "false";
   }
 
-  function applyAttrPatch(target, binding, value) {
+  function applyAttrPatch(target, binding, value, values) {
     var state = attrBindingState(target, binding);
-    if (state.values[binding.id] === value) return;
+    var svg = target.namespaceURI === "http://www.w3.org/2000/svg";
+    if (!svg && state.values[binding.id] === value) return;
     state.values[binding.id] = value;
+    if (svg) {
+      state.ids.forEach(function (id) {
+        if (Object.prototype.hasOwnProperty.call(values, id)) state.values[id] = values[id];
+      });
+      if (state.ids.some(function (id) { return !Object.prototype.hasOwnProperty.call(state.values, id); })) return;
+      target.removeAttribute("data-mochi-svg-" + binding.attr_name.toLowerCase());
+    }
     var nextValue = substitute(state, state.values);
     var alone = singlePlaceholder(state, binding);
     var remove;
@@ -3824,7 +3835,7 @@
     }
     if (remove) {
       target.removeAttribute(binding.attr_name);
-    } else {
+    } else if (target.getAttribute(binding.attr_name) !== nextValue) {
       target.setAttribute(binding.attr_name, nextValue);
     }
   }
@@ -3902,6 +3913,16 @@
       installBindingTarget(element, fragment, binding, "conditional branch");
     });
 
+    // Scalar SVG attributes must be complete before a branch enters the DOM.
+    // Structural bindings replay after insertion to retain their parent context.
+    branchBindings.forEach(function (binding) {
+      if (binding.kind !== "attr" || !Object.prototype.hasOwnProperty.call(element.bindingValues, binding.id)) return;
+      var node = element.bindingTargets[binding.id];
+      if (node.namespaceURI === "http://www.w3.org/2000/svg") {
+        applyBindingValue(element, node, binding, element.bindingValues[binding.id]);
+      }
+    });
+
     var nodes = Array.from(fragment.childNodes);
     parent.insertBefore(fragment, endNode);
 
@@ -3937,7 +3958,7 @@
     } else if (binding.kind === "html") {
       applyHtmlPatch(target, binding, value);
     } else if (binding.kind === "attr") {
-      applyAttrPatch(target, binding, value);
+      applyAttrPatch(target, binding, value, element.bindingValues);
     } else if (binding.kind === "prop") {
       applyPropPatch(target, binding, value);
     } else if (binding.kind === "cond") {
@@ -4527,7 +4548,13 @@
     }
     if (count === 0) return;
 
-    decodePatches(activeModule, count).forEach(function (record) {
+    var records = decodePatches(activeModule, count);
+    // A condition can precede its branch values in the VM's output. Publish
+    // the whole snapshot before rendering any attribute or mounting a branch.
+    records.forEach(function (record) {
+      element.bindingValues[record.bindingId] = record.value;
+    });
+    records.forEach(function (record) {
       applyPatchRecord(element, record);
     });
   }

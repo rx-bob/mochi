@@ -2,7 +2,7 @@
 
 This is one Mochi project: Ruby components in `lib/`, authored browser scenarios in `test/`, and isolated feedback probes in `probes/`. No external application checkout or network service is required. Compilation and browser servers use temporary directories; checked-in build artifacts are not modified.
 
-E1.S1 supplies the inspector: 48 structured records, 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. E2.S1 supplies the nested form described below. The editable graph remains E3.S1; its workflow target currently runs the relevant feedback evidence.
+E1.S1 supplies the inspector: 48 structured records, 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. E2.S1 supplies the nested form described below. E3.S1 adds the editable graph geometry slice described below.
 
 E1.S2 pages with ordinary `Array#slice`. The inspector target also runs
 `probes/02-array-contexts/test/array_slice_test.rb`: native Ruby boundary
@@ -47,12 +47,21 @@ focus to the toggle; reopening discards unsaved local drafts. Both ordinary
 builds and `--typecheck` are covered. `probes/11-boolean-contracts` rejects a
 string-valued Boolean event field and then delivers a valid Boolean payload.
 
+E3.S1 adds `EditableGraphRoot`: four keyed nodes and three keyed paths using
+native SVG and local Ruby hashes. Move replaces node state and updates only
+the two adjacent paths. Reorder preserves node identity; remove/restore uses
+stable edge IDs. Pan exercises a compound transform. Closing/reopening and
+fresh component mounts verify current geometry, marker references, and branch
+lifetime. Ruby scenarios cover initially open/closed branches; framework checks
+observe geometry synchronously before insertion and count actual path writes.
+Selection, pointer input, and bounded history arrive in later graph stories.
+
 From the Mochi repository root:
 
 ```sh
 task framework:ui            # all UI scenarios, evidence, and runner regressions
 task framework:ui:inspector  # inspector Ruby scenarios and related evidence
-task framework:ui:graph      # SVG/wheel evidence; graph Ruby scenarios once added
+task framework:ui:graph      # graph Ruby scenarios, insertion/identity checks, SVG/wheel evidence
 task framework:ui:form       # nested form, lifecycle, contexts, and remaining form evidence
 ```
 
@@ -64,9 +73,10 @@ Use Mochi's Ruby workflow directly for authored scenarios:
 compiler/mochi test -i e2e/fixtures/ui_contracts
 compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=inspector_test.rb --browsers=chromium
 compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=nested_form_test.rb --browsers=chromium
+compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=editable_graph_test.rb --browsers=chromium
 ```
 
-`--test-file` selects one existing `*_test.rb` path relative to `test/`; an unknown selection fails instead of running zero tests. Omit it to run all Ruby files. Framework workflow discovers new Ruby files automatically. `editable_graph_test.rb` will join the graph target in E3.S1. Each selected suite compiles the shared project and mounts only the roots its Ruby scenarios request.
+`--test-file` selects one existing `*_test.rb` path relative to `test/`; an unknown selection fails instead of running zero tests. Omit it to run all Ruby files. Framework workflow discovers new Ruby files automatically. `editable_graph_test.rb` runs through the graph target. Each selected suite compiles the shared project and mounts only the roots its Ruby scenarios request.
 
 Ruby test and scenario failures include the authored file and line. The runner records console errors, page exceptions, and `mochi:error` before navigation and checks every step, including initial mount and final rendering. Native driver errors are also labeled with the Ruby step. No JavaScript is needed to author scenarios.
 
@@ -80,7 +90,8 @@ assert_text ".status", "ready"
 
 The expectation applies to the next operation and must observe an error. Every diagnostic in that operation must match; a matching Mochi error cannot hide an unrelated console error or exception. Consumed errors do not affect subsequent valid steps. Dangling or replaced expectations fail. Asynchronous scenarios can use the existing `wait_for_settled` operation; no timers are assumed to complete merely because a synchronous assertion ran.
 
-Ruby mount/input scenarios live in `inspector_test.rb` and `nested_form_test.rb`.
+Ruby mount/input scenarios live in `inspector_test.rb`, `nested_form_test.rb`,
+`binding_actions_test.rb`, and `editable_graph_test.rb`.
 Use `wait_for_settled` after inserting lazy child components; it waits for their
 mounts as well as pending host work. Use `>>>` to cross a child shadow boundary,
 for example `[data-field='a'] field-editor >>> .draft`. Pointer lifecycle

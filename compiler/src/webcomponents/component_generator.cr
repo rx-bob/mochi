@@ -6,6 +6,7 @@ require "../html/each_processor"
 require "../html/each_row_compiler"
 require "../html/event_argument_extractor"
 require "../html/html_attributes"
+require "../html/dom_attributes"
 require "../html/template_expression"
 require "../ruby/event_action_generator"
 
@@ -184,7 +185,21 @@ class ComponentGenerator
       return
     end
 
+    first_binding = bindings.size
     collect_attribute_bindings(node, path, bindings, events)
+
+    # Browsers parse SVG geometry even in detached templates. Keep authored
+    # placeholders inert until the complete attribute value is available.
+    if tag.downcase == "svg" || parent_context.namespace == "svg"
+      attrs = DomAttributes.read(node)
+      bindings[first_binding..].select { |binding| binding.kind == "attr" }
+        .compact_map(&.attr_name).uniq.each do |name|
+        if value = attrs[name]?
+          node.attribute_remove(name)
+          node.attribute_add("data-mochi-svg-#{name.downcase}", value)
+        end
+      end
+    end
 
     node.children.each_with_index do |child, index|
       lowered_tag = tag.downcase
@@ -323,7 +338,7 @@ class ComponentGenerator
   )
     return unless node.attributes
 
-    attrs = node.attributes
+    attrs = DomAttributes.read(node)
     additions = [] of Tuple(String, String)
     removals = [] of String
     bound_events = attrs.keys.select { |name| name == "bind:value" || name == "bind:checked" }

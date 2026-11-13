@@ -5,6 +5,7 @@ require "./each_processor"
 require "./each_row_template"
 require "./event_argument_extractor"
 require "./html_attributes"
+require "./dom_attributes"
 require "./template_expression"
 require "./attribute_conditional_extractor"
 require "./attribute_hash_extractor"
@@ -257,7 +258,7 @@ class EachRowCompiler
     tag = node.tag_name.downcase
     namespace = "svg" if tag == "svg"
     changed = false
-    if namespace == "svg" && (attrs = node.attributes)
+    if namespace == "svg" && (attrs = DomAttributes.read(node))
       attrs.to_a.each_with_index do |(name, value), index|
         next unless value.includes?(SENTINEL_START)
         node.attribute_remove(name)
@@ -554,7 +555,7 @@ class EachRowCompiler
       return
     end
 
-    if attrs = node.attributes
+    if attrs = DomAttributes.read(node)
       attrs.each do |name, value|
         slots_in(value).each do |slot|
           result[slot] = {attrs.has_key?("data-mochi-bind-#{name}") ? "prop" : "attr", name}

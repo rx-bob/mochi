@@ -1,0 +1,45 @@
+Mochi::Test.test("graph geometry follows ordinary Ruby state across edits and recreation") do
+  mount "editable-graph-root"
+  assert_text ".node-count", "4"
+  assert_text ".edge-count", "3"
+  assert_attribute "[data-edge='ab']", "d", "M 40 50 L 180 50"
+  assert_attribute "[data-edge='bc']", "d", "M 180 50 L 180 150"
+  assert_attribute "[data-edge='cd']", "d", "M 180 150 L 320 150"
+  assert_attribute ".scene", "transform", "translate(0 0)"
+  click ".move"
+  assert_attribute "[data-edge='ab']", "d", "M 40 50 L 200 60"
+  assert_attribute "[data-edge='bc']", "d", "M 200 60 L 180 150"
+  assert_attribute "[data-edge='cd']", "d", "M 180 150 L 320 150"
+  assert_attribute "[data-node='b']", "transform", "translate(200 60)"
+  assert_attribute "[data-node='b'] circle", "r", "13"
+  click ".reorder"
+  assert_attribute ".edge:first-of-type", "data-edge", "cd"
+  click ".remove"
+  assert_text ".edge-count", "2"
+  click ".restore"
+  assert_text ".edge-count", "3"
+  assert_attribute "[data-edge='bc']", "d", "M 200 60 L 180 150"
+  click ".pan"
+  assert_attribute ".scene", "transform", "translate(10 5)"
+  3.times do
+    click ".toggle"
+    assert_text ".closed", "Graph closed"
+    click ".toggle"
+    assert_attribute "[data-edge='bc']", "d", "M 200 60 L 180 150"
+    assert_attribute "[data-edge='bc']", "marker-end", "url(#arrowhead)"
+    assert_attribute ".scene", "transform", "translate(10 5)"
+  end
+  remount "editable-graph-root"
+  assert_attribute "[data-edge='ab']", "d", "M 40 50 L 180 50"
+end
+
+Mochi::Test.test("initially closed graph mounts current geometry without placeholders") do
+  mount "editable-graph-root", open: false
+  assert_text ".closed", "Graph closed"
+  click ".move"
+  click ".pan"
+  click ".toggle"
+  assert_attribute "[data-edge='ab']", "d", "M 40 50 L 200 60"
+  assert_attribute ".scene", "transform", "translate(10 5)"
+  assert_attribute "[data-node='b'] circle", "r", "13"
+end

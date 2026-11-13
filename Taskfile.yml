@@ -139,7 +139,7 @@ tasks:
       - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-inspector' --reporter=line
 
   framework:ui:graph:
-    desc: Run graph feedback evidence and authored graph scenarios when added by E3
+    desc: Run graph Ruby scenarios, SVG insertion/identity checks, and related evidence
     deps: [build]
     cmds:
       - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-graph' --reporter=line

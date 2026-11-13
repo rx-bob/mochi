@@ -202,6 +202,25 @@ describe EachRowCompiler do
     row.bindings.map(&.attr_name).should eq(["data-id", "fill", nil])
   end
 
+  it "defers path, compound transform, and numeric SVG row attributes until slots resolve" do
+    row = compile_row_template(%q({each @rows as row}<path d="{row["path"]}" transform="translate({row["x"]} {row["y"]})" stroke-width="{row["width"]}"></path>{end}), EachRowDomContext.new("g", "svg"))
+    row.bindings.map(&.attr_name).should eq(["d", "transform", "transform", "stroke-width"])
+    row.template.should contain("data-mochi-row-attr-")
+    row.template.should_not contain(" d=")
+    row.template.should_not contain(" transform=")
+    row.template.should_not contain(" stroke-width=")
+    row.bindings.map(&.expression).should eq([%q(row["path"]), %q(row["x"]), %q(row["y"]), %q(row["width"])])
+  end
+
+  it "keeps canonical SVG attribute names in row bindings and deferred payloads" do
+    row = compile_row_template(%q({each @rows as row}<svg viewBox="{row["box"]}"><defs><marker refX="{row["x"]}" markerWidth="{row["width"]}"></marker></defs></svg>{end}))
+    row.bindings.map(&.attr_name).should eq(["viewBox", "refX", "markerWidth"])
+    ["viewBox", "refX", "markerWidth"].each do |name|
+      row.template.should contain(%(&quot;name&quot;:&quot;#{name}&quot;))
+      row.template.should_not contain(" #{name}=")
+    end
+  end
+
   it "derives nested row context from the nested loop's actual parent" do
     row = compile_row_template(%Q{
       {each @groups as group}

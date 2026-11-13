@@ -244,6 +244,8 @@ test("row attributes and handlers keep the current lexical scope through updates
 test("keyed table, select, and SVG rows use their insertion DOM context", async ({ page }) => {
   test.setTimeout(60_000);
   const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
   const mochiErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(() => {
@@ -308,6 +310,7 @@ test("keyed table, select, and SVG rows use their insertion DOM context", async 
     mochiErrors.push(...await page.evaluate(() => (window as any).__contextMochiErrors));
   }, "<context-rows-root></context-rows-root>");
 
+  expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
   expect(mochiErrors).toEqual([]);
 });

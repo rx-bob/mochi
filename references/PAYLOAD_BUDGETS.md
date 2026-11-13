@@ -57,13 +57,25 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 495,321 | 159,951 | 3 |
-| Minimal initial | 498,999 | 161,657 | 7 |
-| Feature initial | 499,811 | 161,842 | 7 |
+| Core runtime | 496,899 | 160,278 | 3 |
+| Minimal initial | 500,577 | 161,984 | 7 |
+| Feature initial | 501,389 | 162,169 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 514,047 | 166,443 | 11 |
-| Network initial | 504,134 | 163,155 | 8 |
-| Network total | 504,134 | 163,155 | 8 |
+| Feature total | 515,625 | 166,770 | 11 |
+| Network initial | 505,712 | 163,482 | 8 |
+| Network total | 505,712 | 163,482 | 8 |
+
+### SVG insertion contract cost
+
+UI-contract story E3.S1 adds **1,578 raw / 327 gzip bytes** to the loader,
+from 219,558 / 46,574 to 221,136 / 46,901. Complete patch snapshots resolve
+compound SVG attributes before writing them; conditional branches initialize
+scalar SVG attributes before insertion. The compiler defers ordinary SVG
+attributes during parsing, extending the existing keyed-row contract, and
+preserves canonical SVG attribute names. This is shared renderer correctness,
+so the loader cost belongs in the core. Graph code ships only when requested.
+WASM, JS glue, capacities, optional adapters, and later feature downloads are
+unchanged. Baselines increase by exactly the measured loader delta.
 
 ### Boolean prop and form contract cost
 

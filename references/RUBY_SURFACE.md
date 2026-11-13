@@ -23,11 +23,17 @@ current row values and indices after a move.
 
 Fragments retain table, select, HTML, and SVG insertion context, including
 HTML children of SVG `foreignObject`. Invalid table nesting and malformed
-expressions report authored source locations. SVG numeric/path attributes
-receive evaluated values before insertion, without parsing placeholder text
-as SVG values. This does not add SVG custom-element composition, slots, or
-automatic deep mutation observation. Replace root state to publish nested
-model changes.
+expressions report authored source locations. Dynamic SVG attributes remain
+inert during template parsing. Keyed rows and conditional branches apply their
+available geometry before live insertion; ordinary root attributes remain
+absent until the initial patch. Compound attributes resolve all slots before
+writing, and SVG names such as `viewBox` and `refX` retain their canonical case.
+Unchanged path values cause no DOM attribute write. The
+[editable graph](../e2e/fixtures/ui_contracts/lib/EditableGraphRoot.rb) demonstrates
+moves, keyed reorders, removal/reinsertion, marker references, and branch
+recreation without raw markup. This does not add SVG custom-element
+composition, slots, or automatic deep mutation observation. Replace root
+state to publish nested model changes.
 
 ## Boolean props, child events, and form controls
 

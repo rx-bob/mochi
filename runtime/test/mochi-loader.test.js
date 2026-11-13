@@ -6800,3 +6800,82 @@ test("row attribute kinds belong to their slots, preserving false child props be
   assert.equal(child.getAttribute("required"), "false");
   assert.equal(input.required, false);
 });
+
+for (const conditional of [false, true]) {
+  test(`SVG attributes resolve completely before writes${conditional ? " and branch insertion" : ""}`, async () => {
+    const svg = '<svg><path data-mochi-svg-d="{@path}" data-mochi-svg-transform="translate({@x} {@y})" data-mochi-svg-stroke-width="{@width}"></path></svg>';
+    const bindings = [
+      { id: 1, path: [0, 0], kind: "attr", attr_name: "d", template_text: "{@path}", getter_sym: "__mochi_bind_1" },
+      { id: 2, path: [0, 0], kind: "attr", attr_name: "transform", template_text: "translate({@x} {@y})", getter_sym: "__mochi_bind_2" },
+      { id: 3, path: [0, 0], kind: "attr", attr_name: "transform", template_text: "translate({@x} {@y})", getter_sym: "__mochi_bind_3" },
+      { id: 4, path: [0, 0], kind: "attr", attr_name: "stroke-width", template_text: "{@width}", getter_sym: "__mochi_bind_4" },
+    ];
+    const component = {
+      tag_name: "svg-check", class_name: "SvgCheck", chi_file: "svg-check.chi", css: "", events: [],
+      html_template: conditional ? '<!--if-anchor-0--><p>Outside</p>' : svg,
+      bindings: conditional ? [{ id: 0, path: [0], kind: "cond", template_text: "", getter_sym: "__mochi_bind_0",
+        branches: [{ html_template: svg, bindings, events: [] }] }] : bindings,
+    };
+    const { loader, module } = await setup([component]);
+    const writes = [];
+    const insertions = [];
+    const proto = window.Element.prototype;
+    const originalSet = proto.setAttribute;
+    const originalInsert = window.Node.prototype.insertBefore;
+    proto.setAttribute = function (name, value) {
+      if (this.namespaceURI === "http://www.w3.org/2000/svg" && ["d", "transform", "stroke-width"].includes(name)) {
+        writes.push([name, value]);
+        assert.doesNotMatch(value, /[{}\uE000-\uE00F]/);
+      }
+      return originalSet.call(this, name, value);
+    };
+    window.Node.prototype.insertBefore = function (node, before) {
+      if (this.isConnected) {
+        for (const path of node.querySelectorAll?.("svg path") || []) {
+          insertions.push([path.getAttribute("d"), path.getAttribute("transform"), path.getAttribute("stroke-width")]);
+        }
+      }
+      return originalInsert.call(this, node, before);
+    };
+    try {
+      // Condition comes first: the loader must see the complete patch snapshot.
+      module.patchQueue.push({ patches: [
+        ...(conditional ? [{ id: 0, value: "0" }] : []),
+        { id: 1, value: "M 0 0 L 20 20" }, { id: 2, value: "10" },
+        ...(conditional ? [{ id: 3, value: "5" }] : []), { id: 4, value: "2" },
+      ] });
+      const element = document.createElement("svg-check");
+      document.body.appendChild(element);
+      await element._mochiReady;
+      const path = element.shadowRoot.querySelector("path");
+      if (!conditional) {
+        // Partial batches leave the compound attribute absent, never partially filled.
+        assert.equal(path.hasAttribute("transform"), false);
+        module.patchQueue.push({ patches: [{ id: 3, value: "5" }] });
+        loader.applyPatches(element);
+      } else {
+        assert.deepEqual(insertions, [["M 0 0 L 20 20", "translate(10 5)", "2"]]);
+      }
+      assert.equal(path.namespaceURI, "http://www.w3.org/2000/svg");
+      assert.equal(path.getAttribute("transform"), "translate(10 5)");
+      assert.deepEqual(writes.filter(([name]) => name === "transform"), [["transform", "translate(10 5)"]]);
+      writes.length = 0;
+      module.patchQueue.push({ patches: [{ id: 2, value: "30" }, { id: 3, value: "15" }] });
+      loader.applyPatches(element);
+      assert.deepEqual(writes, [["transform", "translate(30 15)"]]);
+      if (conditional) {
+        module.patchQueue.push({ patches: [{ id: 0, value: "-1" }, { id: 1, value: "M 1 1 L 2 2" }] });
+        loader.applyPatches(element);
+        assert.equal(element.shadowRoot.querySelector("path"), null);
+        assert.equal(element.shadowRoot.querySelector("p").textContent, "Outside");
+        module.patchQueue.push({ patches: [{ id: 0, value: "0" }] });
+        loader.applyPatches(element);
+        assert.deepEqual(insertions.at(-1), ["M 1 1 L 2 2", "translate(30 15)", "2"]);
+        assert.notEqual(element.shadowRoot.querySelector("path"), path);
+      }
+    } finally {
+      proto.setAttribute = originalSet;
+      window.Node.prototype.insertBefore = originalInsert;
+    }
+  });
+}

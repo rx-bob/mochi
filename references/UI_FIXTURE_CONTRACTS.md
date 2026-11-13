@@ -46,7 +46,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `03-qualified-constants.md` | `RecordData::BASE` and `RecordData.base_ms` return `1794571200000` in component contexts. | **supported:** both original probes return the correct value. `03-helper-contexts` compares direct Ruby with initializer, ordinary method, handler, and template results; separate helpers retain independent `BASE` values. Missing constants/methods name their references and the component call site. Arbitrary nested module/class registration remains outside this contract. | E1.S3 |
 | `04-scratch-capacity.md` | Structured local data work either completes correctly or reports the actual configured resource; later valid work recovers. | **supported-in-isolation:** `04-structured-records` mounts 480 hashes with nested attribute arrays; `04-concatenation` builds 360 lines / 24,370 bytes; `04-repeated-split` evaluates 480-line splits in 20 bindings. No exhaustion occurs for these inputs. Original richer object/byte exhaustion and repeated-update/recovery behavior remain **unresolved**. Configurability is an existing, tested **intentional-contract**. | E4.S1–E4.S3 |
 | `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **supported, repaired by E2.S2:** both original probes render `Open record` with the `ghost` class and the expected aria-label. The nested form adds both quote styles, nested interpolation, escaped quotes, typed props, event arguments, literal braces/entities, and adversarial labels that remain text. Malformed expressions retain authored source diagnostics. | E2.S2 |
-| `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, repaired by E2.S1 shared fragment lowering:** dynamic SVG attributes are inert during parsing and receive evaluated values before insertion. `06-svg-each` checks both paths and zero console errors; structural context tests add circle/rect branches, toggles, and HTML inside foreignObject. The editable graph fixture remains E3.S1; SVG custom-element children remain explicitly deferred. | E2.S1 shared fix; E3.S1 graph |
+| `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, completed by E3.S1:** shared fragment lowering defers row geometry; ordinary SVG attributes now stay inert during parsing, compound values resolve together, and conditional scalar geometry initializes before insertion. `EditableGraphRoot` adds four keyed nodes/three paths, synchronous insertion audits, exact changed-path write counts, identity across reorder/delete/reinsert, branch recreation, canonical `viewBox`/`refX`, and marker references. SVG custom-element children remain deferred. | E2.S1 shared fix; E3.S1 graph |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **supported:** `07-binding-handler` observes `needle:a` on input and `needle:b` on select change. Shared Ruby scenarios cover both attribute orders, checkbox Booleans, current row arguments, property resets, branch recreation, and remount. `07-binding-failure` proves setter exhaustion blocks the callback and later events recover. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
 | `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
@@ -110,7 +110,7 @@ PLAYWRIGHT_HTML_OPEN=never npx playwright test \
 
 The passing evidence suite deliberately keeps current defects visible through explicit assertions; it does not mean those defects are repaired.
 
-E7.S1 adds the [shared fixture workflow](../e2e/fixtures/ui_contracts/README.md): `task framework:ui` and inspector/graph/form targets, automatic Ruby suite discovery, `mochi test --test-file`, and console/page/runtime diagnostic checks with consumed, explicitly matched negative expectations. The complete suite is included in `framework:e2e`. E2.S1 now adds the form's Ruby scenarios and lifecycle/context assertions; the graph fixture remains E3.S1. No fixture acceptance test is skipped to stand in for a future story.
+E7.S1 adds the [shared fixture workflow](../e2e/fixtures/ui_contracts/README.md): `task framework:ui` and inspector/graph/form targets, automatic Ruby suite discovery, `mochi test --test-file`, and console/page/runtime diagnostic checks with consumed, explicitly matched negative expectations. The complete suite is included in `framework:e2e`. E2.S1 adds the form's Ruby scenarios and lifecycle/context assertions; E3.S1 adds the graph's Ruby scenarios and synchronous SVG insertion/identity checks. No fixture acceptance test is skipped to stand in for a future story.
 
 The E1.S1 binary identities and observations above remain the historical baseline. E7.S1 rebuilds the compiler to embed the updated test runner; it changes no application runtime or VM payload. E1.S2 follows that historical baseline; its results are recorded below.
 
@@ -490,4 +490,82 @@ WASM SHA-256 remains
 `c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
 Per-probe source, descriptor, bytecode, and bundle identities remain attached
 to browser reports. No GVM or external application source changed.
-Next pending fixture story: E3.S1, before its dependent E3.S2.
+At E2.S4 completion, the next fixture story was E3.S1 (delivered below).
+
+## E3.S1 — Dynamic SVG and the graph geometry slice
+
+`EditableGraphRoot` renders four keyed nodes and three keyed paths from local
+Ruby hashes. Its Move action replaces the node model; only the two adjacent
+paths change. Reordering retains every keyed DOM node, removing/restoring an
+edge recreates only that edge, and branch toggles recreate current geometry.
+Marker references survive each operation. Pan exercises a compound transform;
+`viewBox` and marker `refX` exercise case-sensitive SVG attributes. Geometry
+uses native SVG templates and attribute bindings, with no raw HTML assembly.
+Selection, pointer ownership, and bounded history remain subsequent stories.
+
+E2.S1 already deferred SVG row slots and applied row values before insertion.
+E3.S1 closes the ordinary-attribute gaps: the compiler stores dynamic SVG
+attributes in inert markers, and the loader validates those markers against
+the binding descriptors. It publishes the whole patch snapshot before
+rendering; compound SVG values wait for all slots and write one complete
+attribute. Unchanged values do not cause a DOM write. Conditional branches
+apply available scalar SVG attributes while detached. Structural branches
+still replay after insertion so table/select/SVG context and sibling removal
+boundaries remain correct. Ordinary root geometry remains absent until its
+initial patch; placeholders never become geometry values.
+
+Compiler review also exposed Lexbor's local-name accessor lowering `viewBox`
+and `refX`. The compiler now reads qualified names through the existing
+Lexbor API, using a project-local FFI alias for its actual exported symbol.
+No vendored library or copied SVG-name table is needed. Descriptors and inert
+row payloads retain canonical names; HTML attributes and `foreignObject`
+children retain their normal behavior. This does not introduce SVG custom
+elements or a new contract for legacy namespaced attributes such as `xlink`.
+
+`test/editable_graph_test.rb` supplies portable Ruby acceptance scenarios.
+The framework driver additionally intercepts actual DOM insertion and
+attribute writes synchronously: a MutationObserver alone could miss an
+invalid intermediate value. It verifies initial geometry, numeric attributes,
+namespace, marker targets, exactly two path writes on Move, none on reorder
+or pan, surviving identities on delete/restore, three branch cycles, and a
+fresh component mount. Both initially open and initially closed graphs run
+in Chromium, Firefox, and WebKit. Console errors, page exceptions, and
+`mochi:error` remain independently checked, including the existing table/
+select/SVG context regression. Intentional negative probes keep their scoped
+expectations.
+
+Verification on 2026-11-13:
+
+- `task specs`: **552 examples passed**, no failures/errors/pending. New
+  descriptors cover ordinary/conditional/row SVG geometry, compound slots,
+  canonical names, and HTML descendants of `foreignObject`.
+- `task runtime:test`: **198 tests passed**, no skips. New checks observe
+  complete writes across partial patch batches and conditional insertion,
+  including a condition emitted before its geometry values.
+- Final `task framework:e2e`: **345 checks passed** across Chromium, Firefox,
+  WebKit: 285 main framework/UI checks (including 189 UI/workflow checks)
+  plus 60 asset/install/evolved-feature checks. An earlier test incorrectly
+  expected reconnecting the same host to reset state; the fresh-mount check
+  now creates a new host, preserving the existing reconnect contract.
+- `task gvm:test`: **215 cases / 20,943 assertions passed**, no skips/errors.
+  No VM or external application source changed.
+- Payload gate (`ruby scripts/payload_check.rb`): passed. Loader adds
+  **1,578 raw / 327 gzip bytes**, becoming **221,136 / 46,901 bytes**.
+  Core becomes **496,899 raw / 160,278 gzip bytes**; budgets rise by exactly
+  that delta. WASM, JS glue, optional downloads, and capacities are unchanged.
+- `task compile-time:test` passed. `task compile-time:framework`: all
+  **15 builds passed**, **204.0–212.8 ms**, below the unchanged 1,000 ms limit.
+  This isolated run followed other compiler uses; it does not prove a repair
+  for the historical first-launch outlier.
+- Crystal formatting, Ruby/JavaScript syntax, documentation links, and
+  whitespace checks passed. Read-only context/review work found the SVG
+  casing defect and verified its repair. No commits were made.
+
+Compiler SHA-256:
+`b3b9e200df4e4e9ae82c67d260e35fd98bb9aef88155de73d0d6da8e0a56edfd`.
+Loader SHA-256:
+`64e8852c2e712a02f0949500826d783a31fe46b606d5be353d962770fb0ae2e0`.
+WASM SHA-256 remains
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe source, descriptor, bytecode, and bundle identities remain attached
+to browser reports. Next story: E3.S2 — explicit target and handler identity.

@@ -506,3 +506,133 @@ test("bound setter capacity failure blocks callback and permits later valid even
     expect(pageErrors).toEqual([]);
   }, "<probe-root></probe-root>", ["--capacity-config", path.join(source, "capacity.json")]);
 });
+
+for (const initiallyOpen of [true, false]) {
+  test(`graph SVG insertion and keyed updates (initial open=${initiallyOpen}) @ui-graph`, async ({ page }, testInfo) => {
+    const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+    await page.addInitScript(() => {
+      const audit = (window as any).__svgAudit = { invalid: [], inserted: [], writes: [] };
+      const svgNamespace = "http://www.w3.org/2000/svg";
+      const geometry = ["d", "transform", "r", "stroke-width"];
+      const setAttribute = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function (name, value) {
+        if (this.namespaceURI === svgNamespace && geometry.includes(name)) {
+          if (/[{}\uE000-\uE00F]/.test(value)) audit.invalid.push(`${name}=${value}`);
+          if (name === "d" && this.matches(".edge")) audit.writes.push(this.getAttribute("data-edge"));
+        }
+        return setAttribute.call(this, name, value);
+      };
+      const inspect = (node: Node) => {
+        const nodes = [...(node instanceof Element ? [node] : []), ...((node as ParentNode).querySelectorAll?.("*") || [])];
+        for (const element of nodes) {
+          if (element.matches(".edge")) {
+            const d = element.getAttribute("d") || "";
+            audit.inserted.push(element.getAttribute("data-edge"));
+            if (element.namespaceURI !== svgNamespace || !/^M \d+ \d+ L \d+ \d+$/.test(d)) {
+              audit.invalid.push(`insert ${element.tagName}: ${d}`);
+            }
+          }
+          if (element.namespaceURI === svgNamespace) {
+            for (const name of geometry) {
+              if (/[{}\uE000-\uE00F]/.test(element.getAttribute(name) || "")) audit.invalid.push(`insert ${name}`);
+            }
+            if (element.matches(".scene, .node") && !/^translate\(\d+ \d+\)$/.test(element.getAttribute("transform") || "")) {
+              audit.invalid.push("insert incomplete transform");
+            }
+            if (element.matches(".node circle") && !/^\d+$/.test(element.getAttribute("r") || "")) audit.invalid.push("insert incomplete radius");
+          }
+        }
+      };
+      // Inspect synchronously before insertion: MutationObserver sees only the
+      // final state and cannot detect transient invalid geometry.
+      const insertBefore = Node.prototype.insertBefore;
+      Node.prototype.insertBefore = function <T extends Node>(node: T, before: Node | null): T {
+        if (this.isConnected) inspect(node);
+        return insertBefore.call(this, node, before) as T;
+      };
+      const appendChild = Node.prototype.appendChild;
+      Node.prototype.appendChild = function <T extends Node>(node: T): T {
+        if (this.isConnected) inspect(node);
+        return appendChild.call(this, node) as T;
+      };
+    });
+    await withCompiledProject(fixture, async (baseURL, bundle) => {
+      await attachArtifacts(testInfo, fixture, bundle);
+      await page.goto(baseURL);
+      const root = page.locator("editable-graph-root");
+      if (!initiallyOpen) {
+        await expect(root.locator(".closed")).toHaveText("Graph closed");
+        await root.locator(".toggle").click();
+      }
+      await expect(root.locator(".edge")).toHaveCount(3);
+      await expect(root.locator(".node")).toHaveCount(4);
+      const validate = async () => {
+        expect(await root.evaluate(host => {
+          const svg = host.shadowRoot!.querySelector("svg")!;
+          return {
+            namespaces: [...svg.querySelectorAll("*")].every(node => node.namespaceURI === "http://www.w3.org/2000/svg"),
+            marker: !!svg.querySelector("defs marker#arrowhead path"),
+            viewBox: svg.getAttribute("viewBox"),
+            refX: svg.querySelector("marker")!.getAttribute("refX"),
+            references: [...svg.querySelectorAll(".edge")].map(node => node.getAttribute("marker-end")),
+            invalid: (window as any).__svgAudit.invalid,
+          };
+        })).toEqual({ namespaces: true, marker: true, viewBox: "0 0 400 220", refX: "8", references: Array(3).fill("url(#arrowhead)"), invalid: [] });
+      };
+      await validate();
+      await root.evaluate(host => {
+        (window as any).__graphNodes = Object.fromEntries([...host.shadowRoot!.querySelectorAll("[data-edge], [data-node]")]
+          .map(node => [node.getAttribute("data-edge") || node.getAttribute("data-node"), node]));
+        (window as any).__svgAudit.writes = [];
+      });
+      const sameNodes = () => root.evaluate(host => [...host.shadowRoot!.querySelectorAll("[data-edge], [data-node]")]
+        .every(node => (window as any).__graphNodes[node.getAttribute("data-edge") || node.getAttribute("data-node")!] === node));
+      const takeWrites = () => page.evaluate(() => (window as any).__svgAudit.writes.splice(0).sort());
+      await root.locator(".move").click();
+      await expect(root.locator('[data-edge="ab"]')).toHaveAttribute("d", "M 40 50 L 200 60");
+      await expect(root.locator('[data-edge="bc"]')).toHaveAttribute("d", "M 200 60 L 180 150");
+      await expect(root.locator('[data-edge="cd"]')).toHaveAttribute("d", "M 180 150 L 320 150");
+      expect(await takeWrites()).toEqual(["ab", "bc"]);
+      expect(await sameNodes()).toBe(true);
+      await root.locator(".reorder").click();
+      await expect(root.locator(".edge").first()).toHaveAttribute("data-edge", "cd");
+      expect(await sameNodes()).toBe(true);
+      expect(await takeWrites()).toEqual([]);
+      await root.locator(".remove").click();
+      await expect(root.locator(".edge")).toHaveCount(2);
+      expect(await sameNodes()).toBe(true);
+      await root.locator(".restore").click();
+      await expect(root.locator(".edge")).toHaveCount(3);
+      await expect(root.locator('[data-edge="bc"]')).toHaveAttribute("d", "M 200 60 L 180 150");
+      expect(await root.locator('[data-edge="bc"]').evaluate(node => node !== (window as any).__graphNodes.bc)).toBe(true);
+      for (const id of ["ab", "cd"]) {
+        expect(await root.locator(`[data-edge="${id}"]`).evaluate((node, key) => node === (window as any).__graphNodes[key], id)).toBe(true);
+      }
+      expect(await takeWrites()).toEqual(["bc"]);
+      await root.locator(".pan").click();
+      await expect(root.locator(".scene")).toHaveAttribute("transform", "translate(10 5)");
+      expect(await takeWrites()).toEqual([]);
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await root.locator(".toggle").click();
+        await expect(root.locator("svg")).toHaveCount(0);
+        await root.locator(".toggle").click();
+        await expect(root.locator('[data-edge="bc"]')).toHaveAttribute("d", "M 200 60 L 180 150");
+        await validate();
+      }
+      expect(await page.evaluate(() => (window as any).__svgAudit.inserted.length)).toBeGreaterThanOrEqual(13);
+      await root.evaluate(async (host: any) => {
+        const replacement: any = document.createElement("editable-graph-root");
+        replacement.setAttribute("open", host.getAttribute("open"));
+        host.replaceWith(replacement);
+        await replacement._mochiReady;
+      });
+      if (!initiallyOpen) await root.locator(".toggle").click();
+      await expect(root.locator('[data-edge="ab"]')).toHaveAttribute("d", "M 40 50 L 180 50");
+      await validate();
+      expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+      await settleConsole();
+      expect(consoleErrors).toEqual([]);
+      expect(pageErrors).toEqual([]);
+    }, `<editable-graph-root open="${initiallyOpen}"></editable-graph-root>`);
+  });
+}
