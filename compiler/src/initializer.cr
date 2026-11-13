@@ -32,12 +32,17 @@ class Initializer
 
     tasks:
       build:
+        desc: Build this Ruby application with the installed Mochi compiler
         cmds:
           - mochi -i "./" -o "./build"
       test:
         desc: Run Ruby component behavior tests in the browser
         cmds:
           - mochi test -i "./"
+      dev:
+        desc: Serve the built application at http://127.0.0.1:27490
+        cmds:
+          - mochi dev --config=./dev_server_config.json --root=./
     YML
   end
 
@@ -54,19 +59,23 @@ class Initializer
     <<-'TEXT'
     # Mochi Starter
 
-    Mochi lets you build browser applications in Ruby. Application components live in `lib/`.
+    Build browser applications in Ruby. Application components live in `lib/`; behavior tests live in `test/`.
 
     ## Getting Started
 
-    ### Building the project
-    Run `mochi -i "./" -o "./build"` to build, or use `task build`.
+    Install the Mochi development command from a Mochi checkout (see the [Mochi getting-started guide](https://github.com/yampug/mochi#installing-the-development-command)). The install links the command to that checkout and records its compiler and browser runtime locations. Add the printed `bin` directory to `PATH` if needed.
 
-    The build contains the Mochi loader, GVM runtime, component descriptors, and `.chi` bytecode.
+    From this project directory, run:
 
-    ### Testing components
-    Add Ruby behavior tests under `test/` with filenames ending in `_test.rb`. Run them with `mochi test` or `task test`.
+    ```sh
+    mochi -i . -o ./build
+    mochi test -i .
+    mochi dev --config=./dev_server_config.json --root=./
+    ```
 
-    Tests use a small Ruby recorder DSL. The framework compiles the app through the normal GVM path, mounts components in a browser, performs actions, waits for a settled render, and checks visible text. Tests run in an isolated temporary bundle and never enter production output.
+    Open <http://127.0.0.1:27490>. The starter compiles to a GVM bundle: the loader reads a manifest, then loads each component's descriptor and `.chi` bytecode when it is used. No app-authored JavaScript is needed.
+
+    `mochi test` compiles an isolated test bundle and runs Ruby-authored scenarios in Chromium, Firefox, and WebKit. Test sources and runner files do not enter production output. Tests need Node.js, Mochi's Playwright dependencies, and installed Playwright browser binaries; install those once from the Mochi checkout with `npx playwright install chromium firefox webkit`.
 
     ```ruby
     Mochi::Test.test("counter increments") do
@@ -79,12 +88,7 @@ class Initializer
 
     `assert_text` selectors start in the mounted component's shadow root. Use `>>>` to cross into a child component, for example `"child-counter >>> .value"`.
 
-    ### Starting the Dev Server
-    Mochi ships with a built-in dev server which can be started with
-    ```
-    mochi dev --config=./dev_server_config.json --root=./
-    ```
-    by default it is be accessible under: http://127.0.0.1:27490
+    `index.html` uses a root asset base so the loader and compiled bundle also resolve when a static host serves a deep link. The dev server maps `/deep/entry` to the entry page for this purpose. If deploying under a URL prefix, set the base URL and loader paths to that prefix and configure the host to serve the entry page for application routes. See the [asset path guide](https://github.com/yampug/mochi#icons).
 
     TEXT
   end
@@ -93,7 +97,8 @@ class Initializer
     <<-'TEXT'
     {
       "routes": {
-        "/": "index.html"
+        "/": "index.html",
+        "/deep/entry": "index.html"
       }
     }
     TEXT
@@ -101,34 +106,38 @@ class Initializer
 
   def generate_index_html : String
     <<-'HTML'
-    <html>
+    <!doctype html>
+    <html lang="en">
         <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Mochi Starter</title>
-            <script src="./build/mochi-loader.js" data-mochi-manifest="./build/mochi-manifest.json"></script>
+            <base href="/">
+            <script src="./build/mochi-loader.js" data-mochi-manifest="./mochi-manifest.json"></script>
             <style>
                 body {
-                    background: #24262c;
+                    margin: 0;
+                    background: #f4f1eb;
+                    color: #25231f;
+                    font: 18px system-ui, sans-serif;
                 }
                 .logo-block {
                     display: flex;
                     justify-content: center;
-                    gap: 22px;
+                    gap: 16px;
                     align-items: center;
-                    color: white;
-                    width: 100%;
-                    font-family: sans-serif;
+                    margin: 12vh auto 0;
                 }
-                .logo { height: 64px; }
+                .mark { color: #c45b36; font-size: 40px; }
+                main { display: grid; justify-items: center; gap: 16px; margin: 40px auto; }
             </style>
         </head>
         <body>
             <div class="logo-block">
-                <img class="logo" src="https://github.com/yampug/mochi/blob/main/devground/mochi.png?raw=true"/>
+                <span class="mark" aria-hidden="true">◆</span>
                 <h1>Hello Mochi</h1>
             </div>
-            <div>
-            <my-counter></my-counter>
-            </div>
+            <main><my-counter></my-counter></main>
         </body>
     </html>
     HTML

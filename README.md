@@ -10,25 +10,59 @@
 
 ## What is Mochi?
 
-Mochi brings modern web development to [Ruby](https://www.ruby-lang.org/) by leveraging the excellent work from [Opal](https://opalrb.com/) and tighly coupling it with the open [Web Components](https://developer.mozilla.org/en-US/docs/Web/API/Web_components) standard.
-Mochi provides also native [Sorbet](https://sorbet.org) support for all that type-checking goodness. This can normally be a bit daunting to get going yourself, since Sorbet doesn't play nice with Opal out of the box, so Mochi got your back.
+Mochi is a Ruby-first framework for browser applications. Write components,
+templates, interactions, and behavior tests in Ruby; Mochi compiles Ruby to
+`.chi` bytecode and loads the GVM runtime and component dependencies in the
+browser. Application code does not need JavaScript.
 
-So all in all Mochi brings type-safe Ruby to the modern web.
-The project is still very early on its journey, so proceed at your own risk for now.
-
-> **⚠️ Under Heavy Construction:**
-> Mochi is currently under heavy development and is not yet ready for production use. APIs may change without notice, and features may be incomplete or unstable. Use at your own risk.
+The compiler and loader own component lifecycle, DOM updates, browser
+capabilities, and source-located errors. Optional features load only when an
+application uses them, keeping unused capabilities out of its bundle.
 
 
 ## Getting Started
 
-If you want to get your hands dirty and try out Mochi for yourself, I prepared over at [yampug/mochi-starter-template](https://github.com/yampug/mochi-starter-template) a preconfigured starter template, which should make the first steps as easy as possible.
+### Prerequisites
+
+For a source checkout, install Crystal, Task, Ruby, Node.js, the required
+prebuilt libraries in `fragments/libs`, and compatible Mochi GVM runtime and
+`mrbc` artifacts. See [build prerequisites](docs/BUILD_INSTRUCTIONS_EXT_LIBS.md)
+and [development installation](#installing-the-development-command). Ruby
+browser tests also need Mochi's Playwright dependencies and browser binaries;
+install the binaries from this checkout with
+`npx playwright install chromium firefox webkit`.
+
+### Create, build, test, and serve a project
+
+Install the development command from this checkout, then use it from any
+project directory:
+
+```sh
+task install:dev
+# Add the printed ~/.local/bin path to PATH if needed.
+mkdir -p ruby_projects && cd ruby_projects
+mochi --initialize=hello_mochi
+cd hello_mochi
+mochi -i . -o ./build
+mochi test -i .
+mochi dev --config=./dev_server_config.json --root=./
+```
+
+Open <http://127.0.0.1:27490>. `mochi test` runs Ruby-authored scenarios in
+Chromium, Firefox, and WebKit. Select engines with
+`--browsers=chromium,webkit`; default is all three. Test files are staged into
+an isolated temporary bundle and never enter production output.
+
+The generated project has a `lib/` directory for components, `test/` for
+behavior tests, and an `index.html` that loads the GVM bundle. Its Ruby counter
+and starter test show a complete state change:
 
 ### Example Component
-A simple example counter component with 2 buttons to increment and decrement the current count:
+
+`lib/MyCounter.rb` renders Ruby state and handles button events:
 
 ```ruby
-class Counter
+class MyCounter
 
   @tag_name = "my-counter"
   @count
@@ -73,6 +107,11 @@ class Counter
 end
 
 ```
+
+The generated `test/counter_test.rb` clicks Increment and asserts the new
+count. `mochi test` compiles the project, runs the browser scenario, and reports
+failures at the Ruby test line. No app-authored JavaScript or manual script
+setup is needed.
 
 ### Shared component styles
 
@@ -862,9 +901,10 @@ chrome, and the Costs dependency closure. If navigation changes before a
 screen's bytecode finishes loading, the loader's mount token drops the
 superseded mount.
 
-Static hosts must rewrite extensionless application paths to `index.html` and
-use a `<base href="/">` (or absolute asset URLs) so deep links resolve assets
-from the application root. Hash routes need no server rewrite.
+Static hosts must rewrite extensionless application paths to the entry page.
+The GVM loader resolves runtime files from the manifest URL, including on deep
+routes; use root-based or deployment-prefix URLs for ordinary document assets
+and links. Hash routes need no server rewrite.
 
 ### Storage and subscriptions
 
@@ -926,19 +966,22 @@ loader's bounded host buffer (16 KiB including the command envelope). Store
 small preferences, not documents. Invalid or unexpected text is not repaired
 by the host: normalize it in Ruby and write the corrected value back.
 
-### Compiling
-Prerequisites:
-* <img alt="Crystal Icon" style="height: 16px;" src="https://crystal-lang.org/favicon.ico"/> [Crystal](https://crystal-lang.org/)
-* <img alt="Task Go Icon" style="height: 16px;" src="https://github.com/yampug/mochi/blob/main/github/assets/task_icon.ico?raw=true"> [Task](https://taskfile.dev)
-* Prebuilt C libraries in `fragments/libs` (see [docs/BUILD_INSTRUCTIONS_EXT_LIBS.md](docs/BUILD_INSTRUCTIONS_EXT_LIBS.md))
-* Node.js for the Playwright end-to-end test
-* Emscripten only when rebuilding the `mochi-gvm` WASM artifact
-* A built `mrbc` executable for Ruby bytecode compilation
+### Building Mochi from source
+
+Application developers can use the installed command described above. To build
+Mochi itself, install these prerequisites:
+
+* [Crystal](https://crystal-lang.org/) and [Task](https://taskfile.dev)
+* Ruby for the development installer and Ruby test recorder
+* Node.js for runtime and Playwright tests
+* Prebuilt libraries in `fragments/libs` (see [external library setup](docs/BUILD_INSTRUCTIONS_EXT_LIBS.md))
+* Compatible `mrbc` and GVM runtime artifacts; Emscripten is needed only to rebuild the GVM WASM runtime
 
 ```
-git clone http://github.com/yampug/mochi
+git clone https://github.com/yampug/mochi
 cd mochi
-task run
+task build
+task install:dev
 ```
 
 The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes one local JavaScript adapter per host capability that a reachable package declares; today that is `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
@@ -967,7 +1010,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task payload` | Check deterministic bundle membership and payload ceilings |
 | `task check` | Run runtime tests, compiler specs, payload checks, GVM tests, and the GVM end-to-end test |
 
-### Usage
+### CLI reference
 
 #### Installing the development command
 
@@ -1001,25 +1044,15 @@ embedded in the runtime against the bundle manifest before runtime
 initialization. See [fixed VM capacities](docs/fixed-capacities.md) for the
 build-time profile format and custom artifact workflow.
 
-#### Creating a new project
-```
-mochi --initialize="my_fancy_project"
-```
+* `mochi --initialize=PROJECT` creates the generated Ruby project.
+* `mochi -i INPUT -o OUTPUT [--typecheck]` builds an application bundle.
+* `mochi test -i PROJECT [--browsers=chromium,firefox,webkit|all]` runs Ruby behavior tests.
+* `mochi dev --config=FILE --root=DIR` serves a local project.
 
-#### Compiling your code
-```
-mochi -i "/path/to/my/beautiful/ruby_code" -o "/path/where/I/want/to/output" --typecheck
-```
-
-#### Testing component behavior
-Put Ruby tests in `test/**/*_test.rb` and run `mochi test -i "."`. Tests use `Mochi::Test.test` with `mount`, `click`, `fill`, `wait_for_settled`, and text, attribute, and value assertions; `expect_error`, `unmount`, and `remount` cover error and lifecycle behavior. Mochi builds temporary `.chi` artifacts and runs each scenario on Chromium, Firefox, and WebKit by default. Select engines with `--browsers=chromium,webkit` or `--browsers=all`. Install missing browser binaries with `npx playwright install chromium firefox webkit` from the Mochi development checkout. Assertion output includes the Ruby test file, line, and browser. Test plans and runner files do not enter production bundles. The framework runner requires Node.js and Mochi's Playwright browser dependencies; app-authored tests and configuration remain Ruby.
-
-* -i: input directory
-* -o: output directory
-* --typecheck: Run Sorbet typechecks (optional)
-* --initialize: Creates a new preconfigured project directory
-
-The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from your entry page; the loader reads the entry manifest, checks its schema version, registers the component identities, and fetches a component's descriptor, dependency packages, shared styles, and `.chi` file when that component first connects.
+The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from the
+entry page; it validates the manifest and fetches a component's descriptor,
+dependency packages, shared styles, and `.chi` file when that component first
+connects.
 
 
 
