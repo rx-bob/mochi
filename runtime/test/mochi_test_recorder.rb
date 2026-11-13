@@ -87,8 +87,11 @@ module Mochi
         record("assert_value", { "selector" => selector.to_s, "expected" => expected.to_s })
       end
 
-      def expect_error(message = nil)
-        record("expect_error", { "message" => message&.to_s })
+      def expect_error(message)
+        unless message.is_a?(String) && !message.strip.empty?
+          raise ArgumentError, "expect_error requires a non-empty message"
+        end
+        record("expect_error", { "message" => message })
       end
 
       def unmount
@@ -155,9 +158,11 @@ module Mochi
     def self.test(name, &block)
       raise ArgumentError, "test requires a block" unless block
 
+      location = caller_locations(1, 1).first
       scenario = Scenario.new
       scenario.instance_exec(&block)
-      @cases << { "name" => name.to_s, "steps" => scenario.steps }
+      @cases << { "name" => name.to_s, "steps" => scenario.steps,
+                  "ruby_file" => location.path, "line" => location.lineno }
     end
 
     def self.write_plan(path)
@@ -168,9 +173,17 @@ module Mochi
   end
 end
 
-test_dir = ARGV.fetch(0)
+test_dir = File.expand_path(ARGV.fetch(0))
 plan_path = ARGV.fetch(1)
 files = Dir.glob(File.join(test_dir, "**", "*_test.rb")).sort
+selection = ARGV[2]
+if selection
+  selected = File.expand_path(selection, test_dir)
+  unless files.include?(selected)
+    abort("no Ruby test file '#{selection}' under #{test_dir}; select a relative *_test.rb path")
+  end
+  files = [selected]
+end
 abort("no *_test.rb files found under #{test_dir}") if files.empty?
 files.each { |file| load(file) }
 Mochi::Test.write_plan(plan_path)

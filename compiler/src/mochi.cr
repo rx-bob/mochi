@@ -75,6 +75,7 @@ dev_server_config_path = ""
 is_standalone_typecheck = false
 is_ruby_test = false
 test_browsers = "chromium,firefox,webkit"
+test_file : String? = nil
 keep_granular_build_artifacts = false
 capacity_config_path : String? = nil
 
@@ -110,6 +111,10 @@ OptionParser.parse do |p|
 
   p.on("--browsers=BROWSERS", "Browsers for mochi test: chromium,firefox,webkit or all") do |value|
     test_browsers = value
+  end
+
+  p.on("--test-file=PATH", "Run one Ruby *_test.rb file relative to the project's test/ directory") do |value|
+    test_file = value
   end
 
   p.on("--keep_granular_build_artifacts", "Preserves all granular build artifacts (meant for developers working on Mochi)") do
@@ -163,7 +168,7 @@ OptionParser.parse do |p|
 end
 
 if is_ruby_test
-  exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir, test_browsers)
+  exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir, test_browsers, test_file)
 elsif is_dev_server
   if dev_server_config_path.size < 1 || dev_server_root.size < 1
     puts "No arguments provided, intended usage:".colorize(:red)

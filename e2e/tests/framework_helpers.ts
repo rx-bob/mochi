@@ -8,6 +8,18 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const compiler = path.join(repoRoot, "compiler", "mochi");
 const fixture = path.join(__dirname, "..", "fixtures", "framework_contracts");
 
+export function runRubyProject(fixture: string, browserName: string, testFile?: string): string {
+  // mochi test owns staging, compilation, serving, and cleanup. It never writes
+  // a bundle into the authored fixture project.
+  try {
+    return execFileSync(compiler, ["test", "-i", fixture, `--browsers=${browserName}`,
+      ...(testFile ? [`--test-file=${testFile}`] : [])],
+      { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+  } catch (error: any) {
+    throw new Error([error.stderr, error.stdout, error.message].filter(Boolean).join("\n"));
+  }
+}
+
 export async function withFrameworkProject<T>(run: (baseURL: string) => Promise<T>, body = "<contract-root></contract-root>"): Promise<T> {
   return withCompiledProject(fixture, run, body);
 }

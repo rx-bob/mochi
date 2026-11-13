@@ -123,8 +123,32 @@ tasks:
     deps:
       - build
     cmds:
-      - cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts tests/gvm_row_capacity.spec.ts tests/gvm_framework_standalone.spec.ts tests/gvm_drag_file_contracts.spec.ts tests/gvm_pointer_contracts.spec.ts --reporter=line
+      - cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts tests/gvm_row_capacity.spec.ts tests/gvm_framework_standalone.spec.ts tests/gvm_drag_file_contracts.spec.ts tests/gvm_pointer_contracts.spec.ts tests/gvm_ui_contracts.spec.ts tests/gvm_test_workflow.spec.ts --reporter=line
       - cd e2e && npx playwright test tests/gvm_asset_paths.spec.ts tests/gvm_install_workflow.spec.ts tests/gvm_evolved_features.spec.ts --grep-invert "Cowboy integration" --reporter=line
+
+  framework:ui:
+    desc: Run all shared UI fixture scenarios and feedback evidence in all browsers
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_test_workflow.spec.ts --reporter=line
+
+  framework:ui:inspector:
+    desc: Run inspector Ruby scenarios and related feedback evidence
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-inspector' --reporter=line
+
+  framework:ui:graph:
+    desc: Run graph feedback evidence and authored graph scenarios when added by E3
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-graph' --reporter=line
+
+  framework:ui:form:
+    desc: Run form feedback evidence and authored form scenarios when added by E2
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-form' --reporter=line
 
   app:e2e:
     desc: Build the Cowboy frontend and run its GVM Playwright integration suite

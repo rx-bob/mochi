@@ -110,4 +110,10 @@ PLAYWRIGHT_HTML_OPEN=never npx playwright test \
 
 The passing evidence suite deliberately keeps current defects visible through explicit assertions; it does not mean those defects are repaired.
 
-E7.S1 is next in the plan's recommended order. It owns workflow entry points, general Ruby runner console handling, and future graph/form integration.
+E7.S1 adds the [shared fixture workflow](../e2e/fixtures/ui_contracts/README.md): `task framework:ui` and inspector/graph/form targets, automatic Ruby suite discovery, `mochi test --test-file`, and console/page/runtime diagnostic checks with consumed, explicitly matched negative expectations. The complete suite is included in `framework:e2e`. Graph/form targets currently run their isolated evidence; their Ruby fixtures still belong to E3.S1/E2.S1. No fixture acceptance test is skipped to stand in for those future stories.
+
+The E1.S1 binary identities and observations above remain the historical baseline. E7.S1 rebuilds the compiler to embed the updated test runner; it changes no application runtime or VM payload. E1.S2 is next in the plan's recommended order.
+
+E7.S1 validation: `task framework:e2e` passed **288 checks** (228 main framework/UI checks and 60 asset/install/evolved-feature checks), across Chromium, Firefox, and WebKit. `task runtime:test` passed **191 tests**. Initializer and installation-path specs passed **9 examples**. The new runner scenarios verify startup/mount/click console errors, page exceptions, expected mount rejection, matched-error consumption, unrelated/missing/dangling expectations, authored driver-error locations, and page/build/server cleanup. No new regression is skipped.
+
+One earlier full-workflow invocation encountered an **unresolved** compiler-process failure during the Boolean typecheck probe: Crystal reported `Negative count: -1459520515` from buffered output during exit, rather than the expected Sorbet failure. The assertion correctly failed. The three-engine isolated probe and the subsequent complete workflow passed without relaxing the diagnostic assertions or adding retries. This is not evidence that the compiler-process issue is fixed; E2.S4 retains the Boolean/typecheck investigation boundary.

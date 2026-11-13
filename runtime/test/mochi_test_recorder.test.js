@@ -63,3 +63,46 @@ test("Ruby recorder rejects invalid file setup at the calling Ruby line", () => 
     assert.match(result.stderr, /test file needs exactly one of path or bytes/);
   });
 });
+
+test("Ruby recorder selects one test file and preserves scenario and step locations", () => {
+  withTestProject((root, testDir) => {
+    const source = path.join(testDir, "inspector_test.rb");
+    const plan = path.join(root, "plan.json");
+    fs.writeFileSync(source, 'Mochi::Test.test("selected") do\n  mount "inspector-root"\nend\n');
+    fs.writeFileSync(path.join(testDir, "unselected_test.rb"), 'raise "must not load unselected tests"');
+    const result = spawnSync("ruby", [recorder, testDir, plan, "inspector_test.rb"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const tests = JSON.parse(fs.readFileSync(plan, "utf8")).tests;
+    assert.equal(tests.length, 1);
+    assert.equal(tests[0].name, "selected");
+    assert.equal(tests[0].ruby_file, source);
+    assert.equal(tests[0].line, 1);
+    assert.equal(tests[0].steps[0].line, 2);
+  });
+});
+
+test("Ruby recorder rejects unknown or outside test selections", () => {
+  withTestProject((root, testDir) => {
+    const plan = path.join(root, "plan.json");
+    fs.writeFileSync(path.join(root, "outside_test.rb"), 'raise "must not load outside tests"');
+    for (const selection of ["", "missing_test.rb", "../outside_test.rb"]) {
+      const result = spawnSync("ruby", [recorder, testDir, plan, selection], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /no Ruby test file/);
+      assert.equal(fs.existsSync(plan), false);
+    }
+  });
+});
+
+test("Ruby recorder requires an explicit nonempty error matcher", () => {
+  withTestProject((root, testDir) => {
+    const source = path.join(testDir, "errors_test.rb");
+    for (const matcher of ['nil', '""', '"  "']) {
+      fs.writeFileSync(source, `Mochi::Test.test("bad matcher") do\n  expect_error ${matcher}\nend\n`);
+      const result = spawnSync("ruby", [recorder, testDir, path.join(root, "plan.json")], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /expect_error requires a non-empty message/);
+      assert.match(result.stderr, /errors_test\.rb:2/);
+    }
+  });
+});

@@ -8,7 +8,7 @@ class RubyTestRunner
   RECORDER_SOURCE = {{ read_file("#{__DIR__}/../../../runtime/test/mochi_test_recorder.rb") }}
   BROWSER_RUNNER  = {{ read_file("#{__DIR__}/../../../e2e/mochi_test_runner.cjs") }}
 
-  def run(project_path : String, browsers = "chromium,firefox,webkit") : Int32
+  def run(project_path : String, browsers = "chromium,firefox,webkit", test_file : String? = nil) : Int32
     selected = browsers == "all" ? %w[chromium firefox webkit] : browsers.split(",").map(&.strip)
     unless !selected.empty? && selected.uniq == selected && (selected - %w[chromium firefox webkit]).empty?
       STDERR.puts "mochi test: unsupported browser selection '#{browsers}'; choose chromium, firefox, webkit, or all"
@@ -49,9 +49,11 @@ class RubyTestRunner
       stage_project(project_root, stage_dir)
       File.write(runner_path, BROWSER_RUNNER)
 
+      recorder_args = ["-e", RECORDER_SOURCE, test_dir, plan_path]
+      recorder_args << test_file if test_file
       status = Process.run(
         command: "ruby",
-        args: ["-e", RECORDER_SOURCE, test_dir, plan_path],
+        args: recorder_args,
         chdir: project_root,
         output: STDOUT,
         error: STDERR

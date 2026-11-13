@@ -4,13 +4,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { withCompiledProject } from "./framework_helpers";
+import { withCompiledProject, runRubyProject } from "./framework_helpers";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
-test("inspector renders exactly 12 of 48 records without browser errors", async ({ page }, testInfo) => {
+test("inspector renders exactly 12 of 48 records without browser errors @ui-inspector", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -30,21 +30,27 @@ test("inspector renders exactly 12 of 48 records without browser errors", async 
   });
 });
 
-test("Ruby-authored inspector scenarios run through mochi test", async ({ browserName }) => {
-  test.setTimeout(240_000);
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-ui-tests-"));
-  try {
-    fs.cpSync(fixture, project, { recursive: true });
-    const output = execFileSync(compiler, ["test", "-i", project, `--browsers=${browserName}`],
-      { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
-    expect(output).toContain(`PASS [${browserName}] inspector mounts 48 structured records with 12 stable first-page IDs`);
-    expect(output).toContain(`PASS [${browserName}] inspector pages, filters literally, and retains selection by ID`);
-  } catch (error: any) {
-    throw new Error([error.stderr, error.stdout, error.message].filter(Boolean).join("\n"));
-  } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-  }
-});
+// Discover every authored Ruby suite. Graph/form stories add their files to
+// this same project; these entry points then include them without new harnesses.
+const rubySuites: Record<string, string> = {
+  "inspector_test.rb": "@ui-inspector",
+  "editable_graph_test.rb": "@ui-graph",
+  "nested_form_test.rb": "@ui-form",
+};
+for (const file of fs.readdirSync(path.join(fixture, "test"), { recursive: true }).map(String).sort()
+  .filter(file => file.endsWith("_test.rb"))) {
+  test(`Ruby-authored UI scenarios: ${file} ${rubySuites[file] || "@ui"}`, async ({ browserName }) => {
+    test.setTimeout(240_000);
+    const output = runRubyProject(fixture, browserName, file);
+    expect(output).toContain(`PASS [${browserName}]`);
+  });
+}
+
+function probeTarget(name: string): string {
+  if (/^(01|05|07|11)-/.test(name)) return "@ui-form";
+  if (/^06-/.test(name) || name === "09-wheel") return "@ui-graph";
+  return "@ui-inspector";
+}
 
 // These are evidence assertions, not acceptance claims for the owning stories.
 // A repaired defect must replace its observed-failure assertion with the Ruby
@@ -116,7 +122,7 @@ async function captureErrors(page: Page) {
 }
 
 for (const [name, failure] of Object.entries(compileFailures)) {
-  test(`feedback evidence ${name}: compiler diagnostic`, async ({}, testInfo) => {
+  test(`feedback evidence ${name}: compiler diagnostic ${probeTarget(name)}`, async ({}, testInfo) => {
     testInfo.annotations.push({ type: "owner", description: failure.owner });
     const source = path.join(fixture, "probes", name);
     await attachArtifacts(testInfo, source);
@@ -137,7 +143,7 @@ for (const [name, failure] of Object.entries(compileFailures)) {
 const runtimeProbes = [...Object.keys(mountFailures), ...Object.keys(textProbes),
   "06-svg-each", "07-binding-handler", "08-event-dataset", "09-wheel", "12-assets-css"];
 for (const name of runtimeProbes) {
-  test(`feedback evidence ${name}: runtime observation`, async ({ page, browserName }, testInfo) => {
+  test(`feedback evidence ${name}: runtime observation ${probeTarget(name)}`, async ({ page, browserName }, testInfo) => {
     const failure = mountFailures[name];
     const textProbe = textProbes[name];
     testInfo.annotations.push({ type: "owner", description: failure?.owner || textProbe?.owner ||
@@ -216,7 +222,7 @@ for (const name of runtimeProbes) {
   });
 }
 
-test("feedback evidence 11-boolean: typecheck rejects documented Boolean prop", async ({}, testInfo) => {
+test("feedback evidence 11-boolean: typecheck rejects documented Boolean prop @ui-form", async ({}, testInfo) => {
   testInfo.annotations.push({ type: "owner", description: "E2.S4" });
   const source = path.join(fixture, "probes/11-boolean");
   await attachArtifacts(testInfo, source);

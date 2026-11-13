@@ -162,278 +162,337 @@ async function waitForPointerIdle(page) {
   }, null, { timeout: 5000 });
 }
 
-async function runCase(browser, browserName, baseUrl, testCase) {
-  const page = await browser.newPage();
-  const errors = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(() => {
-    window.__mochiTestErrors = [];
-    window.__mochiTestPointer = null;
-    window.__mochiTestLostCaptures = [];
-    document.addEventListener("mochi:error", (event) => {
-      window.__mochiTestErrors.push(event.detail || { message: "Mochi runtime error" });
-    });
-    document.addEventListener("pointerdown", (event) => {
-      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
-      window.__mochiTestPointer = {
-        id: event.pointerId,
-        target: path.length > 0 ? path[0] : event.target,
-      };
-    }, true);
-    document.addEventListener("lostpointercapture", (event) => {
-      window.__mochiTestLostCaptures.push(event.pointerId);
-    }, true);
+// Keep all three browser diagnostic channels and consume them at each step.
+// Console Error arguments need explicit serialization: Firefox text() omits
+// their message. Promise entries preserve order without unhandled rejections.
+function collectDiagnostics(page) {
+  const pending = [];
+  page.on("pageerror", error => pending.push(Promise.resolve({ kind: "browser", message: error.message })));
+  page.on("console", entry => {
+    if (entry.type() !== "error") return;
+    pending.push(Promise.all(entry.args().map(argument =>
+      argument.evaluate(value => value instanceof Error ? value.message : "")))
+      .then(details => ({ kind: "console", message: [entry.text(), ...details.filter(Boolean)].join(" ") }))
+      .catch(error => ({ kind: "console", message: `${entry.text()} (cannot read console arguments: ${error.message})` })));
   });
+  return async () => {
+    const runtime = await page.evaluate(() => (window.__mochiTestErrors || []).splice(0));
+    const diagnostics = await Promise.all(pending.splice(0));
+    return diagnostics.concat(runtime.map(error => ({
+      kind: "Mochi runtime", message: error.message || JSON.stringify(error), source: error.source,
+    })));
+  };
+}
 
-  let host = null;
-  let detachedHost = null;
-  let expectedError = null;
-  let activePointer = null;
+function assertDiagnostics(diagnostics, origin, expected = null, actionError = null) {
+  const unexpected = diagnostics.filter(error => expected === null || !error.message.includes(expected));
+  if (unexpected.length) {
+    throw new Error(`${origin}: ${unexpected.map(error =>
+      `${error.kind} error${error.source ? ` (${error.source})` : ""}: ${error.message}`).join("\n")}`);
+  }
+  // A driver/assertion failure cannot satisfy expect_error by itself. A
+  // rejected mount is allowed only alongside its matching browser diagnostic.
+  if (actionError && !(expected !== null && diagnostics.length && actionError.message.includes(expected))) {
+    if (actionError.message.startsWith(`${origin}:`)) throw actionError;
+    throw new Error(`${origin}: ${actionError.message}`);
+  }
+  if (expected !== null && diagnostics.length === 0) {
+    throw new Error(`${origin}: expected browser error containing '${expected}', but no error occurred`);
+  }
+}
+
+async function readyComponent(page, tag) {
+  await page.waitForFunction(tag => !!document.querySelector(tag)?._mochiReady, tag, { timeout: 5000 });
+  await page.evaluate(async tag => { await document.querySelector(tag)._mochiReady; }, tag);
+}
+
+async function settleFrames(page) {
+  await page.evaluate(() => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+}
+
+async function runCase(browser, browserName, baseUrl, testCase) {
+  let page;
+  let origin = sourceLabel(testCase.ruby_file ? testCase : testCase.steps[0] || { ruby_file: "<ruby test>", line: 1 });
   try {
+    page = await browser.newPage();
+    const drainDiagnostics = collectDiagnostics(page);
+    await page.addInitScript(() => {
+      window.__mochiTestErrors = [];
+      window.__mochiTestPointer = null;
+      window.__mochiTestLostCaptures = [];
+      document.addEventListener("mochi:error", (event) => {
+        window.__mochiTestErrors.push(event.detail || { message: "Mochi runtime error" });
+      });
+      document.addEventListener("pointerdown", (event) => {
+        const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+        window.__mochiTestPointer = {
+          id: event.pointerId,
+          target: path.length > 0 ? path[0] : event.target,
+        };
+      }, true);
+      document.addEventListener("lostpointercapture", (event) => {
+        window.__mochiTestLostCaptures.push(event.pointerId);
+      }, true);
+    });
+
+    let host = null;
+    let detachedHost = null;
+    let expectedError = null;
+    let activePointer = null;
+    let expectationOrigin = null;
     await page.goto(`${baseUrl}/`);
     await page.waitForFunction(() => window.MochiLoader && window.MochiLoader.manifest);
+    assertDiagnostics(await drainDiagnostics(), origin);
 
     for (const step of testCase.steps) {
-      const origin = sourceLabel(step);
-      if (step.operation === "mount") {
-        if (host) throw new Error(`${origin}: each test can mount one root component`);
-        await page.evaluate(({ tag, props }) => {
-          const element = document.createElement(tag);
-          Object.entries(props || {}).forEach(([name, value]) => {
-            if (!/^[a-zA-Z][a-zA-Z0-9:_-]*$/.test(name)) {
-              throw new Error(`invalid component input attribute '${name}'`);
-            }
-            if (value !== null && value !== undefined) {
-              element.setAttribute(name, typeof value === "string" ? value : JSON.stringify(value));
-            }
-          });
-          document.body.appendChild(element);
-          return true;
-        }, { tag: step.tag, props: step.props });
-        host = step.tag;
-        await page.evaluate(async (tag) => {
-          const element = document.querySelector(tag);
-          await element._mochiReady;
-        }, host);
-      } else if (["pointer_press", "pointer_move_by", "pointer_release", "pointer_cancel",
-        "pointer_lose_capture", "assert_pointer_capture_released"].includes(step.operation)) {
-        if (!host && step.operation !== "assert_pointer_capture_released") {
-          throw new Error(`${origin}: mount a component before using ${step.operation}`);
+      origin = sourceLabel(step);
+      if (step.operation === "expect_error") {
+        assertDiagnostics(await drainDiagnostics(), origin);
+        if (expectedError !== null) throw new Error(`${expectationOrigin}: expect_error must be followed by an action`);
+        if (typeof step.message !== "string" || !step.message.trim()) {
+          throw new Error(`${origin}: expect_error requires a non-empty message`);
         }
-        if (step.operation === "pointer_press") {
-          if (activePointer) throw new Error(`${origin}: release or cancel the current test pointer first`);
-          const target = page.locator(host).locator(step.selector);
-          const box = await target.boundingBox();
-          if (!box) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
-          const x = Math.round(box.x + box.width / 2);
-          const y = Math.round(box.y + box.height / 2);
-          await page.mouse.move(x, y);
-          await page.mouse.down();
-          const pointer = await page.evaluate(() => window.__mochiTestPointer);
-          if (!pointer) throw new Error(`${origin}: browser did not report pointerdown`);
-          activePointer = { id: pointer.id, x, y };
-          await waitForPointerIdle(page);
-        } else if (step.operation === "pointer_move_by") {
-          if (!activePointer) throw new Error(`${origin}: pointer_move_by requires pointer_press`);
-          const steps = Number(step.steps);
-          if (!Number.isInteger(steps) || steps < 1 || steps > 256) {
-            throw new Error(`${origin}: pointer_move_by steps must be between 1 and 256`);
-          }
-          activePointer.x += Number(step.x);
-          activePointer.y += Number(step.y);
-          await page.mouse.move(activePointer.x, activePointer.y, { steps });
-          await waitForPointerIdle(page);
-        } else if (step.operation === "pointer_release") {
-          if (!activePointer) throw new Error(`${origin}: pointer_release requires pointer_press`);
-          await page.mouse.up();
-          activePointer = null;
-          await waitForPointerIdle(page);
-        } else if (step.operation === "pointer_cancel") {
-          if (!activePointer) throw new Error(`${origin}: pointer_cancel requires pointer_press`);
-          await page.evaluate(({ id, x, y }) => {
-            const pointer = window.__mochiTestPointer;
-            if (!pointer || pointer.id !== id || !pointer.target || !pointer.target.isConnected) {
-              throw new Error("test pointer target is no longer connected");
-            }
-            pointer.target.dispatchEvent(new PointerEvent("pointercancel", {
-              bubbles: true, composed: true, pointerId: id, pointerType: "mouse",
-              isPrimary: true, buttons: 0, clientX: x, clientY: y,
-            }));
-          }, activePointer);
-          await page.mouse.up();
-          activePointer = null;
-          await waitForPointerIdle(page);
-        } else if (step.operation === "pointer_lose_capture") {
-          if (!activePointer) throw new Error(`${origin}: pointer_lose_capture requires pointer_press`);
-          await page.evaluate((id) => {
-            const pointer = window.__mochiTestPointer;
-            if (!pointer || pointer.id !== id || !pointer.target ||
-                typeof pointer.target.releasePointerCapture !== "function" ||
-                !pointer.target.hasPointerCapture(id)) {
-              throw new Error("test pointer has no live capture to release");
-            }
-            pointer.target.releasePointerCapture(id);
-          }, activePointer.id);
-          await waitForPointerIdle(page);
-          const pointerId = activePointer.id;
-          await page.mouse.up();
-          activePointer = null;
-          await waitForPointerIdle(page);
-          const observed = await page.evaluate((id) => window.__mochiTestLostCaptures.includes(id), pointerId);
-          if (!observed) throw new Error(`${origin}: browser did not deliver lostpointercapture`);
-        } else {
-          const captured = await page.evaluate(() => {
-            const pointer = window.__mochiTestPointer;
-            return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
-              pointer.target.hasPointerCapture(pointer.id));
-          });
-          if (captured) throw new Error(`${origin}: pointer capture remained active`);
-        }
-      } else if (["click", "fill", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
-        if (!host) throw new Error(`${origin}: mount a component before using ${step.operation}`);
-        const result = await page.evaluate(({ tag, step }) => {
-          const element = document.querySelector(tag);
-          const target = (() => {
-            const parts = step.selector.split(/\s*>>>\s*/).filter(Boolean);
-            let scope = element.shadowRoot;
-            let found = null;
-            for (let index = 0; index < parts.length; index += 1) {
-              found = scope && scope.querySelector(parts[index]);
-              if (!found) return null;
-              if (index + 1 < parts.length) scope = found.shadowRoot;
-            }
-            return found;
-          })();
-          if (!target) return { missing: true };
-          if (step.operation === "click") {
-            target.click();
-            return { ok: true };
-          }
-          if (step.operation === "fill") {
-            if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
-                  target instanceof HTMLSelectElement)) {
-              return { invalid: "target is not a form control" };
-            }
-            target.value = step.value;
-            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-            target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-            return { ok: true };
-          }
-          if (step.operation === "assert_attribute" || step.operation === "assert_no_attribute") {
-            return { present: target.hasAttribute(step.name), actual: target.getAttribute(step.name) };
-          }
-          if (step.operation === "assert_value") return { actual: target.value };
-          const actual = (target.innerText || target.textContent || "").trim();
-          return { actual };
-        }, { tag: host, step });
-
-        if (result.missing) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
-        if (result.invalid) throw new Error(`${origin}: ${result.invalid}`);
-        if (step.operation === "assert_attribute" && (!result.present || result.actual !== step.expected)) {
-          throw new Error(`${origin}: expected attribute '${step.name}' to equal '${step.expected}', got ${result.present ? `'${result.actual}'` : "absent"}`);
-        }
-        if (step.operation === "assert_no_attribute" && result.present) {
-          throw new Error(`${origin}: expected attribute '${step.name}' to be absent, got '${result.actual}'`);
-        }
-        if (step.operation === "assert_value" && result.actual !== step.expected) {
-          throw new Error(`${origin}: expected value '${step.expected}' at '${step.selector}', got '${result.actual}'`);
-        }
-        if (step.operation === "assert_text" && result.actual !== step.expected) {
-          throw new Error(`${origin}: expected '${step.expected}' at '${step.selector}', got '${result.actual}'`);
-        }
-      } else if (step.operation === "select_files") {
-        if (!host) throw new Error(`${origin}: mount a component before selecting files`);
-        const files = syntheticFiles(step);
-        const target = page.locator(host).locator(step.selector);
-        await target.setInputFiles(files.map((file) => ({
-          name: file.name,
-          mimeType: file.type,
-          lastModified: file.lastModified,
-          buffer: file.bytes,
-        })));
-      } else if (step.operation === "drop_files") {
-        if (!host) throw new Error(`${origin}: mount a component before dropping files`);
-        const files = syntheticFiles(step);
-        const accepted = await dispatchFileDrop(page, host, step.selector, files);
-        if (!accepted) throw new Error(`${origin}: Mochi did not accept the synthetic file dragover`);
-      } else if (step.operation === "drag") {
-        if (!host) throw new Error(`${origin}: mount a component before dragging`);
-        await page.locator(host).locator(step.source).dragTo(page.locator(host).locator(step.target));
-      } else if (step.operation === "assert_state") {
-        if (!host) throw new Error(`${origin}: mount a component before asserting state`);
-        const actual = await page.locator(host).locator(step.selector).innerText();
-        if (actual.trim() !== step.expected) {
-          throw new Error(`${origin}: expected state '${step.expected}', got '${actual.trim()}'`);
-        }
-      } else if (step.operation === "expect_error") {
-        expectedError = step.message || "";
+        expectedError = step.message;
+        expectationOrigin = origin;
         continue;
-      } else if (step.operation === "wait") {
-        await page.waitForFunction(() => {
-          const stats = window.MochiLoader.debugStats();
-          return stats.pendingFetches === 0 && stats.activeFetches === 0 &&
-            stats.pendingHostRequests === 0 && stats.pendingPointerMoves === 0;
-        }, null, { timeout: 5000 });
-        await page.evaluate(() => new Promise((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(resolve));
-        }));
-      } else if (step.operation === "unmount" || step.operation === "remount") {
-        if (step.operation === "unmount" && !host) throw new Error(`${origin}: mount a component before unmount`);
-        if (step.operation === "remount" && !host && !detachedHost && !step.tag) throw new Error(`${origin}: remount requires a prior unmount or component tag`);
-        const targetTag = host || detachedHost || step.tag;
-        await page.evaluate(({ tag, operation, nextTag, props }) => {
-          const current = document.querySelector(tag);
-          if (current) current.remove();
-          if (operation === "remount") {
-            const replacement = document.createElement(nextTag || tag);
+      }
+      let actionError = null;
+      try {
+        if (step.operation === "mount") {
+          if (host) throw new Error(`${origin}: each test can mount one root component`);
+          await page.evaluate(({ tag, props }) => {
+            const element = document.createElement(tag);
             Object.entries(props || {}).forEach(([name, value]) => {
-              if (value !== null && value !== undefined) replacement.setAttribute(name, typeof value === "string" ? value : JSON.stringify(value));
+              if (!/^[a-zA-Z][a-zA-Z0-9:_-]*$/.test(name)) {
+                throw new Error(`invalid component input attribute '${name}'`);
+              }
+              if (value !== null && value !== undefined) {
+                element.setAttribute(name, typeof value === "string" ? value : JSON.stringify(value));
+              }
             });
-            document.body.appendChild(replacement);
+            document.body.appendChild(element);
+            return true;
+          }, { tag: step.tag, props: step.props });
+          host = step.tag;
+          await readyComponent(page, host);
+          await settleFrames(page);
+        } else if (["pointer_press", "pointer_move_by", "pointer_release", "pointer_cancel",
+          "pointer_lose_capture", "assert_pointer_capture_released"].includes(step.operation)) {
+          if (!host && step.operation !== "assert_pointer_capture_released") {
+            throw new Error(`${origin}: mount a component before using ${step.operation}`);
           }
-        }, { tag: targetTag, operation: step.operation, nextTag: step.tag, props: step.props });
-        if (step.operation === "unmount") {
-          detachedHost = host;
-          host = null;
-          if (activePointer) {
+          if (step.operation === "pointer_press") {
+            if (activePointer) throw new Error(`${origin}: release or cancel the current test pointer first`);
+            const target = page.locator(host).locator(step.selector);
+            const box = await target.boundingBox();
+            if (!box) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
+            const x = Math.round(box.x + box.width / 2);
+            const y = Math.round(box.y + box.height / 2);
+            await page.mouse.move(x, y);
+            await page.mouse.down();
+            const pointer = await page.evaluate(() => window.__mochiTestPointer);
+            if (!pointer) throw new Error(`${origin}: browser did not report pointerdown`);
+            activePointer = { id: pointer.id, x, y };
             await waitForPointerIdle(page);
+          } else if (step.operation === "pointer_move_by") {
+            if (!activePointer) throw new Error(`${origin}: pointer_move_by requires pointer_press`);
+            const steps = Number(step.steps);
+            if (!Number.isInteger(steps) || steps < 1 || steps > 256) {
+              throw new Error(`${origin}: pointer_move_by steps must be between 1 and 256`);
+            }
+            activePointer.x += Number(step.x);
+            activePointer.y += Number(step.y);
+            await page.mouse.move(activePointer.x, activePointer.y, { steps });
+            await waitForPointerIdle(page);
+          } else if (step.operation === "pointer_release") {
+            if (!activePointer) throw new Error(`${origin}: pointer_release requires pointer_press`);
+            await page.mouse.up();
+            activePointer = null;
+            await waitForPointerIdle(page);
+          } else if (step.operation === "pointer_cancel") {
+            if (!activePointer) throw new Error(`${origin}: pointer_cancel requires pointer_press`);
+            await page.evaluate(({ id, x, y }) => {
+              const pointer = window.__mochiTestPointer;
+              if (!pointer || pointer.id !== id || !pointer.target || !pointer.target.isConnected) {
+                throw new Error("test pointer target is no longer connected");
+              }
+              pointer.target.dispatchEvent(new PointerEvent("pointercancel", {
+                bubbles: true, composed: true, pointerId: id, pointerType: "mouse",
+                isPrimary: true, buttons: 0, clientX: x, clientY: y,
+              }));
+            }, activePointer);
+            await page.mouse.up();
+            activePointer = null;
+            await waitForPointerIdle(page);
+          } else if (step.operation === "pointer_lose_capture") {
+            if (!activePointer) throw new Error(`${origin}: pointer_lose_capture requires pointer_press`);
+            await page.evaluate((id) => {
+              const pointer = window.__mochiTestPointer;
+              if (!pointer || pointer.id !== id || !pointer.target ||
+                  typeof pointer.target.releasePointerCapture !== "function" ||
+                  !pointer.target.hasPointerCapture(id)) {
+                throw new Error("test pointer has no live capture to release");
+              }
+              pointer.target.releasePointerCapture(id);
+            }, activePointer.id);
+            await waitForPointerIdle(page);
+            const pointerId = activePointer.id;
+            await page.mouse.up();
+            activePointer = null;
+            await waitForPointerIdle(page);
+            const observed = await page.evaluate((id) => window.__mochiTestLostCaptures.includes(id), pointerId);
+            if (!observed) throw new Error(`${origin}: browser did not deliver lostpointercapture`);
+          } else {
             const captured = await page.evaluate(() => {
               const pointer = window.__mochiTestPointer;
               return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
                 pointer.target.hasPointerCapture(pointer.id));
             });
-            if (captured) throw new Error(`${origin}: unmount left pointer capture active`);
-            await page.mouse.up();
-            activePointer = null;
+            if (captured) throw new Error(`${origin}: pointer capture remained active`);
           }
-        }
-        else {
-          host = step.tag || detachedHost;
-          detachedHost = null;
-          await page.evaluate(async (tag) => { await document.querySelector(tag)._mochiReady; }, host);
-        }
-      } else {
-        throw new Error(`${origin}: unsupported Ruby test operation '${step.operation}'`);
-      }
+        } else if (["click", "fill", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
+          if (!host) throw new Error(`${origin}: mount a component before using ${step.operation}`);
+          const result = await page.evaluate(({ tag, step }) => {
+            const element = document.querySelector(tag);
+            const target = (() => {
+              const parts = step.selector.split(/\s*>>>\s*/).filter(Boolean);
+              let scope = element.shadowRoot;
+              let found = null;
+              for (let index = 0; index < parts.length; index += 1) {
+                found = scope && scope.querySelector(parts[index]);
+                if (!found) return null;
+                if (index + 1 < parts.length) scope = found.shadowRoot;
+              }
+              return found;
+            })();
+            if (!target) return { missing: true };
+            if (step.operation === "click") {
+              target.click();
+              return { ok: true };
+            }
+            if (step.operation === "fill") {
+              if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+                    target instanceof HTMLSelectElement)) {
+                return { invalid: "target is not a form control" };
+              }
+              target.value = step.value;
+              target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+              target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+              return { ok: true };
+            }
+            if (step.operation === "assert_attribute" || step.operation === "assert_no_attribute") {
+              return { present: target.hasAttribute(step.name), actual: target.getAttribute(step.name) };
+            }
+            if (step.operation === "assert_value") return { actual: target.value };
+            const actual = (target.innerText || target.textContent || "").trim();
+            return { actual };
+          }, { tag: host, step });
 
-      const runtimeErrors = await page.evaluate(() => window.__mochiTestErrors || []);
-      if (runtimeErrors.length > 0) {
-        const error = runtimeErrors[0];
-        const where = error.source ? ` (${error.source})` : "";
-        const message = error.message || JSON.stringify(error);
-        if (!expectedError || (expectedError && !message.includes(expectedError))) {
-          throw new Error(`${origin}: Mochi runtime error${where}: ${message}`);
+          if (result.missing) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
+          if (result.invalid) throw new Error(`${origin}: ${result.invalid}`);
+          if (step.operation === "assert_attribute" && (!result.present || result.actual !== step.expected)) {
+            throw new Error(`${origin}: expected attribute '${step.name}' to equal '${step.expected}', got ${result.present ? `'${result.actual}'` : "absent"}`);
+          }
+          if (step.operation === "assert_no_attribute" && result.present) {
+            throw new Error(`${origin}: expected attribute '${step.name}' to be absent, got '${result.actual}'`);
+          }
+          if (step.operation === "assert_value" && result.actual !== step.expected) {
+            throw new Error(`${origin}: expected value '${step.expected}' at '${step.selector}', got '${result.actual}'`);
+          }
+          if (step.operation === "assert_text" && result.actual !== step.expected) {
+            throw new Error(`${origin}: expected '${step.expected}' at '${step.selector}', got '${result.actual}'`);
+          }
+        } else if (step.operation === "select_files") {
+          if (!host) throw new Error(`${origin}: mount a component before selecting files`);
+          const files = syntheticFiles(step);
+          const target = page.locator(host).locator(step.selector);
+          await target.setInputFiles(files.map((file) => ({
+            name: file.name,
+            mimeType: file.type,
+            lastModified: file.lastModified,
+            buffer: file.bytes,
+          })));
+        } else if (step.operation === "drop_files") {
+          if (!host) throw new Error(`${origin}: mount a component before dropping files`);
+          const files = syntheticFiles(step);
+          const accepted = await dispatchFileDrop(page, host, step.selector, files);
+          if (!accepted) throw new Error(`${origin}: Mochi did not accept the synthetic file dragover`);
+        } else if (step.operation === "drag") {
+          if (!host) throw new Error(`${origin}: mount a component before dragging`);
+          await page.locator(host).locator(step.source).dragTo(page.locator(host).locator(step.target));
+        } else if (step.operation === "assert_state") {
+          if (!host) throw new Error(`${origin}: mount a component before asserting state`);
+          const actual = await page.locator(host).locator(step.selector).innerText();
+          if (actual.trim() !== step.expected) {
+            throw new Error(`${origin}: expected state '${step.expected}', got '${actual.trim()}'`);
+          }
+        } else if (step.operation === "wait") {
+          await page.waitForFunction(() => {
+            const stats = window.MochiLoader.debugStats();
+            return stats.pendingFetches === 0 && stats.activeFetches === 0 &&
+              stats.pendingHostRequests === 0 && stats.pendingPointerMoves === 0;
+          }, null, { timeout: 5000 });
+          await page.evaluate(() => new Promise((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+          }));
+        } else if (step.operation === "unmount" || step.operation === "remount") {
+          if (step.operation === "unmount" && !host) throw new Error(`${origin}: mount a component before unmount`);
+          if (step.operation === "remount" && !host && !detachedHost && !step.tag) throw new Error(`${origin}: remount requires a prior unmount or component tag`);
+          const targetTag = host || detachedHost || step.tag;
+          await page.evaluate(({ tag, operation, nextTag, props }) => {
+            const current = document.querySelector(tag);
+            if (current) current.remove();
+            if (operation === "remount") {
+              const replacement = document.createElement(nextTag || tag);
+              Object.entries(props || {}).forEach(([name, value]) => {
+                if (value !== null && value !== undefined) replacement.setAttribute(name, typeof value === "string" ? value : JSON.stringify(value));
+              });
+              document.body.appendChild(replacement);
+            }
+          }, { tag: targetTag, operation: step.operation, nextTag: step.tag, props: step.props });
+          if (step.operation === "unmount") {
+            detachedHost = host;
+            host = null;
+            if (activePointer) {
+              await waitForPointerIdle(page);
+              const captured = await page.evaluate(() => {
+                const pointer = window.__mochiTestPointer;
+                return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
+                  pointer.target.hasPointerCapture(pointer.id));
+              });
+              if (captured) throw new Error(`${origin}: unmount left pointer capture active`);
+              await page.mouse.up();
+              activePointer = null;
+            }
+          }
+          else {
+            host = step.tag || detachedHost;
+            detachedHost = null;
+            await readyComponent(page, host);
+            await settleFrames(page);
+          }
+        } else {
+          throw new Error(`${origin}: unsupported Ruby test operation '${step.operation}'`);
         }
-        expectedError = null;
-      } else if (expectedError) {
-        throw new Error(`${origin}: expected Mochi error containing '${expectedError}', but no error occurred`);
+      } catch (error) {
+        actionError = error;
       }
-      if (errors.length > 0) throw new Error(`${origin}: browser error: ${errors[0]}`);
+      assertDiagnostics(await drainDiagnostics(), origin, expectedError, actionError);
+      expectedError = null;
+      expectationOrigin = null;
     }
+    if (expectedError !== null) throw new Error(`${expectationOrigin}: expect_error must be followed by an action`);
+    await settleFrames(page);
+    assertDiagnostics(await drainDiagnostics(), origin);
     console.log(`PASS [${browserName}] ${testCase.name}`);
     return true;
+  } catch (error) {
+    if (error.message.startsWith(`${origin}:`)) throw error;
+    throw new Error(`${origin}: ${error.message}`);
   } finally {
-    await page.close();
+    if (page) await page.close();
   }
 }
 
@@ -465,10 +524,13 @@ async function main() {
     });
   });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
   let failed = false;
   try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}`;
     for (const browserName of browserList.split(",").map((name) => name.trim()).filter(Boolean)) {
       const browserType = playwright[browserName];
@@ -494,14 +556,14 @@ async function main() {
       }
     }
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
   }
   if (failed) process.exitCode = 1;
 }
 
-if (process.env.MOCHI_TEST_RUNNER_LIBRARY === "1") {
-  module.exports = { syntheticFiles };
-} else {
+module.exports = { syntheticFiles, collectDiagnostics, assertDiagnostics, runCase };
+
+if (require.main === module && process.env.MOCHI_TEST_RUNNER_LIBRARY !== "1") {
   main().catch((error) => {
     console.error(error.stack || error);
     process.exitCode = 1;
