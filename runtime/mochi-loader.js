@@ -3390,18 +3390,22 @@
     return result;
   }
 
+  function eventDataset(node) {
+    var dataset = Object.create(null);
+    if (node && node.dataset) {
+      Object.keys(node.dataset).forEach(function (key) {
+        if (key.indexOf("mochi") !== 0) dataset[key] = node.dataset[key];
+      });
+    }
+    return dataset;
+  }
+
   function eventPayload(target, event) {
     if (event && event.__mochiChildEvent) {
       return event.detail === undefined || event.detail === null ? {} : event.detail;
     }
     var source = event && event.target && event.target.nodeType === 1 ? event.target : target;
-    var dataset = {};
-    if (source && source.dataset) {
-      Object.keys(source.dataset).forEach(function (key) {
-        if (key.indexOf("mochi") === 0) return;
-        dataset[key] = source.dataset[key];
-      });
-    }
+    var dataset = eventDataset(source);
 
     function axis(name) {
       return event && typeof event[name] === "number" ? event[name] : 0;
@@ -3438,7 +3442,9 @@
       target: targetInfo,
       current_target: currentTargetInfo,
       composed_path: composedPathInfo(event, source),
-      dataset: dataset
+      dataset: dataset,
+      target_dataset: dataset,
+      current_target_dataset: source === target ? dataset : eventDataset(target)
     };
   }
 

@@ -48,7 +48,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **supported, repaired by E2.S2:** both original probes render `Open record` with the `ghost` class and the expected aria-label. The nested form adds both quote styles, nested interpolation, escaped quotes, typed props, event arguments, literal braces/entities, and adversarial labels that remain text. Malformed expressions retain authored source diagnostics. | E2.S2 |
 | `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, completed by E3.S1:** shared fragment lowering defers row geometry; ordinary SVG attributes now stay inert during parsing, compound values resolve together, and conditional scalar geometry initializes before insertion. `EditableGraphRoot` adds four keyed nodes/three paths, synchronous insertion audits, exact changed-path write counts, identity across reorder/delete/reinsert, branch recreation, canonical `viewBox`/`refX`, and marker references. SVG custom-element children remain deferred. | E2.S1 shared fix; E3.S1 graph |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **supported:** `07-binding-handler` observes `needle:a` on input and `needle:b` on select change. Shared Ruby scenarios cover both attribute orders, checkbox Booleans, current row arguments, property resets, branch recreation, and remount. `07-binding-failure` proves setter exhaustion blocks the callback and later events recover. | E2.S3 |
-| `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
+| `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **supported, completed by E3.S2:** `dataset` retains target semantics; `target_dataset` names that snapshot explicitly and `current_target_dataset` exposes bound-handler data. Graph nodes and inspector table rows select identically from surfaces and descendants. Report 08 covers source-located oversized target/handler payload rejection and subsequent recovery under the default limit. | E3.S2 |
 | `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
 | `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported:** `10-next` renders `alpha,beta`; E1.S3 adds nested `each`, `map` with `next value`, lexical-local updates, and continuation after iteration across helper/component contexts. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; E1.S3 covers helper parity in 03 and rejects unsupported nonlocal control flow before mounting. | E1.S2, E1.S3 |
 | `11-boolean-typecheck.md` | Documented `prop :enabled, Boolean, default: false` works in both runtime and typecheck. | **supported:** `11-boolean`, the typed Boolean event probe, and the shared form build with `--typecheck`. Static/conditional/repeated child props retain false values; wrong Boolean event payloads are rejected before parent delivery. Genuine Sorbet errors remain covered. | E2.S4 |
@@ -568,4 +568,83 @@ Loader SHA-256:
 WASM SHA-256 remains
 `c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
 Per-probe source, descriptor, bytecode, and bundle identities remain attached
-to browser reports. Next story: E3.S2 — explicit target and handler identity.
+to browser reports. At E3.S1 completion, E3.S2 was next (delivered below).
+
+## E3.S2 — Explicit native event target and handler datasets
+
+Native event normalization now exposes `target_dataset` and
+`current_target_dataset`. The existing `dataset` remains the target snapshot.
+The current target is the element bearing the bound handler, supplied by
+Mochi's existing dispatch path; it is not the delegated shadow-root listener
+and is not inferred from a nearest dataset-bearing ancestor. All maps use
+string dataset values, DOM dataset key casing, and the existing internal
+`mochi*` filter. The temporary JavaScript map has no prototype, so a literal
+`data-__proto__` key stays plain data through JSON transport.
+
+Snapshots are captured before queued Ruby delivery. Removing a descendant
+after dispatch does not change its captured values; removing the bound node
+before delivery suppresses that event. Open and closed shadow tests preserve
+browser retargeting: outside the nested shadow root, the target map comes from
+the child host and the current-target map comes from the bound outer element.
+Composed-path entries stay label-only. Typed child events return their declared
+payload before normalization and receive no injected native metadata.
+
+The inspector now uses native table rows with a bound `select_record($event)`
+handler and nested buttons/message labels. Keyboard activation of those buttons
+still selects the row. The graph binds `select_node($event)` to each keyed SVG
+group; circle and text descendants select the same stable node ID. Both read
+`current_target_dataset` directly, without path scans or added selection IDs.
+Ruby scenarios cover descendant selection after paging, geometry changes, and
+branch recreation. Framework assertions also dispatch on the bound surface and
+perform native mouse clicks on descendants.
+
+The report-08 fixture checks both legacy and explicit target values separately
+from handler identity. Target-only and handler-only 9,000-character padding
+both exceed the existing **8,192-byte** JSON argument envelope. The VM rejects
+them before the handler runs; framework assertions verify exact resource
+counts, authored `select_row` location, profile fingerprint, unchanged call
+count, and successful later clicks. Each expected negative diagnostic is scoped
+to its failing operation. No capacity or VM change was needed.
+
+Ruby graph scenarios exposed a test-runner omission: SVG elements have no
+native `.click()` method. The runner now dispatches a bubbling, cancelable,
+composed click for elements without that method, retaining native HTML click
+activation. Separate native browser tests exposed WebKit driver bounding boxes
+that omit SVG text x/baseline offsets. Those checks use the browser's actual
+client rectangle, assert the point hits the label, and send real mouse input;
+they do not force clicks or change application geometry.
+
+Verification on 2026-11-13:
+
+- `task runtime:test`: **201 tests passed**, no skips. New cases cover
+  distinct datasets, internal filtering, special property names, snapshot
+  timing, detached source/handler nodes, and open/closed shadow retargeting.
+  Existing exact typed-child-payload assertions still pass.
+- `task specs`: **552 examples passed**, no failures/errors/pending.
+- Final `task framework:e2e`: **354 checks passed** across Chromium, Firefox,
+  WebKit: 294 main framework/UI checks (including 198 UI/workflow checks)
+  plus 60 asset/install/evolved-feature checks. The earlier WebKit native
+  label test failed on driver coordinates; browser hit-tested coordinates
+  now pass without forcing the event. SVG Ruby scenarios use the rebuilt
+  compiler's embedded runner.
+- `task gvm:test`: **215 cases / 20,943 assertions passed**, no skips/errors.
+- Payload gate (`ruby scripts/payload_check.rb`): passed. Loader adds
+  **203 raw / 49 gzip bytes**, becoming **221,339 / 46,950 bytes**. Core is
+  **497,102 raw / 160,327 gzip bytes**. Baselines increase by exactly that
+  delta; WASM, JS glue, optional downloads, and capacities are unchanged.
+- `task compile-time:test` passed. `task compile-time:framework`: all
+  **15 builds passed**, **206.5–214.8 ms**, below the unchanged 1,000 ms limit.
+  This run followed other compiler uses; it makes no repair claim for the
+  historical first-launch outlier.
+- JavaScript/Ruby syntax, documentation links, and whitespace checks passed.
+  Read-only context and final review found no remaining issues. No commits
+  were made, and no GVM or external application source changed.
+
+Compiler SHA-256:
+`476ae7242ad0284ee04fe398d845e0efaf8c532d8bdcc9358049e8b6b7fc487c`.
+Loader SHA-256:
+`61cfe17dae6135d2caff66082fc90ede6f848a68d70b3029ec6269d7a103ac94`.
+WASM SHA-256 remains
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe artifact identities remain attached to browser reports.
+Next story: E3.S3 — graph editing and bounded history across repeated changes.

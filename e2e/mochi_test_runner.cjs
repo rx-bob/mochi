@@ -378,7 +378,8 @@ async function runCase(browser, browserName, baseUrl, testCase) {
               return { focused: active === target };
             }
             if (step.operation === "click") {
-              target.click();
+              if (typeof target.click === "function") target.click();
+              else target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
               return { ok: true };
             }
             if (step.operation === "fill") {

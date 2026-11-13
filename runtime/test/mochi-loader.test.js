@@ -5733,6 +5733,8 @@ test("zero-argument handlers receive the normalized event when Ruby requires one
     current_target: { tag: "input", id: "", ref: "", component: "" },
     composed_path: payload.composed_path,
     dataset: {},
+    target_dataset: {},
+    current_target_dataset: {},
   });
   assert.equal(payload.composed_path[0].tag, "input");
   assert.ok(payload.composed_path.some((node) => node.tag === "event-auto-check"));
@@ -6085,6 +6087,8 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
       current_target: { tag: "input", id: "", ref: "", component: "" },
       composed_path: [{ tag: "input", id: "", ref: "", component: "" }],
       dataset: {},
+      target_dataset: {},
+      current_target_dataset: {},
     }],
   });
 
@@ -6877,5 +6881,71 @@ for (const conditional of [false, true]) {
       proto.setAttribute = originalSet;
       window.Node.prototype.insertBefore = originalInsert;
     }
+  });
+}
+
+test("event datasets snapshot distinct target and bound handler data, including detached descendants", async () => {
+  const component = {
+    tag_name: "dataset-check", class_name: "DatasetCheck", chi_file: "dataset-check.chi", css: "", bindings: [],
+    html_template: '<section data-row-id="row-7" data-mochi-ref="row" data-mochi-private="hidden" data-mochi-click="choose"><button data-part="label" data-mochi-private="hidden" data-__proto__="plain">Choose</button></section>',
+    events: [{ path: [0], event: "click", method_sym: "choose", args: [] }],
+  };
+  const { log } = await setup([component]);
+  log.methods.add("choose");
+  log.requiredArgs.set("choose", 1);
+  const element = document.createElement("dataset-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const bound = element.shadowRoot.querySelector("section");
+  const child = bound.querySelector("button");
+  child.click();
+  child.dataset.part = "changed";
+  bound.dataset.rowId = "changed";
+  child.remove();
+  await new Promise(resolve => setImmediate(resolve));
+  const payload = log.dispatchedArgs.at(-1).args[0];
+  assert.deepEqual(payload.dataset, JSON.parse('{"part":"label","__proto__":"plain"}'));
+  assert.deepEqual(payload.target_dataset, payload.dataset);
+  assert.deepEqual(payload.current_target_dataset, { rowId: "row-7" });
+  assert.equal(payload.target.tag, "button");
+  assert.equal(payload.current_target.tag, "section");
+  assert.ok(payload.composed_path.every(node => !Object.hasOwn(node, "dataset")));
+  // Explicit dispatch can receive an already detached source; the bound node
+  // still owns delivery and the snapshot is plain data, with a fallback path.
+  element._dispatch(bound, { type: "click", target: child });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(log.dispatchedArgs.at(-1).args[0].target_dataset.part, "changed");
+  assert.deepEqual(log.dispatchedArgs.at(-1).args[0].current_target_dataset, { rowId: "changed" });
+  const delivered = log.dispatchedArgs.length;
+  bound.click();
+  bound.remove();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(log.dispatchedArgs.length, delivered, "detached bound handlers do not receive queued events");
+});
+
+for (const mode of ["open", "closed"]) {
+  test(`event datasets respect browser retargeting across ${mode} shadow roots`, async () => {
+    const component = {
+      tag_name: "shadow-dataset-check", class_name: "ShadowDatasetCheck", chi_file: "shadow-dataset-check.chi", css: "", bindings: [],
+      html_template: '<section data-id="handler" data-mochi-click="choose"><label-host data-id="host" data-mochi-private="hidden"></label-host></section>',
+      events: [{ path: [0], event: "click", method_sym: "choose", args: [] }],
+    };
+    const { dom, log } = await setup([component]);
+    log.methods.add("choose");
+    log.requiredArgs.set("choose", 1);
+    const element = document.createElement("shadow-dataset-check");
+    document.body.appendChild(element);
+    await element._mochiReady;
+    const shadow = element.shadowRoot.querySelector("label-host").attachShadow({ mode });
+    shadow.innerHTML = '<button data-id="inner">Inner</button>';
+    shadow.querySelector("button").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, composed: true }));
+    await new Promise(resolve => setImmediate(resolve));
+    const payload = log.dispatchedArgs.at(-1).args[0];
+    assert.deepEqual(payload.dataset, { id: "host" });
+    assert.deepEqual(payload.target_dataset, payload.dataset);
+    assert.deepEqual(payload.current_target_dataset, { id: "handler" });
+    assert.equal(payload.target.tag, "label-host");
+    assert.equal(payload.current_target.tag, "section");
+    assert.equal(payload.composed_path.some(node => node.tag === "button"), mode === "open");
   });
 }

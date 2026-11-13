@@ -9,6 +9,7 @@ class EditableGraphRoot
   @width
   @height
   @arrow_size
+  @selected_id
 
   def initialize
     @nodes = [
@@ -24,6 +25,7 @@ class EditableGraphRoot
     @width = 400
     @height = 220
     @arrow_size = 8
+    @selected_id = ""
   end
 
   def edge(id, from, to, order)
@@ -42,6 +44,10 @@ class EditableGraphRoot
     from = node_for(edge["from"])
     to = node_for(edge["to"])
     "M #{from['x']} #{from['y']} L #{to['x']} #{to['y']}"
+  end
+
+  def select_node(event)
+    @selected_id = event["current_target_dataset"]["node"]
   end
 
   def move_node
@@ -86,6 +92,7 @@ class EditableGraphRoot
   def html
     %Q{
       <h1>Editable graph</h1>
+      <p>Selected <span class="selected-id">{@selected_id}</span></p>
       <p><span class="node-count">{@nodes.length}</span> nodes; <span class="edge-count">{@edges.length}</span> edges</p>
       <button class="move" onclick="{move_node}">Move Review</button>
       <button class="reorder" onclick="{reorder_edges}">Reverse edges</button>
@@ -104,9 +111,9 @@ class EditableGraphRoot
             </g>
             <g class="nodes">
               {each @nodes as node, key: node["id"]}
-                <g class="node" data-node="{node['id']}" transform="translate({node['x']} {node['y']})">
-                  <circle r="{node['radius']}" fill="white" stroke="currentColor"></circle>
-                  <text x="18" y="4">{node["label"]}</text>
+                <g class="node" data-node="{node['id']}" onclick="{select_node($event)}" transform="translate({node['x']} {node['y']})">
+                  <circle data-part="shape" r="{node['radius']}" fill="white" stroke="currentColor"></circle>
+                  <text data-part="label" x="18" y="4">{node["label"]}</text>
                 </g>
               {end}
             </g>

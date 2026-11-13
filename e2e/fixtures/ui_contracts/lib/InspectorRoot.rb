@@ -41,7 +41,8 @@ class InspectorRoot
     refresh_page
   end
 
-  def select_record(id)
+  def select_record(event)
+    id = event["current_target_dataset"]["id"]
     @selected_id = id
     @records.each do |record|
       if record["id"] == id
@@ -59,14 +60,14 @@ class InspectorRoot
       <p>Page <span class="page">{@page + 1}</span>; visible <span class="visible-count">{@visible_records.length}</span></p>
       <button class="previous" onclick="{previous_page}">Previous</button>
       <button class="next" onclick="{next_page}">Next</button>
-      <ol>
+      <table><tbody>
         {each @visible_records as record, key: record["id"]}
-          <li class="record" data-id="{record['id']}">
-            <button onclick="{select_record(record['id'])}"><span class="message">{record["message"]}</span></button>
-            <span class="severity">{record["severity"]}</span>
-          </li>
+          <tr class="record" data-id="{record['id']}" onclick="{select_record($event)}">
+            <td><button><span class="message" data-part="message">{record["message"]}</span></button></td>
+            <td class="severity">{record["severity"]}</td>
+          </tr>
         {end}
-      </ol>
+      </tbody></table>
       <p>Selected <span class="selected-id">{@selected_id}</span></p>
       <p class="selected-detail">{@selected_detail}</p>
     }

@@ -28,6 +28,20 @@ remove that subscriber's pending deliveries. On exhaustion, Mochi clears the
 offending chain's queued work, reports one source-located event error, and
 continues with independent queued publications.
 
+Native handler arguments, including `dataset`, `target_dataset`, and
+`current_target_dataset`, share the existing `host_event_args_bytes` limit
+(default **8,192 bytes** for the encoded UTF-8 JSON argument envelope). The
+legacy and explicit target maps serialize separately, so both copies count;
+row context and any other arguments count too. Composed-path entries remain
+small labels, with no dataset copied onto each path entry.
+
+An oversized target or handler dataset is rejected before the Ruby handler
+runs with `ABI event argument bytes exhausted`, requested/used/limit counts,
+the authored handler location, and the capacity profile fingerprint. Nothing
+is truncated and no limit is raised automatically. A subsequent valid click
+runs normally. The report-08 Ruby/browser probe covers both target-only and
+current-target-only overflow under the default profile.
+
 ## Failure report
 
 The VM keeps the first capacity rejection from an entry. It reports the

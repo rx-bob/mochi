@@ -43,3 +43,22 @@ Mochi::Test.test("initially closed graph mounts current geometry without placeho
   assert_attribute ".scene", "transform", "translate(10 5)"
   assert_attribute "[data-node='b'] circle", "r", "13"
 end
+
+Mochi::Test.test("graph node surfaces and nested labels select through handler data") do
+  mount "editable-graph-root"
+  click "[data-node='b'] circle"
+  assert_text ".selected-id", "b"
+  click "[data-node='c'] text"
+  assert_text ".selected-id", "c"
+  click "[data-node='b'] text"
+  assert_text ".selected-id", "b"
+  click ".move"
+  click "[data-node='c'] circle"
+  assert_text ".selected-id", "c"
+  click "[data-node='b'] text"
+  assert_text ".selected-id", "b"
+  click ".toggle"
+  click ".toggle"
+  click "[data-node='a'] text"
+  assert_text ".selected-id", "a"
+end

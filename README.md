@@ -709,6 +709,8 @@ def on_key(event)
   event[:target][:tag]              # "button"
   event[:target_ref]                # "modal_close"
   event[:current_target][:id]       # handler element id
+  event[:target_dataset]            # data-* on the browser event target
+  event[:current_target_dataset]    # data-* on the bound handler element
   event[:composed_path].map { |node| node[:tag] }
 end
 ```
@@ -716,7 +718,19 @@ end
 The payload includes `target`, `current_target`, `target_ref`, `target_tag`,
 `current_target_ref`, `current_target_tag`, `current_target_id`, and
 `composed_path`. Path entries contain only `tag`, `id`, `ref`, and `component`
-labels.
+labels. `dataset` and `target_dataset` contain the same target data;
+`current_target_dataset` contains data from the element bearing the handler.
+For a row handler, use `event["current_target_dataset"]["id"]` to select the row
+even when a nested label receives the click. These are snapshots of string
+values with DOM dataset key casing (`data-row-id` becomes `rowId`); internal
+`mochi*` keys are filtered. No nearest-ancestor dataset search occurs.
+
+Across a nested shadow boundary, the target follows browser retargeting and
+may be the child host. The current target is still the bound handler element,
+not the delegated shadow-root listener. `composed_path` remains label-only.
+Typed child events retain exactly their declared payload; they receive none
+of this native DOM metadata. Dataset copies count toward the existing event
+argument byte limit; see [capacity failures](references/CAPACITY_CONTRACT.md).
 
 Static elements can declare a component-local name with `ref`:
 

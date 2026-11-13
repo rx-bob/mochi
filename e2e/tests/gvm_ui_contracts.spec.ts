@@ -282,9 +282,14 @@ for (const name of runtimeProbes) {
       } else if (name === "08-event-dataset") {
         await root.locator("span").click();
         await expect(root.locator(".selected")).toHaveText(""); // target is span, intentionally empty
-        await expect(root.locator(".current")).toHaveText(""); // E3.S2 must expose handler data
+        await expect(root.locator(".target")).toHaveText("");
+        await expect(root.locator(".part")).toHaveText("label");
+        await expect(root.locator(".current")).toHaveText("log-001");
         await root.locator("tr").dispatchEvent("click");
         await expect(root.locator(".selected")).toHaveText("log-001");
+        await expect(root.locator(".target")).toHaveText("log-001");
+        await expect(root.locator(".part")).toHaveText("");
+        await expect(root.locator(".current")).toHaveText("log-001");
       } else if (name === "09-wheel") {
         await root.locator("div").dispatchEvent("wheel", { deltaX: 4, deltaY: 12 });
         await expect(root.locator("output")).toHaveText(":"); // E5.S2 oracle: 4:12
@@ -636,3 +641,85 @@ for (const initiallyOpen of [true, false]) {
     }, `<editable-graph-root open="${initiallyOpen}"></editable-graph-root>`);
   });
 }
+
+test("Ruby event identity and envelope recovery scenarios @ui-inspector @ui-graph", async ({ browserName }) => {
+  const output = runRubyProject(path.join(fixture, "probes/08-event-dataset"), browserName);
+  expect(output).toContain(`PASS [${browserName}] descendant clicks keep target data separate`);
+});
+
+test("target and handler dataset overflow reports source and permits later clicks @ui-inspector @ui-graph", async ({ page }, testInfo) => {
+  const source = path.join(fixture, "probes/08-event-dataset");
+  const lines = fs.readFileSync(path.join(source, "lib/ProbeRoot.rb"), "utf8").split("\n");
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(source, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, source, bundle);
+    await page.goto(baseURL);
+    const root = page.locator("probe-root");
+    let calls = 0;
+    for (const selector of [".oversize-target", ".oversize-handler"]) {
+      await root.locator(selector).click();
+      await root.locator("span").click();
+      await expect(root.locator(".calls")).toHaveText(String(calls));
+      const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+      expect(errors).toHaveLength(1);
+      expect(errors[0].method).toBe("select_row");
+      expect(errors[0].message).toMatch(/ABI event argument bytes exhausted \(requested \d+, used 0 of 8192\)/);
+      expect(errors[0].source).toBe(`lib/ProbeRoot.rb:${lines.indexOf("  def select_row(event)") + 1}`);
+      expect(errors[0].capacityProfile).toMatch(/^[a-f0-9]{64}$/);
+      await settleConsole();
+      for (const message of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) {
+        expect(message).toContain("ABI event argument bytes exhausted");
+      }
+      await root.locator(".reset").click();
+      await root.locator("span").click();
+      await expect(root.locator(".calls")).toHaveText(String(++calls));
+      await expect(root.locator(".current")).toHaveText("log-001");
+      await expect(root.locator(".selected")).toHaveText("");
+    }
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<probe-root></probe-root>");
+});
+
+test("graph and inspector select bound identities from surfaces and descendants @ui-inspector @ui-graph", async ({ page }, testInfo) => {
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(fixture, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, fixture, bundle);
+    await page.goto(baseURL);
+    const graph = page.locator("editable-graph-root");
+    const inspector = page.locator("inspector-root");
+    await expect(graph.locator(".node")).toHaveCount(4);
+    await expect(inspector.locator("tr.record")).toHaveCount(12);
+    for (const [root, selector, id, other] of [
+      [graph, '[data-node="b"]', "b", '[data-node="c"] circle'],
+      [inspector, '[data-id="record-3"]', "record-3", '[data-id="record-4"] button'],
+    ] as const) {
+      // Direct bound-node event distinguishes surface data from a descendant's
+      // data. Native descendant clicks then exercise actual browser hit testing.
+      await root.locator(selector).dispatchEvent("click");
+      await expect(root.locator(".selected-id")).toHaveText(id);
+      await root.locator(other).click();
+      const label = root.locator(`${selector} ${id === "b" ? "text" : ".message"}`);
+      await label.scrollIntoViewIfNeeded();
+      // WebKit's driver bounding box omits SVG text x/baseline offsets. Use
+      // the browser's client rect and verify the hit before native mouse input.
+      const point = await label.evaluate(node => {
+        const rect = node.getBoundingClientRect();
+        const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+        if ((node.getRootNode() as ShadowRoot).elementFromPoint(x, y) !== node) {
+          throw new Error("label is not the native click target");
+        }
+        return { x, y };
+      });
+      await page.mouse.click(point.x, point.y);
+      await expect(root.locator(".selected-id")).toHaveText(id);
+      expect(await root.locator(selector).getAttribute("id")).toBeNull();
+    }
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<editable-graph-root></editable-graph-root><inspector-root></inspector-root>");
+});

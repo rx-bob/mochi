@@ -35,6 +35,23 @@ recreation without raw markup. This does not add SVG custom-element
 composition, slots, or automatic deep mutation observation. Replace root
 state to publish nested model changes.
 
+## Native event identity
+
+Native handlers receive plain hashes. `event["dataset"]` retains target data;
+`event["target_dataset"]` names the same snapshot explicitly.
+`event["current_target_dataset"]` identifies the element carrying the bound
+handler, even when a nested label, SVG shape, or table cell receives the click.
+All dataset values are strings; keys use DOM dataset casing, with internal
+`mochi*` keys filtered. Applications need no ancestor scan or artificial DOM ID.
+
+The target follows browser shadow retargeting. A handler outside a nested
+shadow root sees the child host's dataset, while its own bound element supplies
+current-target data. Path entries retain only their existing labels. Typed child
+events deliver their declared payload without added native event metadata.
+Snapshots are taken before queued Ruby delivery; removing the bound element
+before delivery drops that event. Dataset values share the existing bounded
+[argument envelope and recovery contract](CAPACITY_CONTRACT.md).
+
 ## Boolean props, child events, and form controls
 
 A component can declare `prop :required, Boolean, required: true`,

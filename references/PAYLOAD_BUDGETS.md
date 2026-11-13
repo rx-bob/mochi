@@ -57,13 +57,25 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 496,899 | 160,278 | 3 |
-| Minimal initial | 500,577 | 161,984 | 7 |
-| Feature initial | 501,389 | 162,169 | 7 |
+| Core runtime | 497,102 | 160,327 | 3 |
+| Minimal initial | 500,780 | 162,033 | 7 |
+| Feature initial | 501,592 | 162,218 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 515,625 | 166,770 | 11 |
-| Network initial | 505,712 | 163,482 | 8 |
-| Network total | 505,712 | 163,482 | 8 |
+| Feature total | 515,828 | 166,819 | 11 |
+| Network initial | 505,915 | 163,531 | 8 |
+| Network total | 505,915 | 163,531 | 8 |
+
+### Native event identity cost
+
+UI-contract story E3.S2 adds **203 raw / 49 gzip bytes** to the loader,
+from 221,136 / 46,901 to 221,339 / 46,950. Native events expose explicit target
+and bound-handler dataset snapshots through the existing filtered path.
+Legacy target data remains compatible; typed child payloads are unchanged.
+This is core event normalization and requires no optional adapter. The new
+maps count toward the existing event envelope limit; capacities do not grow.
+Graph/inspector selection remains component Ruby code. SVG test activation is
+runner-only. WASM, JS glue, and optional downloads are unchanged. Baselines
+increase by exactly the measured delta.
 
 ### SVG insertion contract cost
 

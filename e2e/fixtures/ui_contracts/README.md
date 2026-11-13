@@ -54,7 +54,16 @@ stable edge IDs. Pan exercises a compound transform. Closing/reopening and
 fresh component mounts verify current geometry, marker references, and branch
 lifetime. Ruby scenarios cover initially open/closed branches; framework checks
 observe geometry synchronously before insertion and count actual path writes.
-Selection, pointer input, and bounded history arrive in later graph stories.
+Pointer input and bounded history arrive in later graph stories.
+
+E3.S2 selects graph nodes and inspector table rows through
+`event["current_target_dataset"]`. Native node surfaces, nested labels, row
+cells, and keyboard-activated row buttons resolve the same bound identity.
+`probes/08-event-dataset` checks legacy target semantics, explicit target and
+handler datasets, oversized target/handler data, and subsequent recovery.
+The Ruby `click` operation also activates SVG elements through a bubbling click
+event when the element has no native `.click()` method; framework tests separately
+exercise native browser hit testing. No application JavaScript is required.
 
 From the Mochi repository root:
 

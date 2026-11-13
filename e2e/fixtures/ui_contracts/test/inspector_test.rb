@@ -53,3 +53,20 @@ Mochi::Test.test("inspector pages, filters literally, and retains selection by I
   fill ".filter", ""
   assert_text ".visible-count", "12"
 end
+
+Mochi::Test.test("table rows select the same record from buttons, labels, and cells") do
+  mount "inspector-root"
+  click "[data-id='record-3'] button"
+  assert_text ".selected-id", "record-3"
+  click "[data-id='record-4'] .severity"
+  assert_text ".selected-id", "record-4"
+  click "[data-id='record-3'] .message"
+  assert_text ".selected-id", "record-3"
+  assert_text ".selected-detail", "worker-3:3"
+  focus "[data-id='record-4'] button"
+  press "Enter"
+  assert_text ".selected-id", "record-4"
+  click ".next"
+  click "[data-id='record-13'] .message"
+  assert_text ".selected-id", "record-13"
+end
