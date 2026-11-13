@@ -277,13 +277,18 @@ describe EachRowCompiler do
     end
   end
 
-  it "rejects leftover control blocks inside a row" do
-    expect_raises(TemplateExpressionError, /invalid Ruby expression/) do
-      compile_row_template(%Q{
+  it "lowers conditional branches with the enclosing row scope" do
+    row = compile_row_template(%Q{
         {each @items as item}
-          <div>{if item[:active]}on{end}</div>
+          <div>{if item[:active]}{item[:label]}{else}off{end}</div>
         {end}
       })
-    end
+    row.template.should contain("<!--mochi-cond-")
+    row.conditionals.size.should eq(1)
+    conditional = row.conditionals.first
+    conditional.conditions.should eq(["item[:active]", nil])
+    conditional.branches.first.scope.should eq(row.scope)
+    conditional.branches.first.bindings.first.expression.should eq("item[:label]")
+    conditional.branches.last.template.should eq("off")
   end
 end

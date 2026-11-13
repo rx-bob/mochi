@@ -4,6 +4,32 @@ Mochi implements a practical Ruby interface for browser applications. This
 document records supported forms and explicit VM limits. It does not promise
 full MRI, Enumerable, or arbitrary-precision compatibility.
 
+## Template loops and conditional branches
+
+`{each ... as item, index, key: ...}` and `{if ...}` / `{elsif ...}` /
+`{else}` can nest in either order. Branches retain the enclosing loop locals
+for text, attributes, child props, event arguments, and further conditions.
+An inner loop introduces its own item/index locals; reusing a name shadows
+the outer value inside that loop without overwriting it afterward. The
+implicit `index` always refers to the innermost loop. Only selected row
+branches evaluate their expressions and nested loops.
+
+The [nested form](../e2e/fixtures/ui_contracts/lib/NestedFormRoot.rb) provides
+an executable example. Stable keys preserve an editor's DOM identity and
+local draft through reorders and neighboring insertions/removals. Conditional
+removal unmounts child components and releases their owned resources;
+recreation starts fresh child state from current props. Event arguments use
+current row values and indices after a move.
+
+Fragments retain table, select, HTML, and SVG insertion context, including
+HTML children of SVG `foreignObject`. Invalid table nesting and malformed
+expressions report authored source locations. SVG numeric/path attributes
+receive evaluated values before insertion, without parsing placeholder text
+as SVG values. This does not add SVG custom-element composition, slots, or
+automatic deep mutation observation. Replace root state to publish nested
+model changes. Mixed attribute quote scanning and same-event binding/handler
+composition retain their separately documented limitations.
+
 ## Helper constants, receivers, and block control flow
 
 Top-level helper modules can define constants and singleton methods using

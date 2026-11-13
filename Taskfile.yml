@@ -145,7 +145,7 @@ tasks:
       - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-graph' --reporter=line
 
   framework:ui:form:
-    desc: Run form feedback evidence and authored form scenarios when added by E2
+    desc: Run nested form Ruby scenarios, lifecycle checks, and related feedback evidence
     deps: [build]
     cmds:
       - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts --grep '@ui-form' --reporter=line

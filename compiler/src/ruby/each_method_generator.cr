@@ -112,7 +112,8 @@ class EachMethodGenerator
     lines = [] of String
 
     lines << "#{indent}#{result} = []"
-    lines << "#{indent}(#{row.items_expression} || []).each_with_index do |#{item_param}, #{index_param}|"
+    locals = [row.item_name, row.index_name, "index"].uniq
+    lines << "#{indent}(#{row.items_expression} || []).each_with_index do |#{item_param}, #{index_param}; #{locals.join(", ")}|"
     lines << "#{indent}  #{row.item_name} = #{item_param}"
     if row.index_name != row.item_name
       lines << "#{indent}  #{row.index_name} = #{index_param}"
@@ -126,24 +127,45 @@ class EachMethodGenerator
       lines << "#{indent}  index = #{index_param}"
     end
 
-    row.children.each do |child|
-      lines << render_row_statements(child, indent + "  ")
-    end
+    lines.concat(render_fragment_statements(row, indent + "  "))
 
     values = row.bindings.map(&.expression).join(", ")
     child_results = row.children.map { |child| "__mochi_rows_#{child.block_id}" }
     lines << "#{indent}  #{result}.push(["
     lines << "#{indent}    #{item_param},"
     lines << "#{indent}    [#{values}],"
-    if key = row.key_expression
+    if row.key_expression || !row.conditionals.empty?
       lines << "#{indent}    [#{child_results.join(", ")}],"
-      lines << "#{indent}    (#{key})"
+      lines << "#{indent}    (#{row.key_expression || "nil"})#{row.conditionals.empty? ? "" : ","}"
+      unless row.conditionals.empty?
+        lines << "#{indent}    [#{row.conditionals.map { |c| "__mochi_cond_#{c.id}" }.join(", ")}]"
+      end
     else
       lines << "#{indent}    [#{child_results.join(", ")}]"
     end
     lines << "#{indent}  ])"
     lines << "#{indent}end"
     lines.join("\n")
+  end
+
+  private def self.render_fragment_statements(fragment : EachRowFragment, indent : String) : Array(String)
+    lines = fragment.children.map { |child| render_row_statements(child, indent) }
+    fragment.conditionals.each do |conditional|
+      name = "__mochi_cond_#{conditional.id}"
+      lines << "#{indent}#{name} = nil"
+      conditional.branches.each_with_index do |branch, index|
+        condition = conditional.conditions[index]
+        keyword = index == 0 ? "if" : "elsif"
+        lines << (condition ? "#{indent}#{keyword} (#{condition})" : "#{indent}else")
+        lines.concat(render_fragment_statements(branch, indent + "  "))
+        values = branch.bindings.map(&.expression).join(", ")
+        children = branch.children.map { |child| "__mochi_rows_#{child.block_id}" }.join(", ")
+        nested = branch.conditionals.map { |child| "__mochi_cond_#{child.id}" }.join(", ")
+        lines << "#{indent}  #{name} = [#{index}, [[#{values}], [#{children}], [#{nested}]]]"
+      end
+      lines << "#{indent}end"
+    end
+    lines
   end
 
   private def self.ruby_argument(argument : EventArgumentDescriptor) : String

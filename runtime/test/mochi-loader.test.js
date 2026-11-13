@@ -4962,6 +4962,60 @@ test("compiled rows mount nested lists with distinct outer and inner scopes", as
   assert.equal(element.shadowRoot.querySelector("li").textContent, "c1-g1-0");
 });
 
+test("row branches retain keyed descendants until branch selection changes", async () => {
+  const textSlot = [{ slot: 0, kind: "text", attr_name: null }];
+  const component = {
+    tag_name: "row-branch-check", class_name: "RowBranchCheck",
+    chi_file: "row-branch-check.chi", html_template: "<!--each-anchor-0-->",
+    css: "", events: [],
+    bindings: [{ id: 0, path: [0], kind: "each", getter_sym: "__mochi_each_0_rows",
+      each_rows: {
+        id: 0, keyed: true, template: '<section><!--mochi-cond-1--></section>',
+        bindings: [], children: [], conditionals: [{ id: 1, branches: [
+          { id: 2, template: '<h2>\uE0020\uE003</h2><!--mochi-each-3-->', bindings: textSlot,
+            children: [{ id: 3, keyed: true, template: '<label><input><b>\uE0020\uE003</b></label>',
+              bindings: textSlot, children: [] }] },
+          { id: 4, template: '<p>\uE0020\uE003</p>', bindings: textSlot, children: [] },
+        ] }],
+      },
+    }],
+  };
+  const { loader, module } = await setup([component]);
+  const row = (selection, label, keys = []) => [{ id: "group" }, [], [], "group",
+    [selection === null ? null : [selection, [[label],
+      selection === 0 ? [keys.map(key => [{ id: key }, [key], [], key])] : [], []]]]];
+  const enqueue = value => module.patchQueue.push({ patches: [{ id: 0, value: JSON.stringify([value]) }] });
+  enqueue(row(null));
+  const element = document.createElement("row-branch-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const root = element.shadowRoot;
+  const section = root.querySelector("section");
+  assert.equal(section.children.length, 0);
+  const patch = value => { enqueue(value); loader.applyPatches(element); };
+
+  patch(row(0, "Open", ["a", "b"]));
+  const original = root.querySelector("label");
+  const input = original.querySelector("input");
+  input.value = "local draft";
+  patch(row(0, "Updated", ["b", "a", "c"]));
+  assert.equal(root.querySelector("h2").textContent, "Updated");
+  assert.equal(root.querySelectorAll("label")[1], original);
+  assert.equal(original.querySelector("input").value, "local draft");
+
+  patch(row(1, "Closed"));
+  assert.equal(root.querySelector("section"), section);
+  assert.equal(root.querySelector("label"), null);
+  assert.equal(original.isConnected, false);
+  assert.equal(root.querySelector("p").textContent, "Closed");
+  patch(row(0, "Fresh", ["a"]));
+  assert.notEqual(root.querySelector("label"), original);
+  assert.equal(root.querySelector("input").value, "");
+  assert.equal(root.querySelector("h2").textContent, "Fresh");
+  patch(row(null));
+  assert.equal(section.children.length, 0);
+});
+
 test("compiled row events pass outer and inner row values before the event payload", async () => {
   const rowEventComponent = {
     tag_name: "row-event-check",

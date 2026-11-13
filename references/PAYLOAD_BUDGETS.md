@@ -57,13 +57,27 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 492,590 | 159,379 | 3 |
-| Minimal initial | 496,268 | 161,085 | 7 |
-| Feature initial | 497,080 | 161,270 | 7 |
+| Core runtime | 494,862 | 159,867 | 3 |
+| Minimal initial | 498,540 | 161,573 | 7 |
+| Feature initial | 499,352 | 161,758 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 511,316 | 165,871 | 11 |
-| Network initial | 501,403 | 162,583 | 8 |
-| Network total | 501,403 | 162,583 | 8 |
+| Feature total | 513,588 | 166,359 | 11 |
+| Network initial | 503,675 | 163,071 | 8 |
+| Network total | 503,675 | 163,071 | 8 |
+
+### Mixed structural fragment cost
+
+UI-contract story E2.S1 adds **2,272 raw / 488 gzip bytes** to the loader,
+from 216,827 / 46,002 to 219,099 / 46,490. Shared row/branch reconciliation
+retains lexical event context, keyed descendants, insertion context, and
+normal child disposal. Deferred SVG attribute slots prevent the browser from
+parsing placeholders as numeric/path values. These are essential template and
+DOM operations, so their shared implementation belongs in the core loader.
+Only components using row conditionals receive their branch descriptors and
+generated Ruby bytecode. WASM, JS glue, capabilities, capacity profiles, and
+later feature downloads are unchanged. The budgets increase by exactly the
+measured loader delta, with no additional headroom. Runner mount waiting is
+test-only and adds no shipped bytes.
 
 ### Scoped helper constants and dispatch cost
 

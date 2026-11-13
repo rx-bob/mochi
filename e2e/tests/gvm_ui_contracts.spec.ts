@@ -142,7 +142,6 @@ test("array errors retain authored methods, source lines, and capacity details @
 // oracle in UI_FIXTURE_CONTRACTS.md; never skip the reproducer.
 const compileFailures: Record<string, { message: string; owner: string }> = {
   "03-unsupported-rescue": { message: "lib/ProbeRoot.rb:6: unsupported rescue/ensure (OP_EXCEPT)", owner: "E1.S3 unsupported control flow" },
-  "01-if-in-each": { message: `invalid Ruby expression "if row['visible']" in each`, owner: "E2.S1" },
   "05-attribute-quotes": { message: 'unclosed template placeholder near "{@modal["', owner: "E2.S2" },
   "05-conditional-quotes": { message: "stray '}' in template", owner: "E2.S2" },
   "10-redo": { message: 'unsupported redo in template expression "redo"', owner: "intentional Ruby keyword; E1.S3" },
@@ -156,6 +155,7 @@ const mountFailures: Record<string, { message: string; owner: string }> = {
   "09-regexp": { message: "ProbeRoot#initialize: unknown class", owner: "deferred Regexp" },
 };
 const textProbes: Record<string, { selector: string; text: string; count?: number; owner: string }> = {
+  "01-if-in-each": { selector: "tbody tr.selected td", text: "Alpha", owner: "E2.S1" },
   "01-each-in-if": { selector: "div", text: "Alpha", owner: "E2.S1" },
   "01-nested-each": { selector: "section p", text: "Alpha", owner: "E2.S1" },
   "02-brackets": { selector: ".items", text: "2:2,3", owner: "E1.S2" },
@@ -270,9 +270,6 @@ for (const name of runtimeProbes) {
         await expect(paths.nth(1)).toHaveAttribute("d", "M 20 20 L 40 0");
         expect(await paths.evaluateAll(nodes => nodes.map(node => node.namespaceURI)))
           .toEqual(["http://www.w3.org/2000/svg", "http://www.w3.org/2000/svg"]);
-        // Chromium reports transient invalid placeholders; other engines can be silent.
-        if (browserName === "chromium") expect(consoleErrors).toHaveLength(2);
-        for (const message of consoleErrors) expect(message).toMatch(/(?:<path> attribute d: Expected moveto|Problem parsing d=)/);
       } else if (name === "07-binding-handler") {
         await root.locator("input").fill("needle");
         await expect(root.locator("input")).toHaveValue("needle");
@@ -302,7 +299,7 @@ for (const name of runtimeProbes) {
       expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
       await settleConsole();
       expect(pageErrors).toEqual([]);
-      if (name !== "06-svg-each") expect(consoleErrors).toEqual([]);
+      expect(consoleErrors).toEqual([]);
       await testInfo.attach("browser-console", { body: JSON.stringify(consoleErrors), contentType: "application/json" });
     }, "<probe-root></probe-root>");
   });
@@ -334,3 +331,114 @@ test("feedback evidence 11-boolean: typecheck rejects documented Boolean prop @u
     fs.rmSync(project, { recursive: true, force: true });
   }
 });
+
+test("nested form retains keyed editors and disposes conditional children @ui-form", async ({ page }, testInfo) => {
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(fixture, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, fixture, bundle);
+    await page.goto(baseURL);
+    const root = page.locator("nested-form-root");
+    const editor = () => root.locator('[data-field="a"] field-editor');
+    await expect(root.locator("field-editor")).toHaveCount(4);
+    await expect(editor().locator(".draft")).toHaveValue("Alpha");
+    const originalInstance = await editor().evaluate((node: any) => {
+      (window as any).__fieldA = node;
+      return node._mochiInstance;
+    });
+    await editor().locator(".draft").fill("Retained draft");
+    await expect(root.locator(".events")).toHaveText("1");
+    await root.locator(".reorder").click();
+    await root.locator(".reorder-fields").click();
+    await root.locator(".insert").click();
+    await expect(editor().locator(".draft")).toHaveValue("Retained draft");
+    expect(await editor().evaluate((node: any) => node === (window as any).__fieldA)).toBe(true);
+    expect(await editor().evaluate((node: any) => node._mochiInstance)).toBe(originalInstance);
+    await root.locator('[data-field="a"] .pick').click();
+    await expect(root.locator(".last")).toHaveText("g1:a:1:2:picked");
+    await root.locator(".remove").click();
+    await editor().locator(".draft").fill("Current indices");
+    await expect(root.locator(".last")).toHaveText("g1:a:1:1:Current indices");
+    await expect(root.locator(".events")).toHaveText("3");
+    const baseline = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await editor().evaluate((node: any) => { (window as any).__removedEditor = node; });
+      await root.locator(".toggle-group").click();
+      await expect(root.locator("field-editor")).toHaveCount(2);
+      await expect.poll(() => page.evaluate(() => (window as any).__removedEditor._mochiMountState)).toBe("unmounted");
+      const disposed = await page.evaluate(() => ({
+        ...(window as any).MochiLoader.debugStats(),
+        instance: (window as any).__removedEditor._mochiInstance,
+        targets: Object.keys((window as any).__removedEditor.bindingTargets).length,
+      }));
+      expect(disposed.instance).toBeNull();
+      expect(disposed.targets).toBe(0);
+      expect(disposed.components).toBe(baseline.components - 2);
+      expect(disposed.elements).toBe(baseline.elements - 2);
+      expect(disposed.bindings).toBeLessThan(baseline.bindings);
+      expect(disposed.routeSubscribers).toBe(baseline.routeSubscribers - 2);
+      await root.locator(".fresh").click();
+      await root.locator(".toggle-group").click();
+      await expect(editor().locator(".draft")).toHaveValue("Fresh a");
+      await expect(editor().locator(".mount-count")).toHaveText("1");
+      expect(await editor().evaluate((node: any) => node === (window as any).__removedEditor)).toBe(false);
+      expect(await editor().evaluate((node: any) => node._mochiInstance)).not.toBe(originalInstance);
+      await root.locator('[data-field="a"] .pick').click();
+      await expect(root.locator(".last")).toHaveText("g1:a:1:1:picked");
+      await expect(root.locator(".events")).toHaveText(String(4 + cycle));
+      const restored = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+      for (const key of ["components", "elements", "bindings", "routeSubscribers", "timers", "pendingHostRequests", "unmountedInstances"]) {
+        expect(restored[key], `${key} after cycle ${cycle}`).toBe(baseline[key]);
+      }
+    }
+    await root.locator(".toggle").click();
+    await expect(root.locator("field-editor")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().components)).toBe(1);
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<nested-form-root></nested-form-root>");
+});
+
+for (const open of [0, 1]) {
+  test(`structural fragments retain table/select/HTML/SVG context, initially ${open} @ui-form`, async ({ page }, testInfo) => {
+    const source = path.join(fixture, "probes/01-structural-contexts");
+    const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+    await withCompiledProject(source, async (baseURL, bundle) => {
+      await attachArtifacts(testInfo, source, bundle);
+      await page.goto(baseURL);
+      const root = page.locator("probe-root");
+      const assertOpen = async () => {
+        await expect(root.locator("tbody tr")).toHaveCount(2);
+        await expect(root.locator("tbody tr").first()).toHaveText("Alpha");
+        await expect(root.locator("tbody tr").last()).toHaveText("Disabled Beta");
+        await expect(root.locator("select option")).toHaveCount(2);
+        await expect(root.locator("select option").last()).toBeDisabled();
+        await expect(root.locator("svg g circle")).toHaveAttribute("r", "4");
+        await expect(root.locator("svg g rect")).toHaveAttribute("width", "8");
+        expect(await root.locator("svg g circle").evaluate(node => node.namespaceURI)).toBe("http://www.w3.org/2000/svg");
+        expect(await root.locator("foreignObject p").first().evaluate(node => node.namespaceURI)).toBe("http://www.w3.org/1999/xhtml");
+        await expect(root.locator("foreignObject p")).toHaveText(["Alpha", "Beta"]);
+      };
+      const assertClosed = async () => {
+        await expect(root.locator("tbody tr")).toHaveCount(1);
+        await expect(root.locator("tbody td")).toHaveText("Closed");
+        await expect(root.locator("select option")).toHaveText("Closed");
+        await expect(root.locator("svg g text")).toHaveText("Closed");
+        await expect(root.locator("foreignObject p")).toHaveText("Closed");
+      };
+      await expect(root.locator('.scope[data-id="a"] i')).toHaveText(["x:0", "y:1"]);
+      await expect(root.locator('.scope[data-id="a"] output')).toHaveText("Alpha:0");
+      await expect(root.locator('.scope[data-id="b"] output')).toHaveText("Beta:1");
+      await (open ? assertOpen() : assertClosed());
+      await root.locator(".toggle").click();
+      await (open ? assertClosed() : assertOpen());
+      await root.locator(".toggle").click();
+      await (open ? assertOpen() : assertClosed());
+      expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+      await settleConsole();
+      expect(consoleErrors).toEqual([]);
+      expect(pageErrors).toEqual([]);
+    }, `<probe-root open="${open}"></probe-root>`);
+  });
+}

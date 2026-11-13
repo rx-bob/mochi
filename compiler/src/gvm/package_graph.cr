@@ -259,6 +259,9 @@ module MochiPackaging
     private def self.build_component_package(id : String, component : MochiComponent) : PackageNode
       source = component.original_source.empty? ? component.ruby_code : component.original_source
       symbols = TreeSitter::SourceSymbolExtractor.extract(source)
+      # Lowered row conditions, slots and event arguments no longer appear in
+      # HTML. Discover their dependencies from the Ruby that will execute.
+      generated = source == component.ruby_code ? symbols : TreeSitter::SourceSymbolExtractor.extract(component.ruby_code)
       exports = symbols.exports.dup
       exports << component.manifest.class_name unless exports.includes?(component.manifest.class_name)
       PackageNode.new(
@@ -271,10 +274,10 @@ module MochiPackaging
         source,
         component.source_line_offset,
         exports.uniq.sort,
-        symbols.references,
+        (symbols.references + generated.references).uniq,
         component: component,
         resources: component.manifest.style_resource_ids.dup,
-        method_calls: symbols.method_calls
+        method_calls: (symbols.method_calls + generated.method_calls).uniq
       )
     end
 
@@ -503,9 +506,8 @@ module MochiPackaging
       texts
     end
 
-    private def collect_each_row_templates(rows : EachRowTemplate, texts : Array(String)) : Nil
-      texts << rows.template
-      rows.children.each { |child| collect_each_row_templates(child, texts) }
+    private def collect_each_row_templates(rows : EachRowFragment, texts : Array(String)) : Nil
+      rows.each_template { |fragment| texts << fragment.template }
     end
 
     def resolve_entries_and_order(components : Array(MochiComponent), project_root : String?) : Nil

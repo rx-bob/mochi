@@ -1,6 +1,8 @@
 require "spec"
 require "file_utils"
 require "../../src/gvm/package_graph"
+require "../../src/webcomponents/component_generator"
+require "../../src/ruby/each_method_generator"
 
 private def dependency_component(
   root : String,
@@ -603,6 +605,31 @@ RUBY
 end
 
 describe "qualified helper constants" do
+  it "loads helpers referenced only by lowered row expressions" do
+    root = File.join(Dir.tempdir, "mochi_row_helpers_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      html = %({each RowData.items as row, key: RowKey.id(row)}{if RowGate.allowed?(row)}<button onclick="{pick(RowEvent.id(row))}">{RowLabel.text(row)}</button>{end}{end})
+      each = EachProcessor.process(html)
+      generator = ComponentGenerator.new
+      manifest = generator.generate("ProbeRoot", "probe-root", "", each.html, each_blocks: each.each_blocks)
+      component = dependency_component(root, "probe-root", "ProbeRoot", "class ProbeRoot\nend\n")
+      component.original_source = "class ProbeRoot\n def html\n %q(#{html})\n end\nend"
+      component.ruby_code = EachMethodGenerator.inject_methods_into_class(component.ruby_code, "ProbeRoot", generator.each_row_templates)
+      component.manifest = manifest
+      names = ["RowData", "RowKey", "RowGate", "RowEvent", "RowLabel"]
+      sources = (names + ["UnusedRowHelper"]).map do |name|
+        dependency_prelude(root, "lib/#{name}.rb", "module #{name}\nend")
+      end
+      graph = dependency_graph(root, [component], sources)
+      expected = names.map { |name| "ruby:lib/#{name}.rb" }.sort
+      graph.package("component:probe-root").not_nil!.dependencies.sort.should eq(expected)
+      graph.order.should_not contain("ruby:lib/UnusedRowHelper.rb")
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "keeps equal leaf names in separate packages and follows the actual namespace" do
     root = File.join(Dir.tempdir, "mochi_helper_scope_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

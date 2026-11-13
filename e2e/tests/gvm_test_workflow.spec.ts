@@ -89,6 +89,27 @@ test("Ruby runner matches a rejected mount and consumes all diagnostic channels"
   }, "");
 });
 
+test("Ruby wait_for_settled waits for a lazily mounted child descriptor", async ({ browser, browserName }, testInfo) => {
+  const scenario = recordCase(testInfo, [
+    'mount "nested-form-root", open: 0', 'click ".toggle"', 'wait_for_settled',
+    'assert_value "[data-field=\'a\'] field-editor >>> .draft", "Alpha"',
+  ]);
+  let delayed = false;
+  const driver = { newPage: async () => {
+    const page = await browser.newPage();
+    await page.route("**/components/field-editor.json", async route => {
+      delayed = true;
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await route.continue();
+    });
+    return page;
+  } };
+  await withCompiledProject(fixture, async baseURL => {
+    expect(await runCase(driver, browserName, baseURL, scenario)).toBe(true);
+    expect(delayed).toBe(true);
+  }, "");
+});
+
 for (const [name, steps, mode, message] of [
   ["mixed", ['mount "inspector-root"', 'expect_error "controlled click error"', 'click ".next"'], "mixed", "unrelated click error"],
   ["missing", ['mount "inspector-root"', 'expect_error "absent error"', 'click ".next"'], "none", "but no error occurred"],
@@ -109,7 +130,7 @@ for (const [name, steps, mode, message] of [
 test("shared compiler helper removes temporary output after compilation fails", async () => {
   let project = "";
   try {
-    await withCompiledProject(path.join(fixture, "probes/01-if-in-each"), async () => {
+    await withCompiledProject(path.join(fixture, "probes/runner-compile-error"), async () => {
       throw new Error("compilation unexpectedly succeeded");
     }, "<probe-root></probe-root>");
   } catch (error: any) {
@@ -138,7 +159,7 @@ test("shared compiler helper closes server and removes output after browser asse
 for (const failure of ["compile", "assertion"] as const) {
   test(`mochi test removes its workspace after ${failure} failure`, async ({ browserName }, testInfo) => {
     const project = testInfo.outputPath("project");
-    const source = failure === "compile" ? path.join(fixture, "probes/01-if-in-each") : fixture;
+    const source = failure === "compile" ? path.join(fixture, "probes/runner-compile-error") : fixture;
     fs.cpSync(source, project, { recursive: true });
     fs.mkdirSync(path.join(project, "test"), { recursive: true });
     const tag = failure === "compile" ? "probe-root" : "inspector-root";

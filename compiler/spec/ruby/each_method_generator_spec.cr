@@ -1,6 +1,7 @@
 require "spec"
 require "../../src/ruby/each_method_generator"
 require "../../src/html/each_row_template"
+require "../../src/html/each_row_compiler"
 
 private def list_row(
   id : Int32,
@@ -61,11 +62,11 @@ describe EachMethodGenerator do
 
     code.should contain("def __mochi_each_0_rows")
     code.should contain("__mochi_rows_0 = []")
-    code.should contain("(@items || []).each_with_index do |__mochi_item_0, __mochi_index_0|")
+    code.should contain("(@items || []).each_with_index do |__mochi_item_0, __mochi_index_0; item, index|")
     code.should contain("item = __mochi_item_0")
     code.should contain("index = __mochi_index_0")
     code.should contain("[item.name, index]")
-    code.should contain("(item[:children] || []).each_with_index do |__mochi_item_1, __mochi_index_1|")
+    code.should contain("(item[:children] || []).each_with_index do |__mochi_item_1, __mochi_index_1; entry, k, index|")
     code.should contain("entry = __mochi_item_1")
     code.should contain("k = __mochi_index_1")
     code.should contain("index = __mochi_index_1")
@@ -202,5 +203,22 @@ RUBY
     code = "class Plain\nend\n"
     EachMethodGenerator.inject_methods_into_class(code, "Plain", [] of EachRowTemplate).should eq(code)
     EachMethodGenerator.generate_all_methods([] of EachRowTemplate, "Plain").should eq("")
+  end
+end
+
+describe "row branch evaluation" do
+  it "evaluates only the selected fragment and restores shadowed loop locals" do
+    source = %q({each @rows as row, ri}<div>{if row[:ok]}{each row[:children] as row, ci}<i>{row}:{index}</i>{end}{else}<b>{inactive}</b>{end}<p>{row[:label]}:{index}</p></div>{end})
+    root = EachProcessor.roots(EachProcessor.extract_each_blocks(source)).first
+    row = EachRowCompiler.compile(root, TemplateExpressionParser.new)
+    code = EachMethodGenerator.generate_rows_method(row)
+    # Execute generated Ruby itself: the inactive expression must never run,
+    # and the inner `row`/`index` cannot overwrite the enclosing bindings.
+    ruby = "class Probe\n def initialize; @rows = [{ok: true, label: 'Outer', children: ['x', 'y']}]; end\n def inactive; raise 'inactive branch evaluated'; end\n#{code}\nend\np Probe.new.__mochi_each_0_rows\n"
+    output = IO::Memory.new
+    Process.run("ruby", ["-e", ruby], output: output, error: output).success?.should be_true
+    output.to_s.should contain(%(["Outer", 0]))
+    output.to_s.should contain(%(["x", 0]))
+    output.to_s.should contain(%(["y", 1]))
   end
 end

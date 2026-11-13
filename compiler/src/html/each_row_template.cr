@@ -76,47 +76,28 @@ struct EachRowEventDescriptor
   end
 end
 
-# A compiled list row: a static template with value slots, plus the nested
-# each trees whose rows mount at the template's comment anchors.
-class EachRowTemplate
+# A fragment retains its lexical scope without introducing a loop variable.
+# Rows and conditional branches share slots, events, and structural children.
+class EachRowFragment
   getter block_id : Int32
-  getter items_expression : String
-  getter item_name : String
-  getter index_name : String
-  getter declared_index : String?
   getter template : String
   getter bindings : Array(EachRowBindingDescriptor)
   getter events : Array(EachRowEventDescriptor)
   getter children : Array(EachRowTemplate)
   getter scope : Array(EachRowScope)
-  # Ruby expression evaluated in the VM for each row. The loader receives only
-  # the evaluated value as the row's fourth tuple element.
-  getter key_expression : String?
-  # Source span of the list expression, used for runtime duplicate-key errors.
   getter span : TemplateSourceSpan?
   getter attribute_conditionals : Array(ExtractedAttributeConditional)
   getter attribute_hashes : Array(ExtractedAttributeHash)
   getter context_tag : String
   getter context_namespace : String
+  getter conditionals : Array(EachRowConditional)
 
-  def initialize(
-    @block_id : Int32,
-    @items_expression : String,
-    @item_name : String,
-    @index_name : String,
-    @declared_index : String?,
-    @template : String,
-    @bindings : Array(EachRowBindingDescriptor),
-    @events : Array(EachRowEventDescriptor),
-    @children : Array(EachRowTemplate),
-    @scope : Array(EachRowScope),
-    @key_expression : String? = nil,
-    @span : TemplateSourceSpan? = nil,
-    @attribute_conditionals : Array(ExtractedAttributeConditional) = [] of ExtractedAttributeConditional,
-    @attribute_hashes : Array(ExtractedAttributeHash) = [] of ExtractedAttributeHash,
-    @context_tag : String = "body",
-    @context_namespace : String = "html",
-  )
+  def initialize(@block_id, @template, @bindings, @events, @children, @scope,
+                 @span : TemplateSourceSpan? = nil,
+                 @attribute_conditionals = [] of ExtractedAttributeConditional,
+                 @attribute_hashes = [] of ExtractedAttributeHash,
+                 @context_tag = "body", @context_namespace = "html",
+                 @conditionals = [] of EachRowConditional)
   end
 
   def scope_names : Array(String)
@@ -129,15 +110,61 @@ class EachRowTemplate
     names
   end
 
-  # Visits this row and every nested row, outermost first.
-  def each_template(&block : EachRowTemplate ->)
+  def each_template(&block : EachRowFragment ->)
     yield self
     children.each { |child| child.each_template(&block) }
+    conditionals.each do |conditional|
+      conditional.branches.each { |branch| branch.each_template(&block) }
+    end
   end
 
   def all_events : Array(EachRowEventDescriptor)
     result = [] of EachRowEventDescriptor
-    each_template { |row| result.concat(row.events) }
+    each_template { |fragment| result.concat(fragment.events) }
     result
+  end
+end
+
+class EachRowConditional
+  getter id : Int32
+  getter conditions : Array(String?)
+  getter branches : Array(EachRowFragment)
+  getter span : TemplateSourceSpan?
+
+  def initialize(@id, @conditions, @branches, @span = nil)
+  end
+end
+
+class EachRowTemplate < EachRowFragment
+  getter items_expression : String
+  getter item_name : String
+  getter index_name : String
+  getter declared_index : String?
+  getter key_expression : String?
+
+  def initialize(block_id : Int32, @items_expression : String, @item_name : String,
+                 @index_name : String, @declared_index : String?, template : String,
+                 bindings : Array(EachRowBindingDescriptor), events : Array(EachRowEventDescriptor),
+                 children : Array(EachRowTemplate), scope : Array(EachRowScope),
+                 @key_expression : String? = nil, span : TemplateSourceSpan? = nil,
+                 attribute_conditionals = [] of ExtractedAttributeConditional,
+                 attribute_hashes = [] of ExtractedAttributeHash,
+                 context_tag = "body", context_namespace = "html",
+                 conditionals = [] of EachRowConditional)
+    super(block_id, template, bindings, events, children, scope, span,
+      attribute_conditionals, attribute_hashes, context_tag, context_namespace, conditionals)
+  end
+end
+
+# Shared by every fragment compiled for a component, including branch events.
+class EachRowIds
+  property next_id : Int32
+
+  def initialize(@next_id : Int32); end
+
+  def take : Int32
+    id = @next_id
+    @next_id += 1
+    id
   end
 end

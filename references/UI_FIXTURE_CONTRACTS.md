@@ -41,12 +41,12 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 
 | Report filename / topic | Expected behavior | Observed evidence and disposition | Owner |
 | --- | --- | --- | --- |
-| `01-block-conditionals-and-loops.md` | Block `if` inside table rows, `each` inside `if`, and nested `each` preserve lexical scope and structure. | **reproduced-defect:** `01-if-in-each` rejects `if row['visible']` as an invalid Ruby expression, with source location. **supported-in-isolation:** `01-each-in-if` renders Alpha and `01-nested-each` renders Group/Alpha. The originally reported context mismatch and more complex combinations remain **unresolved**, not fixed. | E2.S1 |
+| `01-block-conditionals-and-loops.md` | Block `if` inside table rows, `each` inside `if`, and nested `each` preserve lexical scope and structure. | **supported, repaired by E2.S1:** all three original probes render their expected rows. `NestedFormRoot` and `01-structural-contexts` add initially open/closed nesting, table/select/HTML/SVG contexts, row props/events, local shadowing, keyed identity, and branch disposal/recreation. Source-located malformed expressions and invalid table nesting remain build errors. | E2.S1 |
 | `02-array-slice-and-brackets.md` | `[1,2,3,4][1,2]` and `.slice(1,2)` return a fresh `[2,3]`. | **supported:** both probes now return a fresh two-element array containing `2,3`. `02-array-contexts` verifies Ruby boundaries, initialization/helper/handler/template parity, shallow identity, source-located errors, and slot exhaustion/recovery. Original `.to_s` expressions remain in the probes: Array text rendering still returns empty and is a separate unresolved surface, not a slicing failure. | E1.S2; history acceptance E3.S3 |
 | `03-qualified-constants.md` | `RecordData::BASE` and `RecordData.base_ms` return `1794571200000` in component contexts. | **supported:** both original probes return the correct value. `03-helper-contexts` compares direct Ruby with initializer, ordinary method, handler, and template results; separate helpers retain independent `BASE` values. Missing constants/methods name their references and the component call site. Arbitrary nested module/class registration remains outside this contract. | E1.S3 |
 | `04-scratch-capacity.md` | Structured local data work either completes correctly or reports the actual configured resource; later valid work recovers. | **supported-in-isolation:** `04-structured-records` mounts 480 hashes with nested attribute arrays; `04-concatenation` builds 360 lines / 24,370 bytes; `04-repeated-split` evaluates 480-line splits in 20 bindings. No exhaustion occurs for these inputs. Original richer object/byte exhaustion and repeated-update/recovery behavior remain **unresolved**. Configurability is an existing, tested **intentional-contract**. | E4.S1–E4.S3 |
 | `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **reproduced-defect:** `05-attribute-quotes` rejects `aria-label="{@modal["title"]}"` as an unclosed placeholder; independent `05-conditional-quotes` rejects `class="{if @node["ghost"]}ghost{end}"` with `stray '}' in template`. Both diagnostics identify the Ruby source. | E2.S2 |
-| `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **reproduced-defect:** `06-svg-each` ultimately has two correct SVG paths, but Chromium reports two invalid moveto errors during insertion containing the placeholder marker. Final correct attributes do not close this report. Other engines may be silent. SVG custom-element children remain explicitly deferred. | E3.S1 |
+| `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, repaired by E2.S1 shared fragment lowering:** dynamic SVG attributes are inert during parsing and receive evaluated values before insertion. `06-svg-each` checks both paths and zero console errors; structural context tests add circle/rect branches, toggles, and HTML inside foreignObject. The editable graph fixture remains E3.S1; SVG custom-element children remain explicitly deferred. | E2.S1 shared fix; E3.S1 graph |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **reproduced-defect:** `07-binding-handler` shows input value `needle`, Ruby query empty, and callback observation `:a`. **supported-in-isolation:** selecting `b` updates project and callback observation to `:b`. This separate native input/change sequence does not establish same-event composition or attribute-order independence. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
 | `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
@@ -68,7 +68,7 @@ These links identify related coverage, not retroactive proof that a new report i
 
 | Reports | Existing coverage and limits |
 | --- | --- |
-| 01, 05 | [framework standalone browser tests](../e2e/tests/gvm_framework_standalone.spec.ts), [each row compiler](../compiler/spec/html/each_row_compiler_spec.cr), [template expressions](../compiler/spec/html/template_expression_spec.cr). Smaller contextual rows/conditionals do not prove mixed table branches. |
+| 01, 05 | [structural composition specs](../compiler/spec/html/structural_composition_spec.cr), [each row compiler](../compiler/spec/html/each_row_compiler_spec.cr), [template expressions](../compiler/spec/html/template_expression_spec.cr). E2.S1 directly covers mixed branches and contexts; report 05's attribute quote scanner remains E2.S2. |
 | 02, 03, 10 | [source preparation](../compiler/spec/gvm/source_preparer_spec.cr), [Ruby surface](RUBY_SURFACE.md), framework numeric/collection browser tests. E1.S2/E1.S3 now directly cover slicing, scoped helper constants/receivers, and local block next in VM/compiler/browser tests. |
 | 04 | [capacity config](../compiler/spec/gvm/capacity_config_spec.cr), [capacity boundaries](../e2e/tests/gvm_capacity_boundaries.spec.ts), [capacity contract](CAPACITY_CONTRACT.md). Config tests build two isolated profiles, validate limits, and verify VM source stays unchanged. |
 | 06–09 | [loader tests](../runtime/test/mochi-loader.test.js), [pointer contracts](../e2e/tests/gvm_pointer_contracts.spec.ts), [drag/file contracts](../e2e/tests/gvm_drag_file_contracts.spec.ts), [file adapter tests](../runtime/test/mochi-files.test.js). File tests cover exact bounds, streaming, cancellation and lifetime cleanup. |
@@ -110,7 +110,7 @@ PLAYWRIGHT_HTML_OPEN=never npx playwright test \
 
 The passing evidence suite deliberately keeps current defects visible through explicit assertions; it does not mean those defects are repaired.
 
-E7.S1 adds the [shared fixture workflow](../e2e/fixtures/ui_contracts/README.md): `task framework:ui` and inspector/graph/form targets, automatic Ruby suite discovery, `mochi test --test-file`, and console/page/runtime diagnostic checks with consumed, explicitly matched negative expectations. The complete suite is included in `framework:e2e`. Graph/form targets currently run their isolated evidence; their Ruby fixtures still belong to E3.S1/E2.S1. No fixture acceptance test is skipped to stand in for those future stories.
+E7.S1 adds the [shared fixture workflow](../e2e/fixtures/ui_contracts/README.md): `task framework:ui` and inspector/graph/form targets, automatic Ruby suite discovery, `mochi test --test-file`, and console/page/runtime diagnostic checks with consumed, explicitly matched negative expectations. The complete suite is included in `framework:e2e`. E2.S1 now adds the form's Ruby scenarios and lifecycle/context assertions; the graph fixture remains E3.S1. No fixture acceptance test is skipped to stand in for a future story.
 
 The E1.S1 binary identities and observations above remain the historical baseline. E7.S1 rebuilds the compiler to embed the updated test runner; it changes no application runtime or VM payload. E1.S2 follows that historical baseline; its results are recorded below.
 
@@ -212,3 +212,67 @@ Final WASM SHA-256:
 `c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
 The historic E1.S1/E1.S2 identities above remain unchanged as evidence.
 Next in the recommended order: E2.S1.
+
+### E2.S1: mixed structural fragments and nested form
+
+[NestedFormRoot](../e2e/fixtures/ui_contracts/lib/NestedFormRoot.rb) and its
+typed [FieldEditor](../e2e/fixtures/ui_contracts/lib/FieldEditor.rb) child now
+exercise keyed groups/fields, conditional help and validation, initially
+closed mounting, edits, reorder, neighbor insertion/removal, and recreation.
+Ruby scenarios use explicit input handlers; attribute quote scanning,
+same-event binding composition, and Boolean typechecking remain E2.S2–E2.S4.
+
+Rows and branches share a compiled fragment representation with lexical
+scope, source spans, slots, events, and structural children. Branches add no
+loop context. Generated Ruby evaluates only the selected row branch and uses
+block-local aliases so nested loops cannot overwrite outer item/index values.
+Dependency discovery also scans generated Ruby: helpers referenced only in
+conditions, slots, keys, or event arguments remain reachable without loading
+unused helpers. Review caught this dependency gap; the package graph spec and
+`RowGate` browser probe retain the regression.
+
+Table/select/SVG/HTML fragments preserve actual insertion context. Dynamic
+SVG attributes remain inert until evaluated slots are assigned, repairing
+report 06's transient invalid path diagnostics as part of shared lowering.
+This does not complete E3.S1's editable graph or add SVG custom elements.
+Malformed branch expressions and invalid table fragments retain authored
+source diagnostics.
+
+The framework suite retains actual editor nodes and VM instances across
+keyed moves. Three removal/recreation cycles verify cleared binding targets,
+released route subscriptions, stable component/binding/resource counts,
+fresh props/local state, current event indices, and no duplicate handlers.
+Console and page capture starts before insertion. A loader unit regression
+also switches row branches with keyed descendants and verifies draft retention
+versus fresh state. The Ruby runner's `wait_for_settled` now includes lazy
+child mounts; a delayed descriptor test proves the wait. Cleanup tests use a
+dedicated invalid-source fixture instead of the repaired report 01.
+
+Verification on 2026-11-13:
+
+- `task specs`: **525 examples passed**, no failures/errors/pending.
+- `task runtime:test`: **192 tests passed**, no skips.
+- `task framework:ui`: **162 checks passed** across Chromium, Firefox, WebKit.
+- Final `task framework:e2e`: **318 checks passed** (258 main framework/UI
+  plus 60 asset/install/evolved-feature checks), with no skips. After extending
+  the context probe to insert directly beneath `foreignObject`, all **six**
+  initially open/closed context checks passed again on the three engines.
+- `task payload`: passed with exactly **2,272 raw / 488 gzip bytes** added to
+  the core loader. WASM, optional downloads, and capacity limits are unchanged.
+- `task compile-time:framework`: final run passed all **15 builds**,
+  **204.0–231.4 ms**, against the strict 1,000 ms limit. The preceding run
+  failed its first cold build at **2,049.8 ms** while its other 14 builds
+  passed. Cause remains unestablished; the passing repeat does not establish
+  that the outlier is repaired. No threshold or retry policy was changed.
+
+Final compiler SHA-256:
+`c1684778edb4bb777fa0db0dd61818a33a6610b675c1ee32f3b5d48fdebb2281`.
+Loader SHA-256:
+`73249a3f30119134d84c80231e64753250af47b2f76e8fda8455e0eaf9295649`.
+Unchanged WASM SHA-256:
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe source, descriptor, bytecode, and bundle identities remain attached
+to the browser reports. All implementation changes stay in Mochi; no GVM or
+external application edits are required.
+Crystal formatting, Ruby/JavaScript syntax, documentation links, and whitespace
+checks passed. Next in the recommended order: E2.S2.

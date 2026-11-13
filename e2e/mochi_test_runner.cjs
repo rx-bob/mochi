@@ -431,8 +431,15 @@ async function runCase(browser, browserName, baseUrl, testCase) {
         } else if (step.operation === "wait") {
           await page.waitForFunction(() => {
             const stats = window.MochiLoader.debugStats();
-            return stats.pendingFetches === 0 && stats.activeFetches === 0 &&
-              stats.pendingHostRequests === 0 && stats.pendingPointerMoves === 0;
+            if (stats.pendingFetches || stats.activeFetches || stats.pendingHostRequests || stats.pendingPointerMoves) return false;
+            const roots = [document];
+            while (roots.length) {
+              for (const element of roots.pop().querySelectorAll("*")) {
+                if (element._mochiMountState === "mounting") return false;
+                if (element.shadowRoot) roots.push(element.shadowRoot);
+              }
+            }
+            return true;
           }, null, { timeout: 5000 });
           await page.evaluate(() => new Promise((resolve) => {
             requestAnimationFrame(() => requestAnimationFrame(resolve));

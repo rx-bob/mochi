@@ -49,11 +49,17 @@ struct ConditionalBranchDescriptor
   property html_template : String
   property bindings : Array(BindingDescriptor)
   property events : Array(EventDescriptor)
+  property context_tag : String
+  property context_namespace : String
+  property span : TemplateSourceSpan?
 
   def initialize(
     @html_template : String,
     @bindings : Array(BindingDescriptor) = [] of BindingDescriptor,
     @events : Array(EventDescriptor) = [] of EventDescriptor,
+    @context_tag : String = "body",
+    @context_namespace : String = "html",
+    @span : TemplateSourceSpan? = nil,
   )
   end
 end

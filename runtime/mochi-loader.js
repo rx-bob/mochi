@@ -3708,9 +3708,10 @@
     var expectedNamespace = descriptor.context_namespace;
     var actualTag = String(context.localName || context.tagName || "").toLowerCase();
     var actualNamespace = context.namespaceURI === "http://www.w3.org/2000/svg" ? "svg" : "html";
+    if (actualTag === "foreignobject") actualNamespace = "html";
     if ((expectedTag && String(expectedTag).toLowerCase() !== actualTag) ||
         (expectedNamespace && expectedNamespace !== actualNamespace)) {
-      var location = descriptor.span && descriptor.span.source ? " at " + descriptor.span.source : "";
+      var location = rowSourceLocation(descriptor);
       throw new Error("mochi-loader: each row context mismatch" + location +
         ": expected <" + (expectedTag || "?") + "> in " + (expectedNamespace || "?") +
         ", found <" + actualTag + "> in " + actualNamespace);
@@ -3893,7 +3894,7 @@
     var parent = target.parentNode;
     if (!parent) return;
 
-    var fragment = fragmentFor(branch.html_template || "");
+    var fragment = rowFragmentFor(branch.html_template || "", parent, branch);
     var branchBindings = branch.bindings || [];
     var endNode = target.nextSibling;
 
@@ -4084,16 +4085,24 @@
     var hosts = [];
     elements.forEach(function (element) {
       Array.from(element.attributes || []).forEach(function (attribute) {
-        var value = unescapeBraces(attribute.value);
+        var name = attribute.name;
+        var value = attribute.value;
+        if (name.indexOf("data-mochi-row-attr-") === 0) {
+          var deferred = JSON.parse(value);
+          element.removeAttribute(name);
+          name = deferred.name;
+          value = deferred.template;
+        }
+        value = unescapeBraces(value);
         if (value.indexOf("\uE002") === -1) {
           if (value !== attribute.value) element.setAttribute(attribute.name, value);
           return;
         }
         hosts.push({
           element: element,
-          name: attribute.name,
+          name: name,
           template: value,
-          attrKind: rowAttributeKind(descriptor, attribute.name),
+          attrKind: rowAttributeKind(descriptor, name),
           value: undefined
         });
       });
@@ -4102,16 +4111,21 @@
   }
 
   function buildRowEntry(descriptor, row, index, parentContext, insertionContext) {
-    var fragment = rowFragmentFor(rowTemplateMarkup(descriptor), insertionContext, descriptor);
-    unescapeRowText(fragment);
-    var slotHosts = collectRowSlotHosts(fragment, descriptor);
-    var attrHosts = collectRowAttrHosts(fragment, descriptor);
     var context = {
       blockId: descriptor.id,
       item: row[0],
       index: index,
       parent: parentContext || null
     };
+    return buildRowFragment(descriptor, context, insertionContext);
+  }
+
+  // Branch fragments share the row's mutable context; they introduce no loop.
+  function buildRowFragment(descriptor, context, insertionContext) {
+    var fragment = rowFragmentFor(rowTemplateMarkup(descriptor), insertionContext, descriptor);
+    unescapeRowText(fragment);
+    var slotHosts = collectRowSlotHosts(fragment, descriptor);
+    var attrHosts = collectRowAttrHosts(fragment, descriptor);
 
     // Tag only this row's own top-level elements. Nested row nodes are inserted
     // later, so their child context cannot be overwritten by the parent.
@@ -4128,6 +4142,12 @@
       }
       childAnchors.set(child.id, anchor);
     });
+    var conditionalAnchors = new Map();
+    (descriptor.conditionals || []).forEach(function (conditional) {
+      var anchor = findCommentNode(fragment, "mochi-cond-" + conditional.id);
+      if (!anchor) throw new Error("mochi-loader: missing row conditional anchor " + conditional.id);
+      conditionalAnchors.set(conditional.id, { anchor: anchor, index: -1, entry: null });
+    });
 
     var start = global.document.createComment(ROW_START_MARKER);
     var end = global.document.createComment(ROW_END_MARKER);
@@ -4142,7 +4162,9 @@
       textHosts: slotHosts.textHosts,
       htmlHosts: slotHosts.htmlHosts,
       attrHosts: attrHosts,
-      childAnchors: childAnchors
+      childAnchors: childAnchors,
+      conditionalAnchors: conditionalAnchors,
+      insertionContext: insertionContext
     };
   }
 
@@ -4194,8 +4216,8 @@
     }
   }
 
-  function assignRowSlots(entry, row) {
-    var values = Array.isArray(row[1]) ? row[1] : [];
+  function assignRowSlots(entry, values) {
+    values = Array.isArray(values) ? values : [];
     entry.textHosts.forEach(function (host) { assignRowText(host, values[host.slot]); });
     entry.htmlHosts.forEach(function (host) { assignRowHtml(host, values[host.slot]); });
     entry.attrHosts.forEach(function (host) { assignRowAttribute(host, values); });
@@ -4346,12 +4368,37 @@
   function updateRowEntry(entry, row, index) {
     entry.context.item = row[0];
     entry.context.index = index;
-    assignRowSlots(entry, row);
-    reconcileRowChildren(entry, row);
+    updateRowFragment(entry, row[1], row[2], row[4]);
   }
 
-  function reconcileRowChildren(entry, row) {
-    var children = row[2];
+  function updateRowFragment(entry, values, children, conditionals) {
+    assignRowSlots(entry, values);
+    reconcileRowChildren(entry, children);
+    (entry.descriptor.conditionals || []).forEach(function (conditional, offset) {
+      var value = conditionals && conditionals[offset];
+      var index = value ? value[0] : -1;
+      var state = entry.conditionalAnchors.get(conditional.id);
+      if (index !== state.index) {
+        if (state.entry) removeRowEntry(state.entry);
+        state.entry = null;
+        state.index = -1;
+      }
+      if (index < 0) return;
+      var descriptor = conditional.branches[index];
+      if (!descriptor || !Array.isArray(value[1])) throw new Error("mochi-loader: invalid row conditional " + conditional.id);
+      var fresh = !state.entry;
+      var context = state.anchor.parentNode;
+      if (context.nodeType === 11) context = entry.insertionContext;
+      var branch = state.entry || buildRowFragment(descriptor, entry.context, context);
+      var payload = value[1];
+      updateRowFragment(branch, payload[0], payload[1], payload[2]);
+      if (fresh) insertRowBefore(branch, state.anchor);
+      state.entry = branch;
+      state.index = index;
+    });
+  }
+
+  function reconcileRowChildren(entry, children) {
     if (children === undefined || children === null) children = [];
     if (!Array.isArray(children)) {
       throw new Error("mochi-loader: nested list rows must be an array for binding descriptor " +
@@ -4368,11 +4415,11 @@
         throw new Error("mochi-loader: missing nested list anchor " + child.id +
           " for binding descriptor " + entry.descriptor.id);
       }
-      reconcileEach(anchor, child, childRows, entry.context);
+      reconcileEach(anchor, child, childRows, entry.context, entry.insertionContext);
     });
   }
 
-  function reconcileEach(anchor, descriptor, rows, parentContext) {
+  function reconcileEach(anchor, descriptor, rows, parentContext, insertionContext) {
     if (!Array.isArray(rows)) {
       throw new Error("mochi-loader: each patch must be an array for binding " + descriptor.id);
     }
@@ -4397,7 +4444,8 @@
     planned.forEach(function (item) {
       var entry = previous.get(item.key);
       item.isNew = !entry;
-      if (!entry) entry = buildRowEntry(descriptor, item.row, item.index, parentContext, parent);
+      if (!entry) entry = buildRowEntry(descriptor, item.row, item.index, parentContext,
+        parent.nodeType === 11 && insertionContext ? insertionContext : parent);
       item.entry = entry;
       next.set(item.key, entry);
       ordered.push(entry);

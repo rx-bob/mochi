@@ -97,22 +97,22 @@ class ComponentGenerator
     manifest
   end
 
-  private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor)) : String
+  private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor),
+                        context : EachRowDomContext = EachRowDomContext.new) : String
     # Lexbor's document parser drops comments at the body boundary. Mochi uses
     # comment anchors as binding targets, so preserve those markers as inert
     # elements while traversing and restore their exact comment markup after.
-    visible_anchors = anchor_comments_in_tree(html)
+    visible_anchors = anchor_comments_in_tree(html, context)
     source = html.gsub(/<!--(if-anchor-\d+|each-anchor-\d+)-->/) do |original, match|
       anchor = match[1]
       next original if visible_anchors.includes?(anchor)
       "<mochi-template-#{anchor}></mochi-template-#{anchor}>"
     end
-    doc = Lexbor.new(source)
-    body = doc.body
+    body = EachRowCompiler.fragment_root(source, context)
 
     if body
       body.children.each_with_index do |child, index|
-        walk(child, [index], bindings, events, EachRowDomContext.new("body", "html"))
+        walk(child, [index], bindings, events, context)
       end
     end
 
@@ -123,9 +123,9 @@ class ComponentGenerator
     end
   end
 
-  private def anchor_comments_in_tree(html : String) : Array(String)
+  private def anchor_comments_in_tree(html : String, context : EachRowDomContext) : Array(String)
     visible = [] of String
-    body = Lexbor.new(html).body
+    body = EachRowCompiler.fragment_root(html, context)
     return visible unless body
     collect_anchor_comments(body, visible)
     visible
@@ -236,7 +236,7 @@ class ComponentGenerator
       return unless block
 
       binding_id = allocate_binding_id
-      branches = block.branches.map { |branch| process_branch(branch) }
+      branches = block.branches.map { |branch| process_branch(branch, dom_context) }
       template_text = branches.first?.try(&.html_template) || block.content
 
       bindings << BindingDescriptor.new(
@@ -247,14 +247,17 @@ class ComponentGenerator
         nil,
         template_text,
         "__mochi_cond_#{block.id}",
-        branches
+        branches,
+        span: @expression_parser.locator.try(&.locate(block.condition))
       )
     elsif match = text.match(/each-anchor-(\d+)/)
       id = match[1].to_i
       block = @each_blocks.find { |candidate| candidate.id == id }
       return unless block
 
-      row = EachRowCompiler.compile(block, @expression_parser, dom_context)
+      ids = EachRowIds.new(@next_each_id)
+      row = EachRowCompiler.compile(block, @expression_parser, dom_context, ids)
+      @next_each_id = ids.next_id
       @each_row_templates << row
       row.all_events.each do |event|
         events << EventDescriptor.new(
@@ -482,9 +485,11 @@ class ComponentGenerator
   # Build one conditional branch fragment and recursively compile any nested
   # conditionals or each blocks it contains. Paths and binding IDs are relative
   # to the branch fragment; IDs themselves are component-global.
-  private def process_branch(branch : ConditionalBranch) : ConditionalBranchDescriptor
+  private def process_branch(branch : ConditionalBranch, context : EachRowDomContext) : ConditionalBranchDescriptor
     html = self.class.escape_double_braces(branch_with_anchors(branch))
     each_result = EachProcessor.process(html, @next_each_id)
+    span = @expression_parser.locator.try(&.locate(branch.condition || branch.content))
+    EachRowCompiler.validate_context_nesting(each_result.html, context, span)
 
     unless each_result.each_blocks.empty?
       @each_blocks.concat(each_result.each_blocks)
@@ -493,10 +498,10 @@ class ComponentGenerator
 
     branch_bindings = [] of BindingDescriptor
     branch_events = [] of EventDescriptor
-    template = walk_html(each_result.html, branch_bindings, branch_events)
+    template = walk_html(each_result.html, branch_bindings, branch_events, context)
     validate_template_placeholders(@mochi_cmp_name, template)
     template = self.class.unescape_double_braces(template)
-    ConditionalBranchDescriptor.new(template, branch_bindings, branch_events)
+    ConditionalBranchDescriptor.new(template, branch_bindings, branch_events, context.tag, context.namespace, span)
   end
 
   private def branch_with_anchors(branch : ConditionalBranch) : String

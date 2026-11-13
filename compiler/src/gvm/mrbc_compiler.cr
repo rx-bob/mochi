@@ -894,6 +894,9 @@ class MrbcCompiler
             binding.branches.each do |branch|
               json.object do
                 json.field "html_template", branch.html_template
+                json.field "context_tag", branch.context_tag
+                json.field "context_namespace", branch.context_namespace
+                write_span(json, span) if span = branch.span
                 write_bindings(json, branch.bindings)
                 write_events(json, branch.events)
               end
@@ -910,10 +913,10 @@ class MrbcCompiler
     end
   end
 
-  private def write_each_rows_object(json : JSON::Builder, rows : EachRowTemplate) : Nil
+  private def write_each_rows_object(json : JSON::Builder, rows : EachRowFragment) : Nil
     json.object do
       json.field "id", rows.block_id
-      json.field "keyed", true if rows.key_expression
+      json.field "keyed", true if rows.is_a?(EachRowTemplate) && rows.key_expression
       json.field "context_tag", rows.context_tag
       json.field "context_namespace", rows.context_namespace
       if span = rows.span
@@ -939,6 +942,21 @@ class MrbcCompiler
       json.field "children" do
         json.array do
           rows.children.each { |child| write_each_rows_object(json, child) }
+        end
+      end
+      unless rows.conditionals.empty?
+        json.field "conditionals" do
+          json.array do
+            rows.conditionals.each do |conditional|
+              json.object do
+                json.field "id", conditional.id
+                write_span(json, span) if span = conditional.span
+                json.field "branches" do
+                  json.array { conditional.branches.each { |branch| write_each_rows_object(json, branch) } }
+                end
+              end
+            end
+          end
         end
       end
     end

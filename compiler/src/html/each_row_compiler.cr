@@ -7,6 +7,7 @@ require "./html_attributes"
 require "./template_expression"
 require "./attribute_conditional_extractor"
 require "./attribute_hash_extractor"
+require "./conditional_processor"
 
 # Compiles one each block into a static row template plus evaluated value
 # slots and nested row trees. Expression text stays in the compiler; the
@@ -29,8 +30,9 @@ class EachRowCompiler
     block : EachBlock,
     parser : TemplateExpressionParser,
     context : EachRowDomContext = EachRowDomContext.new,
+    ids : EachRowIds = EachRowIds.new(block.id + 1),
   ) : EachRowTemplate
-    compile_row(block, parser, [] of EachRowScope, context)
+    compile_row(block, parser, [] of EachRowScope, context, ids)
   end
 
   private def self.compile_row(
@@ -38,6 +40,7 @@ class EachRowCompiler
     parser : TemplateExpressionParser,
     parent_scope : Array(EachRowScope),
     context : EachRowDomContext,
+    ids : EachRowIds,
   ) : EachRowTemplate
     item_name = block.loop_def.item_name
     declared_index = block.loop_def.index_name
@@ -54,10 +57,19 @@ class EachRowCompiler
 
     entry = EachRowScope.new(item_name, index_name, declared_index)
     scope = parent_scope + [entry]
+    fragment = compile_fragment(block.content, block.id, parser, scope, context, ids, row_span)
+    EachRowTemplate.new(block.id, block.loop_def.array_name, item_name, index_name,
+      declared_index, fragment.template, fragment.bindings, fragment.events,
+      fragment.children, scope, key_expression, row_span, fragment.attribute_conditionals,
+      fragment.attribute_hashes, context.tag, context.namespace, fragment.conditionals)
+  end
+
+  private def self.compile_fragment(
+    template : String, fragment_id : Int32, parser : TemplateExpressionParser,
+    scope : Array(EachRowScope), context : EachRowDomContext, ids : EachRowIds,
+    row_span : TemplateSourceSpan?,
+  ) : EachRowFragment
     scope_names = scope_names_for(scope)
-    template = replace_nested_blocks(block)
-    child_contexts = contexts_for_children(template, block.children, context)
-    validate_context_nesting(template, context, row_span)
     if with_directive = template.match(/\{with(?:\s|})/)
       span = parser.locator.try(&.locate(with_directive[0]))
       raise TemplateExpressionError.new(
@@ -65,9 +77,33 @@ class EachRowCompiler
         span
       )
     end
+    # Attribute helpers belong to this lexical scope. Nested loops are
+    # compiled separately and must retain their own attribute expressions.
+    protected_loops = {} of String => String
+    EachProcessor.roots(EachProcessor.extract_each_blocks(template)).reverse_each do |child|
+      marker = "<!--mochi-pending-loop-#{child.id}-->"
+      protected_loops[marker] = template[child.start_pos...child.end_pos]
+      template = EachProcessor.replace_range(template, child.start_pos, child.end_pos, marker)
+    end
     hash_attributes = AttributeHashExtractor.process(template)
     conditional_attributes = AttributeConditionalExtractor.process(hash_attributes.html)
-    template = rewrite_row_attribute_helpers(conditional_attributes.html, block.id, scope)
+    template = rewrite_row_attribute_helpers(conditional_attributes.html, fragment_id, scope)
+    protected_loops.each { |marker, source| template = template.gsub(marker, source) }
+    conditional_result = ConditionalProcessor.process(template)
+    blocks = conditional_result.conditionals.reject do |block|
+      conditional_result.conditionals.any? { |other| other != block && other.contains?(block) }
+    end.sort_by(&.start_pos)
+    conditional_ids = {} of Int32 => Int32
+    blocks.each { |block| conditional_ids[block.id] = ids.take }
+    template = conditional_result.html.gsub(/<!--if-anchor-(\d+)-->/) do |_, match|
+      "<!--mochi-cond-#{conditional_ids[match[1].to_i]}-->"
+    end
+    each_result = EachProcessor.process(template, ids.next_id)
+    ids.next_id += each_result.each_blocks.size
+    children_blocks = EachProcessor.roots(each_result.each_blocks)
+    template = each_result.html.gsub("<!--each-anchor-", "<!--mochi-each-")
+    child_contexts = contexts_for_children(template, children_blocks, context)
+    validate_context_nesting(template, context, row_span)
     if template.matches?(/\sref\s*=/)
       raise TemplateExpressionError.new(
         "ref is not supported inside each rows; place named refs in the static component template",
@@ -97,7 +133,7 @@ class EachRowCompiler
         end
 
         event_index += 1
-        wrapper = "__mochi_each_#{block.id}_ev_#{event_index}"
+        wrapper = "__mochi_each_#{fragment_id}_ev_#{event_index}"
         row_events << EachRowEventDescriptor.new(
           call.event,
           handler,
@@ -165,28 +201,60 @@ class EachRowCompiler
       )
     end
 
-    children = block.children.map do |child|
-      compile_row(child, parser, scope, child_contexts[child.id]? || context)
+    children = children_blocks.map do |child|
+      compile_row(child, parser, scope, child_contexts[child.id]? || context, ids)
     end
-
-    EachRowTemplate.new(
-      block.id,
-      block.loop_def.array_name,
-      item_name,
-      index_name,
-      declared_index,
-      sentinel_template,
+    conditionals = blocks.map do |block|
+      id = conditional_ids[block.id]
+      branch_context = context_for_marker(template, "mochi-cond-#{id}", context)
+      conditions = block.branches.map(&.condition)
+      conditions.each { |condition| parser.validate_source!(condition, "row condition") if condition }
+      branches = block.branches.map do |branch|
+        span = parser.locator.try(&.locate(branch.condition || branch.content)) || row_span
+        compile_fragment(branch.content, ids.take, parser, scope, branch_context, ids, span)
+      end
+      EachRowConditional.new(id, conditions, branches, parser.locator.try(&.locate(block.condition)))
+    end
+    EachRowFragment.new(
+      fragment_id,
+      inert_svg_attributes(sentinel_template, context),
       bindings,
       row_events,
       children,
       scope,
-      key_expression,
       row_span,
       conditional_attributes.conditionals,
       hash_attributes.hashes,
       context.tag,
-      context.namespace
+      context.namespace,
+      conditionals
     )
+  end
+
+  # SVG numeric/path parsers reject sentinel strings even in detached trees.
+  # Keep dynamic attributes inert until the loader applies evaluated slots.
+  private def self.inert_svg_attributes(template : String, context : EachRowDomContext) : String
+    root = fragment_root(template, context)
+    return template unless root
+    changed = defer_svg_attributes(root, context.namespace)
+    changed ? root.inner_html : template
+  end
+
+  private def self.defer_svg_attributes(node : Lexbor::Node, namespace : String) : Bool
+    tag = node.tag_name.downcase
+    namespace = "svg" if tag == "svg"
+    changed = false
+    if namespace == "svg" && (attrs = node.attributes)
+      attrs.to_a.each_with_index do |(name, value), index|
+        next unless value.includes?(SENTINEL_START)
+        node.attribute_remove(name)
+        node.attribute_add("data-mochi-row-attr-#{index}", {"name" => name, "template" => value}.to_json)
+        changed = true
+      end
+    end
+    namespace = "html" if tag == "foreignobject"
+    node.children.each { |child| changed = defer_svg_attributes(child, namespace) || changed }
+    changed
   end
 
   private def self.rewrite_row_attribute_helpers(
@@ -200,23 +268,6 @@ class EachRowCompiler
     end.gsub(/\{__mochi_attr_hash_(\d+)\}/) do |_, match|
       "{__mochi_each_#{block_id}_attr_hash_#{match[1]}(#{args})}"
     end
-  end
-
-  private def self.replace_nested_blocks(block : EachBlock) : String
-    template = block.content.dup
-    block.children.sort_by { |child| -child.start_pos }.each do |child|
-      rel_start = child.start_pos - block.content_start_pos
-      rel_end = child.end_pos - block.content_start_pos
-      next if rel_start < 0 || rel_end > template.size || rel_start > rel_end
-
-      template = EachProcessor.replace_range(
-        template,
-        rel_start,
-        rel_end,
-        "<!--mochi-each-#{child.id}-->"
-      )
-    end
-    template
   end
 
   # The transpiler normalizes event calls before each blocks are extracted.
@@ -288,7 +339,7 @@ class EachRowCompiler
     result
   end
 
-  private def self.wrap_in_context(template : String, context : EachRowDomContext) : String
+  def self.wrap_in_context(template : String, context : EachRowDomContext) : String
     tag = context.tag.downcase
     if context.namespace == "svg"
       return tag == "svg" ? "<svg>#{template}</svg>" : "<svg><#{tag}>#{template}</#{tag}></svg>"
@@ -314,6 +365,32 @@ class EachRowCompiler
     end
   end
 
+  def self.fragment_root(template : String, context : EachRowDomContext) : Lexbor::Node?
+    body = Lexbor.new(wrap_in_context(template, context)).body
+    return body if context.tag == "body"
+    body.try(&.css(context.tag).first?)
+  end
+
+  private def self.context_for_marker(template : String, text : String, context : EachRowDomContext) : EachRowDomContext
+    body = Lexbor.new(wrap_in_context(template, context)).body
+    marker = body.try { |root| find_comment(root, text) }
+    parent = marker.try(&.parent)
+    return context unless parent
+    ancestors = [] of Lexbor::Node
+    ancestor = parent
+    while ancestor
+      ancestors << ancestor
+      ancestor = ancestor.parent
+    end
+    namespace = context.namespace
+    ancestors.reverse_each do |node|
+      tag = node.tag_name.downcase
+      namespace = "svg" if tag == "svg"
+      namespace = "html" if tag == "foreignobject"
+    end
+    EachRowDomContext.new(parent.tag_name, namespace)
+  end
+
   private def self.contexts_for_children(
     template : String,
     children : Array(EachBlock),
@@ -321,25 +398,9 @@ class EachRowCompiler
   ) : Hash(Int32, EachRowDomContext)
     return {} of Int32 => EachRowDomContext if children.empty?
 
-    body = Lexbor.new(wrap_in_context(template, context)).body
     result = {} of Int32 => EachRowDomContext
-    return result unless body
-
     children.each do |child|
-      marker_text = "mochi-each-#{child.id}"
-      if marker = find_comment(body, marker_text)
-        parent = marker.parent
-        next unless parent
-        namespace = context.namespace
-        ancestor = parent
-        while ancestor
-          tag = ancestor.tag_name.downcase
-          namespace = "svg" if tag == "svg"
-          namespace = "html" if tag == "foreignobject"
-          ancestor = ancestor.parent
-        end
-        result[child.id] = EachRowDomContext.new(parent.tag_name, namespace)
-      end
+      result[child.id] = context_for_marker(template, "mochi-each-#{child.id}", context)
     end
     result
   end
@@ -353,7 +414,7 @@ class EachRowCompiler
     nil
   end
 
-  private def self.validate_context_nesting(
+  def self.validate_context_nesting(
     template : String,
     context : EachRowDomContext,
     span : TemplateSourceSpan?,
