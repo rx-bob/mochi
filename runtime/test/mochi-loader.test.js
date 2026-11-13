@@ -1443,6 +1443,84 @@ test("pointer capture commands run with an owned target during the matching even
   assert.deepEqual(disposed, [[ownerKey, mountToken]]);
 });
 
+test("drag events dispatch Ruby and DataTransfer commands synchronously within the native window", async () => {
+  const component = {
+    tag_name: "drag-panel",
+    class_name: "DragPanel",
+    chi_file: "drag-panel.chi",
+    html_template: '<button draggable="true" data-mochi-dragstart="begin" ' +
+      'data-mochi-dragover="accept" data-mochi-drop="receive" ' +
+      'data-mochi-args-drop=\'[{"kind":"event"}]\'>Drag</button>',
+    css: "",
+    bindings: [],
+    events: [
+      { path: [0], event: "dragstart", method_sym: "begin", args: [] },
+      { path: [0], event: "dragover", method_sym: "accept", args: [] },
+      { path: [0], event: "drop", method_sym: "receive", args: [{ kind: "event" }] },
+    ],
+    capabilities: ["drag"],
+  };
+  const base = manifest([component]);
+  base.capabilities = {
+    drag: {
+      version: 1,
+      host: "mochi-drag.js",
+      operations: { set_data: "sync", set_text: "sync", accept: "sync" },
+      packages: [],
+      limits: { payload_bytes: TEST_HOST_CAPACITIES.host_drag_payload_bytes },
+    },
+  };
+  const adapter = require("../mochi-drag.js");
+  const { dom, module, log } = await setup([component], {
+    manifest: base,
+    hostModuleFactory: async () => adapter,
+  });
+  log.methods.add("begin");
+  log.methods.add("accept");
+  log.methods.add("receive");
+  log.onDispatch = (name, instance) => {
+    if (name === "begin") {
+      module.queueEmit(JSON.stringify({
+        __host: "drag_set_data", instance: String(instance),
+        type: "application/vnd.mochi.value+json", value: { flag: false, empty: null },
+      }) + "\n");
+    } else if (name === "accept") {
+      module.queueEmit(JSON.stringify({
+        __host: "drag_accept", instance: String(instance),
+        type: "application/vnd.mochi.value+json", effect: "copy",
+      }) + "\n");
+    }
+  };
+  const element = dom.window.document.createElement("drag-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const transfer = {
+    types: [], values: new Map(), dropEffect: "none",
+    setData(type, value) { this.values.set(type, value); this.types = Array.from(this.values.keys()); },
+    getData(type) { return this.values.get(type) || ""; },
+  };
+  const target = element.shadowRoot.querySelector("button");
+  function dispatch(type) {
+    const event = new dom.window.Event(type, { bubbles: true, composed: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: transfer });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  dispatch("dragstart");
+  assert.deepEqual(JSON.parse(transfer.getData("application/vnd.mochi.value+json")).value,
+    { flag: false, empty: null });
+  const over = dispatch("dragover");
+  assert.equal(over.defaultPrevented, true);
+  assert.equal(transfer.dropEffect, "copy");
+  transfer.setData("text/plain", "safe text");
+  const beforeDrop = log.dispatchedArgs.length;
+  dispatch("drop");
+  assert.equal(log.dispatchedArgs.length, beforeDrop + 1);
+  assert.deepEqual(log.dispatchedArgs.at(-1).args[0].drag_value, { flag: false, empty: null });
+  assert.equal(log.dispatchedArgs.at(-1).args[0].drag_text, "safe text");
+});
+
 test("pointer moves coalesce per pointer and flush before terminal events", async () => {
   const component = {
     tag_name: "pointer-queue-panel",

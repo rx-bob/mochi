@@ -64,6 +64,14 @@ module MochiPackaging
       [CapabilityOperation.new("capture", "sync"), CapabilityOperation.new("release", "sync")],
       [] of Tuple(String, String)
     ),
+    CapabilityDefinition.new(
+      "drag",
+      1,
+      "mochi-drag.js",
+      "MochiDrag",
+      [CapabilityOperation.new("set_data", "sync"), CapabilityOperation.new("set_text", "sync"), CapabilityOperation.new("accept", "sync")],
+      [{"payload_bytes", "host_drag_payload_bytes"}]
+    ),
   ]
 
   record Capability,

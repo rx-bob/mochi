@@ -9,6 +9,7 @@
   var CAPABILITY_LIMIT_KEYS = {
     formatting: { cache_entries: "host_format_cache_entries" },
     pointer: {},
+    drag: { payload_bytes: "host_drag_payload_bytes" },
     network: {
       pending_requests: "host_network_pending_requests",
       response_bytes: "host_network_response_bytes",
@@ -61,6 +62,7 @@
     activeGlobalEventDelivery: null,
     activeActionContext: null,
     activePointerDispatch: null,
+    activeDragDispatch: null,
     pointerMoves: new Map(),
     reportingGlobalEventOverflow: false,
     nextMountToken: 0,
@@ -1395,6 +1397,26 @@
     }
   }
 
+  function handleDragCommand(module, entry) {
+    var ownerKey = typeof entry.instance === "string" ? entry.instance : "";
+    var element = state.elements.get(ownerKey);
+    var context = state.activeDragDispatch;
+    var adapter = state.hostAdapters.get("drag");
+    if (!element || element._mochiDisconnected || element._mochiUnmounted ||
+        !element.isConnected || String(element._mochiInstance) !== ownerKey ||
+        !context || context.element !== element || context.mountToken !== element._mochiMountToken) {
+      throw new Error("mochi-drag: component mount or native drag event is stale");
+    }
+    if (!adapter || !adapter.sync) throw new Error("mochi-drag: drag capability is not loaded");
+    if (entry.__host === "drag_set_data") {
+      adapter.sync.set_data(context, entry.value, adapter.limits);
+    } else if (entry.__host === "drag_set_text") {
+      adapter.sync.set_text(context, entry.value, adapter.limits);
+    } else if (entry.__host === "drag_accept") {
+      adapter.sync.accept(context, String(entry.type || ""), String(entry.effect || "copy"));
+    }
+  }
+
   function handleHostCommand(module, entry) {
     var hostKind = entry.__host;
     if (hostKind === "pointer_capture") {
@@ -1403,6 +1425,10 @@
     }
     if (hostKind === "pointer_release") {
       handlePointerCommand(module, entry, "release");
+      return;
+    }
+    if (hostKind === "drag_set_data" || hostKind === "drag_set_text" || hostKind === "drag_accept") {
+      handleDragCommand(module, entry);
       return;
     }
     if (hostKind === "storage_set") {
@@ -2353,6 +2379,8 @@
       async: spec.async,
       disposeOwner: spec.disposeOwner,
       reconcileOwner: spec.reconcileOwner,
+      snapshot: spec.snapshot,
+      internalType: spec.internalType,
       limits: limits
     });
     hosts[name] = installedSpec;
@@ -4983,6 +5011,61 @@
         }
 
         var mountToken = this._mochiMountToken;
+        var dragEvent = event && (event.type === "dragstart" || event.type === "dragover" || event.type === "drop");
+        var mountedNow = this._mochiModule && this._mochiInstance !== null &&
+          this._mochiInstance !== undefined && this._mochiMountState === "mounted"
+          ? { module: this._mochiModule, instance: this._mochiInstance, mountToken: mountToken }
+          : null;
+        if (dragEvent && mountedNow && componentCapabilities(this._mochiComponent).indexOf("drag") !== -1) {
+          var previousDragDispatch = state.activeDragDispatch;
+          var dragAdapter = state.hostAdapters.get("drag");
+          if (!dragAdapter || typeof dragAdapter.snapshot !== "function") {
+            reportError(element, "event", method, new Error("mochi-drag: drag adapter is unavailable"));
+            return;
+          }
+          try {
+            if (event.type === "drop") Object.assign(payload, dragAdapter.snapshot(event, dragAdapter.limits));
+            var sourceInfo = event.type === "dragstart" ? eventNodeInfo(event.target) : payload.drag_source || null;
+            state.activeDragDispatch = {
+              element: element,
+              target: target,
+              event: event,
+              mountToken: mountToken,
+              source: sourceInfo
+            };
+            var syncSymbol = intern(mountedNow.module, method);
+            var syncDispatched;
+            if (method.indexOf("__mochi_each_") === 0) {
+              if (eachContexts.length === 0) throw new Error("mochi-loader: list row event " + method + " has no row context");
+              var syncRowArgs = [];
+              eachContexts.forEach(function (context) {
+                syncRowArgs.push(context.item);
+                syncRowArgs.push(context.index);
+              });
+              syncRowArgs.push(payload);
+              syncDispatched = dispatchEventArgs(mountedNow.module, mountedNow.instance, syncSymbol, syncRowArgs);
+            } else if (descriptors.length > 0) {
+              var syncArgs = descriptors.map(function (descriptor) {
+                return eventArgumentValue(element, descriptor, target, payload);
+              });
+              syncDispatched = dispatchEventArgs(mountedNow.module, mountedNow.instance, syncSymbol, syncArgs);
+            } else if (requiredArgumentCount(mountedNow.module, mountedNow.instance, syncSymbol) === 1) {
+              syncDispatched = dispatchEventArgs(mountedNow.module, mountedNow.instance, syncSymbol, [payload]);
+            } else {
+              syncDispatched = mountedNow.module._mochi_dispatch_event(mountedNow.instance, syncSymbol) === 1;
+            }
+            if (!syncDispatched) throw new Error("mochi-loader: event dispatch failed for " + method + ": " + lastError(mountedNow.module));
+            applyPatches(element, mountedNow.module);
+            drainEmits(mountedNow.module);
+            drainFetches(mountedNow.module);
+            state.activeDragDispatch = previousDragDispatch;
+          } catch (error) {
+            state.activeDragDispatch = previousDragDispatch;
+            discardHostOutboxes(mountedNow.module);
+            reportError(element, "event", method, error, mountedNow.module);
+          }
+          return;
+        }
         this._mochiReady.then(function (mounted) {
           if (element._mochiDisconnected || element._mochiUnmounted ||
               mounted.mountToken !== element._mochiMountToken ||

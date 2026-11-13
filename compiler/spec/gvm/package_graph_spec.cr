@@ -461,6 +461,40 @@ RUBY
     end
   end
 
+  it "loads the native drag adapter only for reachable MochiDrag users" do
+    root = File.join(Dir.tempdir, "mochi_package_drag_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      drag = dependency_prelude(root, "lib/mochi_builtin_drag.rb", <<-RUBY)
+class MochiDrag
+  def self.set_data(value)
+    Mochi.drag_set_data(value)
+  end
+end
+RUBY
+      plain = dependency_component(root, "plain-drag", "PlainDrag", "class PlainDrag\nend\n")
+      direct = dependency_component(root, "direct-drag", "DirectDrag", <<-RUBY)
+class DirectDrag
+  def begin_drag(event)
+    MochiDrag.set_data(false)
+  end
+end
+RUBY
+
+      graph = dependency_graph(root, [plain, direct], [drag])
+      graph.has_capability?("drag").should be_true
+      graph.capabilities["drag"].host.should eq("mochi-drag.js")
+      graph.capabilities["drag"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"set_data", "sync"}, {"set_text", "sync"}, {"accept", "sync"}])
+      graph.capabilities["drag"].limit_keys.should eq([{"payload_bytes", "host_drag_payload_bytes"}])
+      graph.capability_package_ids.should eq(Set{"ruby:lib/mochi_builtin_drag.rb"})
+      plain.manifest.capabilities.should eq([] of String)
+      direct.manifest.capabilities.should eq(["drag"])
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "rebuilds identical package identities, dependencies, and order across checkout paths" do
     root_one = File.join(Dir.tempdir, "mochi_package_reproducible_one_#{Random.rand(1_000_000)}")
     root_two = File.join(Dir.tempdir, "mochi_package_reproducible_two_#{Random.rand(1_000_000)}")

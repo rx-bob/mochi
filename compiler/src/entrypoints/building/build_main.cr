@@ -8,6 +8,7 @@ require "../../generated/money_rb"
 require "../../generated/format_rb"
 require "../../generated/collections_rb"
 require "../../generated/pointer_rb"
+require "../../generated/drag_rb"
 require "../../tooling/installation_paths"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
@@ -107,6 +108,10 @@ class BuildMain
     builder_man.register_generated_ruby_source(
       "#{builder_man.pre_tp_dir}/lib/mochi_builtin_pointer.rb",
       MochiPointerRbFragment.get_ruby_code
+    )
+    builder_man.register_generated_ruby_source(
+      "#{builder_man.pre_tp_dir}/lib/mochi_builtin_drag.rb",
+      MochiDragRbFragment.get_ruby_code
     )
 
     if prepare_typecheck_tree
