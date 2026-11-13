@@ -56,6 +56,14 @@ module MochiPackaging
         {"envelope_bytes", "host_fetch_envelope_bytes"},
       ]
     ),
+    CapabilityDefinition.new(
+      "pointer",
+      1,
+      "mochi-pointer.js",
+      "MochiPointer",
+      [CapabilityOperation.new("capture", "sync"), CapabilityOperation.new("release", "sync")],
+      [] of Tuple(String, String)
+    ),
   ]
 
   record Capability,

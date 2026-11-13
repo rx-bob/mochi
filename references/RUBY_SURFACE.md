@@ -73,3 +73,26 @@ do not use these methods do not download the collection package.
 All forms use one pass and constant extra storage. The optional package adds no
 host adapter and does not enter an app's initial package set unless its Ruby
 call graph reaches one of these methods.
+
+## Array sorting
+
+`sort_by` accepts a key block and evaluates it once for each element. `sort`
+accepts a comparator block with the usual two arguments; return a negative
+number when the left value belongs first, zero when they compare equal, and a
+positive number when the right value belongs first. For descending order,
+reverse the comparison with `right <=> left`:
+
+```ruby
+rows.sort_by { |row| row[:rank] }
+scores.sort { |left, right| right <=> left }
+```
+
+Both block forms return a new array and leave the receiver unchanged. Sort keys
+support Integer, Float, and String comparisons; unordered or incomparable keys
+and nonnumeric comparator results raise a source-located VM error. Equal-key
+ordering is unspecified. Sorting uses a bottom-up merge sort, so sorted and
+reverse-sorted inputs avoid quadratic comparison counts. The temporary output
+and key arrays share the VM's bounded scratch-slot pool; an exhausted pool
+raises `scratch full` without returning a partial result. A sort operation is
+limited to at most half the configured scratch slots (currently 2048 elements)
+before accounting for slots already used by the current VM entry.

@@ -1345,6 +1345,94 @@ test("formatting capability host is read from the versioned capabilities map", a
   assert.equal(installed.sync, adapter.sync);
 });
 
+test("pointer capture commands run with an owned target during the matching event dispatch", async () => {
+  const component = {
+    tag_name: "pointer-panel",
+    class_name: "PointerPanel",
+    chi_file: "pointer-panel.chi",
+    html_template: '<button data-mochi-ref="handle" data-mochi-pointerdown="begin" ' +
+      'data-mochi-args-pointerdown=\'[{"kind":"event"}]\'>Drag</button>',
+    css: "",
+    bindings: [],
+    events: [{ path: [0], event: "pointerdown", method_sym: "begin", args: [{ kind: "event" }] }],
+    capabilities: ["pointer"],
+  };
+  const base = manifest([component]);
+  base.capabilities = {
+    pointer: {
+      version: 1,
+      host: "mochi-pointer.js",
+      operations: { capture: "sync", release: "sync" },
+      packages: [],
+      limits: {},
+    },
+  };
+  const calls = [];
+  const disposed = [];
+  let requests = 0;
+  const adapter = {
+    name: "pointer",
+    version: 1,
+    sync: {
+      capture(...args) { calls.push(["capture", ...args]); return true; },
+      release(...args) { calls.push(["release", ...args]); return true; },
+    },
+    disposeOwner(...args) { disposed.push(args); },
+  };
+  const { dom, module, log } = await setup([component], {
+    manifest: base,
+    hostModuleFactory: async (url) => {
+      requests += 1;
+      log.hostUrls.push(url);
+      return adapter;
+    },
+  });
+  log.methods.add("begin");
+  log.onDispatch = (name, instance) => {
+    if (name !== "begin") return;
+    module.queueEmit(JSON.stringify({
+      __host: "pointer_capture", instance: String(instance), pointer_id: 37, reference: "handle",
+    }) + "\n");
+  };
+  const element = dom.window.document.createElement("pointer-panel");
+  const secondElement = dom.window.document.createElement("pointer-panel");
+  dom.window.document.body.append(element, secondElement);
+  await Promise.all([element._mochiReady, secondElement._mochiReady]);
+  assert.equal(requests, 1);
+  assert.ok(log.hostUrls[0].endsWith("/mochi-pointer.js"));
+
+  const event = new dom.window.Event("pointerdown", { bubbles: true, composed: true });
+  Object.defineProperties(event, {
+    pointerId: { value: 37 },
+    pointerType: { value: "pen" },
+    isPrimary: { value: true },
+    buttons: { value: 1 },
+  });
+  const target = element.shadowRoot.querySelector("button");
+  target.dispatchEvent(event);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "capture");
+  assert.equal(calls[0][1], target);
+  assert.equal(calls[0][2], 37);
+  assert.equal(calls[0][3], String(element._mochiInstance));
+  assert.equal(calls[0][4], element._mochiMountToken);
+  assert.equal(calls[0][5], event);
+  const payload = log.dispatchedArgs.at(-1).args[0];
+  assert.equal(payload.pointer_id, 37);
+  assert.equal(payload.pointer_type, "pen");
+  assert.equal(payload.is_primary, true);
+  assert.equal(payload.buttons, 1);
+  assert.equal(payload.current_target_ref, "handle");
+
+  const ownerKey = String(element._mochiInstance);
+  const mountToken = element._mochiMountToken;
+  element.remove();
+  await flushLifecycle();
+  assert.deepEqual(disposed, [[ownerKey, mountToken]]);
+});
+
 test("shared style resources use one adopted sheet before the local override", async () => {
   const sharedCss = ":host { display: block; } .control { padding: 4px; }";
   const component = {
@@ -5348,6 +5436,10 @@ test("zero-argument handlers receive the normalized event when Ruby requires one
     offset_x: 0,
     offset_y: 0,
     button: 0,
+    pointer_id: -1,
+    pointer_type: "",
+    is_primary: false,
+    buttons: 0,
     target_id: "",
     target_ref: "",
     target_tag: "input",
@@ -5369,19 +5461,23 @@ test("pointer and keyboard handlers receive coordinates, modifiers, and dataset"
     class_name: "EventPayloadCheck",
     chi_file: "event-payload-check.chi",
     html_template:
-      '<button id="pointer-target" class="pointer" data-row-id="row-7" data-mochi-click="on_pointer" ' +
+      '<button id="pointer-target" class="pointer" data-mochi-ref="handle" data-row-id="row-7" data-mochi-click="on_pointer" ' +
       'data-mochi-args-click=\'[{"kind":"event"}]\'>Pointer</button>' +
+      '<button class="pointer-events" data-mochi-pointerdown="on_pointer_event" ' +
+      'data-mochi-args-pointerdown=\'[{"kind":"event"}]\'>Pointer event</button>' +
       '<input class="keys" data-mochi-keydown="on_key">',
     css: "",
     bindings: [],
     events: [
       { path: [0], event: "click", method_sym: "on_pointer", args: [] },
-      { path: [1], event: "keydown", method_sym: "on_key", args: [] },
+      { path: [1], event: "pointerdown", method_sym: "on_pointer_event", args: [] },
+      { path: [2], event: "keydown", method_sym: "on_key", args: [] },
     ],
   };
 
   const { dom, log } = await setup([pointerComponent]);
   log.methods.add("on_pointer");
+  log.methods.add("on_pointer_event");
   log.methods.add("on_key");
   log.requiredArgs.set("on_key", 1);
   const element = document.createElement("event-payload-check");
@@ -5403,6 +5499,21 @@ test("pointer and keyboard handlers receive coordinates, modifiers, and dataset"
   assert.equal(pointer.button, 2);
   assert.equal(pointer.target_id, "pointer-target");
   assert.equal(pointer.dataset.rowId, "row-7");
+
+  const nativePointer = new dom.window.Event("pointerdown", { bubbles: true, composed: true });
+  Object.defineProperties(nativePointer, {
+    pointerId: { value: 37 },
+    pointerType: { value: "pen" },
+    isPrimary: { value: true },
+    buttons: { value: 1 },
+  });
+  element.shadowRoot.querySelector(".pointer-events").dispatchEvent(nativePointer);
+  await new Promise((resolve) => setImmediate(resolve));
+  const pointerPayload = log.dispatchedArgs.at(-1).args[0];
+  assert.equal(pointerPayload.pointer_id, 37);
+  assert.equal(pointerPayload.pointer_type, "pen");
+  assert.equal(pointerPayload.is_primary, true);
+  assert.equal(pointerPayload.buttons, 1);
 
   element.shadowRoot.querySelector(".keys").dispatchEvent(new dom.window.KeyboardEvent("keydown", {
     bubbles: true,
@@ -5676,6 +5787,10 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
       offset_x: 0,
       offset_y: 0,
       button: 0,
+      pointer_id: -1,
+      pointer_type: "",
+      is_primary: false,
+      buttons: 0,
       target_id: "",
       target_ref: "",
       target_tag: "input",

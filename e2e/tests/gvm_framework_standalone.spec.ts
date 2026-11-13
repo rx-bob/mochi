@@ -84,6 +84,8 @@ test("Array sum, min, and max work through helper, block, event, and binding cal
     await expect(root.locator(".sum")).toHaveText("6");
     await expect(root.locator(".minimum")).toHaveText("1");
     await expect(root.locator(".maximum")).toHaveText("3");
+    await expect(root.locator(".empty-minimum")).toHaveText("");
+    await expect(root.locator(".empty-maximum")).toHaveText("");
     await expect(root.locator(".helper-sum")).toHaveText("22");
     await expect(root.locator(".helper-min")).toHaveText("3");
     await expect(root.locator(".event-value")).toHaveText("0");
@@ -119,6 +121,8 @@ test("Array aggregators work through helpers, blocks, bindings, and events", asy
     await expect(root.locator(".block-sum")).toHaveText("12");
     await expect(root.locator(".minimum")).toHaveText("-4");
     await expect(root.locator(".maximum")).toHaveText("3");
+    await expect(root.locator(".block-minimum")).toHaveText("3");
+    await expect(root.locator(".block-maximum")).toHaveText("-4");
     await expect(root.locator(".string-minimum")).toHaveText("apple");
     await expect(root.locator(".string-maximum")).toHaveText("plum");
     await expect(root.locator(".event-total")).toHaveText("0");
@@ -130,10 +134,60 @@ test("Array aggregators work through helpers, blocks, bindings, and events", asy
     expect(runtimeErrors[0].method).toBe("incompatible_minimum");
     expect(runtimeErrors[0].source).toMatch(/AggregationContractsRoot\.rb:\d+/);
 
+    await root.locator("button.overflow").click();
+    const overflowErrors = await page.evaluate(() => (window as any).__aggregationErrors);
+    expect(overflowErrors).toHaveLength(2);
+    expect(overflowErrors[1].method).toBe("overflowing_sum");
+    expect(overflowErrors[1].message).toMatch(/integer overflow/);
+
     await root.locator("button.update").click();
     await expect(root.locator(".event-total")).toHaveText("10");
-    expect(await page.evaluate(() => (window as any).__aggregationErrors)).toHaveLength(1);
+    expect(await page.evaluate(() => (window as any).__aggregationErrors)).toHaveLength(2);
   }, "<aggregation-contracts-root></aggregation-contracts-root>");
+
+  expect(errors).toEqual([]);
+});
+
+test("Array sort_by and comparator sort preserve inputs and stay bounded", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  setupConsoleLogging(page, { expectedMochiErrors: true });
+  await page.addInitScript(() => {
+    (window as any).__sortErrors = [];
+    document.addEventListener("mochi:error", (event) => {
+      (window as any).__sortErrors.push((event as CustomEvent).detail);
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const manifest = await page.evaluate(async () => (await (await fetch("mochi-manifest.json")).json()));
+    expect(Object.keys(manifest.packages)).not.toContain("ruby:lib/mochi_builtin_collections.rb");
+    const root = page.locator("sort-contracts-root");
+    await expect(root.locator(".sorted")).toHaveText("first,second,third,last");
+    await expect(root.locator(".original")).toHaveText("third,first,second,last");
+    await expect(root.locator(".key-calls")).toHaveText("4");
+    await expect(root.locator(".descending")).toHaveText("16:1");
+    await expect(root.locator(".ascending")).toHaveText("1:16");
+    await expect(root.locator(".empty-sort")).toHaveText("0");
+    await expect(root.locator(".single-sort")).toHaveText("-2");
+    await expect(root.locator(".duplicate-sort")).toHaveText("-1,-1,0,2,2");
+    const comparisons = Number(await root.locator(".comparison-calls").textContent());
+    expect(comparisons).toBeGreaterThan(0);
+    expect(comparisons).toBeLessThan(256);
+
+    await root.locator("button.invalid").click();
+    const runtimeErrors = await page.evaluate(() => (window as any).__sortErrors);
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0].phase).toBe("event");
+    expect(runtimeErrors[0].method).toBe("invalid_sort");
+    expect(runtimeErrors[0].source).toMatch(/SortContractsRoot\.rb:\d+/);
+    await expect(root.locator(".original")).toHaveText("third,first,second,last");
+
+    await root.locator("button.update").click();
+    await expect(root.locator(".event-order")).toHaveText("5,3,0,-1");
+    expect(await page.evaluate(() => (window as any).__sortErrors)).toHaveLength(1);
+  }, "<sort-contracts-root></sort-contracts-root>");
 
   expect(errors).toEqual([]);
 });

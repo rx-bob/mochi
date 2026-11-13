@@ -35,6 +35,7 @@ items.push(Item.new("Logger", "#{dir_batteries}/logger.rb", td_root, "logger_rb.
 items.push(Item.new("MochiMoney", "#{dir_batteries}/money.rb", td_root, "money_rb.cr"))
 items.push(Item.new("MochiFormat", "#{dir_batteries}/format.rb", td_root, "format_rb.cr"))
 items.push(Item.new("MochiCollections", "#{dir_batteries}/collections.rb", td_root, "collections_rb.cr"))
+items.push(Item.new("MochiPointer", "#{dir_batteries}/pointer.rb", td_root, "pointer_rb.cr"))
 
 # ----- charts
 items.push(Item.new("Charts", "#{dir_charts}/charts.rb", td_charts, "charts_rb.cr"))

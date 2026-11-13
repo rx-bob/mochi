@@ -8,6 +8,7 @@
   var MANIFEST_SCHEMA_VERSION = 3;
   var CAPABILITY_LIMIT_KEYS = {
     formatting: { cache_entries: "host_format_cache_entries" },
+    pointer: {},
     network: {
       pending_requests: "host_network_pending_requests",
       response_bytes: "host_network_response_bytes",
@@ -59,6 +60,7 @@
     globalEventQueueDraining: false,
     activeGlobalEventDelivery: null,
     activeActionContext: null,
+    activePointerDispatch: null,
     reportingGlobalEventOverflow: false,
     nextMountToken: 0,
     actionRouterInstalled: false,
@@ -984,6 +986,13 @@
     });
   }
 
+  function cancelOwnerPointerCaptures(instance, mountToken) {
+    var adapter = state.hostAdapters.get("pointer");
+    if (adapter && typeof adapter.disposeOwner === "function") {
+      adapter.disposeOwner(String(instance), mountToken);
+    }
+  }
+
   function writeFetchEnvelope(module, element, request, envelope) {
     var offset = module._mochi_fetch_inbox_offset ? module._mochi_fetch_inbox_offset() : 0;
     var capacity = module._mochi_fetch_inbox_capacity ? module._mochi_fetch_inbox_capacity() : 0;
@@ -1268,8 +1277,61 @@
     reportError(element, "focus", reference || "focus", error, module);
   }
 
+  function pointerCommandTarget(element, reference, currentTarget) {
+    var root = element && element.shadowRoot;
+    var target = reference ? findNamedRef(element, reference) : currentTarget;
+    if (!root || !target || !target.isConnected || !root.contains(target)) {
+      throw new Error("mochi-pointer: target is stale or not owned by this component mount");
+    }
+    return target;
+  }
+
+  function handlePointerCommand(module, entry, operation) {
+    var ownerKey = typeof entry.instance === "string" ? entry.instance : "";
+    var element = state.elements.get(ownerKey);
+    var pointerId = Number(entry.pointer_id);
+    var reference = typeof entry.reference === "string" ? entry.reference : "";
+    if (!element || element._mochiDisconnected || element._mochiUnmounted ||
+        !element.isConnected || String(element._mochiInstance) !== ownerKey) {
+      throw new Error("mochi-pointer: component mount is stale or no longer live");
+    }
+    var adapter = state.hostAdapters.get("pointer");
+    if (!adapter || !adapter.sync || typeof adapter.sync[operation] !== "function") {
+      throw new Error("mochi-pointer: pointer capability is not loaded for this component");
+    }
+    if (operation === "capture") {
+      var context = state.activePointerDispatch;
+      if (!context || context.element !== element || context.mountToken !== element._mochiMountToken ||
+          !context.event || context.event.pointerId !== pointerId ||
+          typeof context.event.buttons !== "number" || context.event.buttons === 0) {
+        throw new Error("mochi-pointer: capture requires the matching active pointer event");
+      }
+      var target = pointerCommandTarget(element, reference, context.target);
+      adapter.sync.capture(
+        target, pointerId, ownerKey, element._mochiMountToken, context.event, adapter.limits
+      );
+      return;
+    }
+    if (operation === "release") {
+      var releaseTarget = reference
+        ? pointerCommandTarget(element, reference, null)
+        : null;
+      adapter.sync.release(
+        pointerId, ownerKey, element._mochiMountToken, releaseTarget, adapter.limits
+      );
+    }
+  }
+
   function handleHostCommand(module, entry) {
     var hostKind = entry.__host;
+    if (hostKind === "pointer_capture") {
+      handlePointerCommand(module, entry, "capture");
+      return;
+    }
+    if (hostKind === "pointer_release") {
+      handlePointerCommand(module, entry, "release");
+      return;
+    }
     if (hostKind === "storage_set") {
       var setKey = typeof entry.key === "string" ? entry.key : "";
       var setValue = String(entry.value !== undefined ? entry.value : "");
@@ -2153,6 +2215,9 @@
       throw new Error("adapter " + url + " registers version " + spec.version +
         " but the manifest requires version " + capability.version);
     }
+    if (spec.disposeOwner !== undefined && typeof spec.disposeOwner !== "function") {
+      throw new Error("adapter " + url + " has an invalid owner disposal hook");
+    }
 
     var operations = capabilityOperations(capability);
     var declared = Object.keys(operations).sort();
@@ -2210,6 +2275,7 @@
       version: spec.version,
       sync: spec.sync,
       async: spec.async,
+      disposeOwner: spec.disposeOwner,
       limits: limits
     });
     hosts[name] = installedSpec;
@@ -3176,6 +3242,10 @@
       offset_x: axis("offsetX"),
       offset_y: axis("offsetY"),
       button: event && typeof event.button === "number" ? event.button : 0,
+      pointer_id: event && typeof event.pointerId === "number" ? event.pointerId : -1,
+      pointer_type: event && typeof event.pointerType === "string" ? event.pointerType : "",
+      is_primary: !!(event && event.isPrimary),
+      buttons: event && typeof event.buttons === "number" ? event.buttons : 0,
       target_id: source && source.id ? source.id : "",
       target_ref: targetInfo ? targetInfo.ref : "",
       target_tag: targetInfo ? targetInfo.tag : "",
@@ -4681,6 +4751,7 @@
         var key = String(instance);
         state.unmountedInstances.add(key);
         cancelOwnerFetches(key);
+        cancelOwnerPointerCaptures(key, mountToken);
         state.timers.forEach(function (record, timerId) {
           if (record.instance === key) clearTimerEntry(timerId);
         });
@@ -4804,6 +4875,10 @@
           // or child is removed before the queued handler runs, never deliver
           // it to a replacement element or parent state.
           if (!target || target._mochiUnmounted || !target.isConnected) return;
+          var previousPointerDispatch = state.activePointerDispatch;
+          state.activePointerDispatch = event && typeof event.pointerId === "number"
+            ? { element: element, target: target, event: event, mountToken: mountToken }
+            : null;
           var symbol = intern(mounted.module, method);
           var dispatched;
 
@@ -4835,7 +4910,9 @@
           applyPatches(element, mounted.module);
           drainEmits(mounted.module);
           drainFetches(mounted.module);
+          state.activePointerDispatch = previousPointerDispatch;
         }).catch(function (error) {
+          state.activePointerDispatch = null;
           discardHostOutboxes(element._mochiModule);
           reportError(element, "event", method, error, element._mochiModule);
         });

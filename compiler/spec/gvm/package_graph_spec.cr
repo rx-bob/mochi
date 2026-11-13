@@ -364,6 +364,56 @@ RUBY
     end
   end
 
+  it "loads the pointer adapter only for components that reach MochiPointer" do
+    root = File.join(Dir.tempdir, "mochi_package_pointer_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      pointer = dependency_prelude(root, "lib/mochi_builtin_pointer.rb", <<-RUBY)
+class MochiPointer
+  def self.capture(pointer_id, reference = nil)
+    Mochi.pointer_capture(pointer_id, reference)
+  end
+end
+RUBY
+      plain = dependency_component(root, "plain-pointer", "PlainPointer", "class PlainPointer\nend\n")
+      direct = dependency_component(root, "direct-pointer", "DirectPointer", <<-RUBY)
+class DirectPointer
+  def begin_drag(event)
+    MochiPointer.capture(event[:pointer_id], :handle)
+  end
+end
+RUBY
+      helper = dependency_helper(root, "mochi-helpers-pointer.chi", "lib/pointer_helper.rb", <<-RUBY)
+class PointerHelper
+  def self.begin_drag(event)
+    MochiPointer.capture(event[:pointer_id], :handle)
+  end
+end
+RUBY
+      indirect = dependency_component(root, "indirect-pointer", "IndirectPointer", <<-RUBY)
+class IndirectPointer
+  def begin_drag(event)
+    PointerHelper.begin_drag(event)
+  end
+end
+RUBY
+      indirect.manifest.helper_chi = helper.key
+
+      graph = dependency_graph(root, [plain, direct, indirect], [pointer], [helper])
+      graph.has_capability?("pointer").should be_true
+      graph.capabilities["pointer"].host.should eq("mochi-pointer.js")
+      graph.capabilities["pointer"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"capture", "sync"}, {"release", "sync"}])
+      graph.capability_package_ids.should contain("ruby:lib/mochi_builtin_pointer.rb")
+      plain.manifest.capabilities.should eq([] of String)
+      direct.manifest.capabilities.should eq(["pointer"])
+      indirect.manifest.capabilities.should eq(["pointer"])
+      indirect.manifest.dependencies.should contain("helper:lib/pointer_helper.rb")
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "loads Array aggregation bytecode for direct and helper sends only" do
     root = File.join(Dir.tempdir, "mochi_package_aggregates_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))
