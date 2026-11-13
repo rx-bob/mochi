@@ -48,6 +48,49 @@ do not load `mochi-drag.js`.
 
 ## Files
 
-OS file drops and file-input handles use separate opaque, mount-owned Ruby
-handles. File metadata and reads are covered by E9.S2–E9.S4; drag transfer does
-not expose a browser `File`, `Blob`, or `DataTransfer` object to Ruby.
+OS file drops and file-input selections use opaque, mount-owned handles. In a
+Ruby drop or file-input change handler, `$event["files"]` is an Array of
+metadata Hashes with `"handle"`, `"name"`, `"size"`, `"type"`, and
+`"last_modified"` fields. A zero-byte file is valid. An empty or unknown MIME
+type remains metadata and does not reject the file. File bytes and local paths
+are never included.
+
+```ruby
+def files_selected(event)
+  event["files"].each do |file|
+    @label = "#{file["name"]} (#{file["size"]} bytes)"
+    MochiFiles.release(file["handle"]) # when this application is done with it
+  end
+end
+```
+
+Use an ordinary `<input type="file" multiple onchange="{files_selected($event)}">`
+as the accessible selection fallback. Bind `ondrop="{files_selected($event)}"`
+to a drop target to receive dropped files; Mochi accepts file dragovers and
+snapshots the native `File` references in the drop event. Ruby sees only the
+metadata Hashes. `MochiFiles.release(handle)` explicitly releases one handle;
+unmount and failed dispatch release mount-owned references automatically.
+Handles from another component mount, a previous generation, or an already
+released entry raise an actionable files error. Replacing a file selection
+does not invalidate earlier handles; release them or let their component
+unmount.
+
+The full metadata batch is checked before handles are published. The default
+`host_file_handles` capacity is 128 active handles, and serialized metadata is
+bounded by `host_event_args_bytes`. If either limit is exceeded, the handler
+gets one error and no handle from that batch remains registered. Contents and
+bounded read operations are covered by E9.S3–E9.S4.
+
+File support is a separate optional `files` adapter. File-input-only apps do
+not load drag handling, and text-only drag apps do not load file handling. A
+component that handles both kinds of transfer declares both capabilities.
+
+### Native OS drop verification
+
+Controlled browser File drops and file-input selections are covered by the
+cross-engine Playwright contract test. Automated browsers do not initiate a
+desktop OS drag. Manual check: serve the standalone file-contract fixture, drag
+one zero-byte file and one ordinary file from the desktop into its drop target,
+and confirm the Ruby output shows each file's name, size, MIME type, and a
+distinct handle. This environment did not perform that desktop gesture; native
+OS-drop verification remains pending.

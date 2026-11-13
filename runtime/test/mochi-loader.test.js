@@ -1521,6 +1521,70 @@ test("drag events dispatch Ruby and DataTransfer commands synchronously within t
   assert.equal(log.dispatchedArgs.at(-1).args[0].drag_text, "safe text");
 });
 
+test("file input and drop handlers receive synchronous metadata and unmount releases handles", async () => {
+  const component = {
+    tag_name: "file-panel",
+    class_name: "FilePanel",
+    chi_file: "file-panel.chi",
+    html_template: '<input type="file" data-mochi-change="input_files" data-mochi-args-change=\'[{"kind":"event"}]\'>' +
+      '<div class="drop" data-mochi-drop="drop_files" data-mochi-args-drop=\'[{"kind":"event"}]\'></div>',
+    css: "",
+    bindings: [],
+    events: [
+      { path: [0], event: "change", method_sym: "input_files", args: [{ kind: "event" }] },
+      { path: [1], event: "drop", method_sym: "drop_files", args: [{ kind: "event" }] },
+    ],
+    capabilities: ["files"],
+  };
+  const base = manifest([component]);
+  base.capabilities = {
+    files: {
+      version: 1,
+      host: "mochi-files.js",
+      operations: { release: "sync" },
+      packages: [],
+      limits: { handles: TEST_HOST_CAPACITIES.host_file_handles, metadata_bytes: TEST_HOST_CAPACITIES.host_event_args_bytes },
+    },
+  };
+  const adapter = require("../mochi-files.js");
+  let allowDropCalls = 0;
+  const allowDrop = adapter.allowDrop;
+  adapter.allowDrop = (event) => { allowDropCalls += 1; return allowDrop(event); };
+  const { dom, log } = await setup([component], {
+    manifest: base,
+    hostModuleFactory: async () => adapter,
+  });
+  log.methods.add("input_files");
+  log.methods.add("drop_files");
+  const element = dom.window.document.createElement("file-panel");
+  dom.window.document.body.appendChild(element);
+  await element._mochiReady;
+  const input = element.shadowRoot.querySelector('input[type="file"]');
+  Object.defineProperty(input, "files", { value: [{ name: "blank", size: 0, type: "", lastModified: 0 }] });
+  const change = new dom.window.Event("change", { bubbles: true, composed: true });
+  input.dispatchEvent(change);
+  assert.equal(log.dispatchedArgs.at(-1).args[0].files[0].name, "blank");
+  assert.equal(log.dispatchedArgs.at(-1).args[0].files[0].size, 0);
+  assert.equal(adapter.count(), 1);
+
+  const drop = element.shadowRoot.querySelector(".drop");
+  const transfer = { types: ["Files"], files: [{ name: "notes", size: 5, type: "text/plain", lastModified: 4 }] };
+  const over = new dom.window.Event("dragover", { bubbles: true, composed: true, cancelable: true });
+  Object.defineProperty(over, "dataTransfer", { value: transfer });
+  drop.dispatchEvent(over);
+  assert.equal(allowDropCalls, 1);
+  assert.equal(over.defaultPrevented, true);
+  const dropped = new dom.window.Event("drop", { bubbles: true, composed: true, cancelable: true });
+  Object.defineProperty(dropped, "dataTransfer", { value: transfer });
+  drop.dispatchEvent(dropped);
+  assert.equal(log.dispatchedArgs.at(-1).args[0].files[0].name, "notes");
+  assert.equal(adapter.count(), 2);
+
+  element.remove();
+  await flushLifecycle();
+  assert.equal(adapter.count(), 0);
+});
+
 test("pointer moves coalesce per pointer and flush before terminal events", async () => {
   const component = {
     tag_name: "pointer-queue-panel",

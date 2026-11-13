@@ -10,6 +10,10 @@
     formatting: { cache_entries: "host_format_cache_entries" },
     pointer: {},
     drag: { payload_bytes: "host_drag_payload_bytes" },
+    files: {
+      handles: "host_file_handles",
+      metadata_bytes: "host_event_args_bytes"
+    },
     network: {
       pending_requests: "host_network_pending_requests",
       response_bytes: "host_network_response_bytes",
@@ -1417,6 +1421,18 @@
     }
   }
 
+  function handleFileCommand(entry) {
+    var ownerKey = typeof entry.instance === "string" ? entry.instance : "";
+    var element = state.elements.get(ownerKey);
+    var adapter = state.hostAdapters.get("files");
+    if (!element || element._mochiDisconnected || !element.isConnected ||
+        String(element._mochiInstance) !== ownerKey || !adapter ||
+        typeof adapter.release !== "function") {
+      throw new Error("mochi-files: component mount is stale or files capability is unavailable");
+    }
+    adapter.release(String(entry.handle || ""), ownerKey, element._mochiMountToken);
+  }
+
   function handleHostCommand(module, entry) {
     var hostKind = entry.__host;
     if (hostKind === "pointer_capture") {
@@ -1429,6 +1445,10 @@
     }
     if (hostKind === "drag_set_data" || hostKind === "drag_set_text" || hostKind === "drag_accept") {
       handleDragCommand(module, entry);
+      return;
+    }
+    if (hostKind === "file_release") {
+      handleFileCommand(entry);
       return;
     }
     if (hostKind === "storage_set") {
@@ -2320,6 +2340,11 @@
     if (spec.reconcileOwner !== undefined && typeof spec.reconcileOwner !== "function") {
       throw new Error("adapter " + url + " has an invalid owner reconciliation hook");
     }
+    ["snapshotInput", "snapshotDrop", "allowDrop", "release", "releaseOwner", "discardBatch"].forEach(function (name) {
+      if (spec[name] !== undefined && typeof spec[name] !== "function") {
+        throw new Error("adapter " + url + " has an invalid " + name + " hook");
+      }
+    });
 
     var operations = capabilityOperations(capability);
     var declared = Object.keys(operations).sort();
@@ -2381,6 +2406,12 @@
       reconcileOwner: spec.reconcileOwner,
       snapshot: spec.snapshot,
       internalType: spec.internalType,
+      snapshotInput: spec.snapshotInput,
+      snapshotDrop: spec.snapshotDrop,
+      allowDrop: spec.allowDrop,
+      release: spec.release,
+      releaseOwner: spec.releaseOwner,
+      discardBatch: spec.discardBatch,
       limits: limits
     });
     hosts[name] = installedSpec;
@@ -2950,6 +2981,10 @@
       }
       discardHostOutboxes(module);
       removeGlobalEventSubscriptions(instance, mountToken);
+      var failedFilesAdapter = state.hostAdapters.get("files");
+      if (failedFilesAdapter && typeof failedFilesAdapter.releaseOwner === "function") {
+        failedFilesAdapter.releaseOwner(String(instance), mountToken);
+      }
       if (state.elements.get(String(instance)) === element) {
         state.elements.delete(String(instance));
       }
@@ -4867,6 +4902,10 @@
         discardPointerMoves(this);
         cancelOwnerFetches(key);
         cancelOwnerPointerCaptures(key, mountToken);
+        var filesAdapter = state.hostAdapters.get("files");
+        if (filesAdapter && typeof filesAdapter.releaseOwner === "function") {
+          filesAdapter.releaseOwner(key, mountToken);
+        }
         state.timers.forEach(function (record, timerId) {
           if (record.instance === key) clearTimerEntry(timerId);
         });
@@ -4944,6 +4983,20 @@
           });
         });
         var component = this._mochiComponent || {};
+        if (componentCapabilities(component).indexOf("files") !== -1) {
+          root.addEventListener("dragover", function (event) {
+            var filesAdapter = state.hostAdapters.get("files");
+            if (!filesAdapter || typeof filesAdapter.allowDrop !== "function") return;
+            try { filesAdapter.allowDrop(event); }
+            catch (error) { reportError(element, "files", "dragover", error, element._mochiModule); }
+          });
+          if (eventNames.indexOf("drop") === -1) {
+            root.addEventListener("drop", function (event) {
+              var target = eventTarget(event, root, "drop");
+              if (target) element._dispatch(target, event);
+            });
+          }
+        }
         if (Array.isArray(component.capabilities) && component.capabilities.indexOf("pointer") !== -1 &&
             typeof global.MutationObserver === "function") {
           if (this._mochiPointerObserver) this._mochiPointerObserver.disconnect();
@@ -5012,27 +5065,54 @@
 
         var mountToken = this._mochiMountToken;
         var dragEvent = event && (event.type === "dragstart" || event.type === "dragover" || event.type === "drop");
+        var capabilities = componentCapabilities(this._mochiComponent);
+        var hasDragCapability = capabilities.indexOf("drag") !== -1;
+        var hasFilesCapability = capabilities.indexOf("files") !== -1;
+        var fileInputEvent = event && event.type === "change" && target &&
+          String(target.type || "").toLowerCase() === "file" && hasFilesCapability;
+        var fileDropEvent = event && event.type === "drop" && hasFilesCapability;
         var mountedNow = this._mochiModule && this._mochiInstance !== null &&
           this._mochiInstance !== undefined && this._mochiMountState === "mounted"
           ? { module: this._mochiModule, instance: this._mochiInstance, mountToken: mountToken }
           : null;
-        if (dragEvent && mountedNow && componentCapabilities(this._mochiComponent).indexOf("drag") !== -1) {
+        if (((dragEvent && hasDragCapability) || fileInputEvent || fileDropEvent) && mountedNow) {
           var previousDragDispatch = state.activeDragDispatch;
           var dragAdapter = state.hostAdapters.get("drag");
-          if (!dragAdapter || typeof dragAdapter.snapshot !== "function") {
+          if (dragEvent && hasDragCapability && (!dragAdapter || typeof dragAdapter.snapshot !== "function")) {
             reportError(element, "event", method, new Error("mochi-drag: drag adapter is unavailable"));
             return;
           }
+          var filesAdapter = hasFilesCapability ? state.hostAdapters.get("files") : null;
+          var fileBatch = [];
           try {
-            if (event.type === "drop") Object.assign(payload, dragAdapter.snapshot(event, dragAdapter.limits));
-            var sourceInfo = event.type === "dragstart" ? eventNodeInfo(event.target) : payload.drag_source || null;
-            state.activeDragDispatch = {
-              element: element,
-              target: target,
-              event: event,
-              mountToken: mountToken,
-              source: sourceInfo
-            };
+            if (dragEvent && hasDragCapability && event.type === "drop") {
+              Object.assign(payload, dragAdapter.snapshot(event, dragAdapter.limits));
+            }
+            if (fileDropEvent || fileInputEvent) {
+              if (!filesAdapter || typeof filesAdapter.snapshotDrop !== "function" ||
+                  typeof filesAdapter.snapshotInput !== "function") {
+                throw new Error("mochi-files: files adapter is unavailable");
+              }
+              var fileContext = { owner: String(mountedNow.instance), mountToken: mountToken };
+              var fileSnapshot = fileInputEvent
+                ? filesAdapter.snapshotInput(event, fileContext, filesAdapter.limits)
+                : filesAdapter.snapshotDrop(event, fileContext, filesAdapter.limits);
+              fileBatch = fileSnapshot.files || [];
+              payload.files = fileBatch;
+              if (encode(JSON.stringify(payload)).length > filesAdapter.limits.metadata_bytes) {
+                throw new Error("mochi-files: file metadata and event payload exceed configured byte limit");
+              }
+            }
+            if (dragEvent && hasDragCapability) {
+              var sourceInfo = event.type === "dragstart" ? eventNodeInfo(event.target) : payload.drag_source || null;
+              state.activeDragDispatch = {
+                element: element,
+                target: target,
+                event: event,
+                mountToken: mountToken,
+                source: sourceInfo
+              };
+            }
             var syncSymbol = intern(mountedNow.module, method);
             var syncDispatched;
             if (method.indexOf("__mochi_each_") === 0) {
@@ -5061,6 +5141,9 @@
             state.activeDragDispatch = previousDragDispatch;
           } catch (error) {
             state.activeDragDispatch = previousDragDispatch;
+            if (fileBatch.length && filesAdapter && typeof filesAdapter.discardBatch === "function") {
+              filesAdapter.discardBatch(fileBatch);
+            }
             discardHostOutboxes(mountedNow.module);
             reportError(element, "event", method, error, mountedNow.module);
           }

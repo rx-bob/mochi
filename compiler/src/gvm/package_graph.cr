@@ -72,6 +72,17 @@ module MochiPackaging
       [CapabilityOperation.new("set_data", "sync"), CapabilityOperation.new("set_text", "sync"), CapabilityOperation.new("accept", "sync")],
       [{"payload_bytes", "host_drag_payload_bytes"}]
     ),
+    CapabilityDefinition.new(
+      "files",
+      1,
+      "mochi-files.js",
+      "MochiFiles",
+      [CapabilityOperation.new("release", "sync")],
+      [
+        {"handles", "host_file_handles"},
+        {"metadata_bytes", "host_event_args_bytes"},
+      ]
+    ),
   ]
 
   record Capability,

@@ -495,6 +495,44 @@ RUBY
     end
   end
 
+  it "loads file handles independently from drag for reachable MochiFiles users" do
+    root = File.join(Dir.tempdir, "mochi_package_files_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      files = dependency_prelude(root, "lib/mochi_builtin_files.rb", <<-RUBY)
+class MochiFiles
+  def self.release(handle)
+    Mochi.file_release(handle)
+  end
+end
+RUBY
+      plain = dependency_component(root, "plain-files", "PlainFiles", "class PlainFiles\nend\n")
+      direct = dependency_component(root, "direct-files", "DirectFiles", <<-RUBY)
+class DirectFiles
+  def release_file(handle)
+    MochiFiles.release(handle)
+  end
+end
+RUBY
+
+      graph = dependency_graph(root, [plain, direct], [files])
+      graph.has_capability?("files").should be_true
+      graph.capabilities["files"].host.should eq("mochi-files.js")
+      graph.capabilities["files"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"release", "sync"}])
+      graph.capabilities["files"].limit_keys.sort.should eq([
+        {"handles", "host_file_handles"},
+        {"metadata_bytes", "host_event_args_bytes"},
+      ].sort)
+      graph.capability_package_ids.should eq(Set{"ruby:lib/mochi_builtin_files.rb"})
+      plain.manifest.capabilities.should eq([] of String)
+      direct.manifest.capabilities.should eq(["files"])
+      direct.manifest.capabilities.should_not contain("drag")
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "rebuilds identical package identities, dependencies, and order across checkout paths" do
     root_one = File.join(Dir.tempdir, "mochi_package_reproducible_one_#{Random.rand(1_000_000)}")
     root_two = File.join(Dir.tempdir, "mochi_package_reproducible_two_#{Random.rand(1_000_000)}")
