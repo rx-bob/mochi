@@ -9,6 +9,7 @@ require "../../generated/format_rb"
 require "../../tooling/installation_paths"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
+require "../../gvm/capacity_config"
 
 class BuildMain
   include TraceHelper
@@ -112,6 +113,7 @@ class BuildMain
     output_dir : String,
     with_tc : Bool,
     keep_granular_build_artifacts : Bool,
+    capacity_config_path : String? = nil,
   )
     start_time = Time.monotonic.total_nanoseconds.to_u64
     sequence_id = 1_u32
@@ -132,7 +134,10 @@ class BuildMain
         raise "Input & output directory need to be specified"
       end
 
-      InstallationPaths.new.validate_build_resources!
+      capacity_config = capacity_config_path.try { |path| CapacityConfig.read(path) }
+      if capacity_config.nil? || capacity_config.fingerprint == CapacityConfig.default.fingerprint
+        InstallationPaths.new.validate_build_resources!
+      end
       validate_build_paths(input_dir, output_dir)
       print_separator
       puts "1. input_dir:#{input_dir}, output_dir:#{output_dir}"
@@ -158,7 +163,10 @@ class BuildMain
       end
 
       print_separator
-      transpiler = Compiler.new(verbose: ENV["MOCHI_VERBOSE_BUILD"]? == "1")
+      transpiler = Compiler.new(
+        verbose: ENV["MOCHI_VERBOSE_BUILD"]? == "1",
+        capacity_config_path: capacity_config_path
+      )
       puts "5. Transpiling Mochi Components"
 
       mochi_comp_time = Time.measure do

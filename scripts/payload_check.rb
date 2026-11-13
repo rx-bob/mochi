@@ -39,12 +39,18 @@ module PayloadCheck
       minimal_b = build_fixture("minimal", File.join(tmp, "b"))
       feature_a = build_fixture("feature", File.join(tmp, "a"))
       feature_b = build_fixture("feature", File.join(tmp, "b"))
+      network_a = build_fixture("network", File.join(tmp, "a"))
+      network_b = build_fixture("network", File.join(tmp, "b"))
 
       assert_deterministic("minimal", minimal_a, minimal_b)
       assert_deterministic("feature", feature_a, feature_b)
+      assert_deterministic("network", network_a, network_b)
       assert_common_initial_artifacts(minimal_a, feature_a)
       assert_minimal_boundary(minimal_a)
       assert_feature_boundary(feature_a)
+      assert_capability_membership(minimal_a)
+      assert_capability_membership(feature_a)
+      assert_capability_membership(network_a)
       assert_exclusion_rejects_unused(minimal_a)
       print_report(minimal_a, feature_a)
       assert_budgets(minimal_a, feature_a, budgets)
@@ -170,6 +176,10 @@ module PayloadCheck
       end
     end
 
+    def initial_dependency_closure
+      dependency_closure(initial_package_ids(initial_tags))
+    end
+
     def later_files
       referenced_files - initial_files
     end
@@ -266,14 +276,52 @@ module PayloadCheck
       "missing files in minimal bundle: #{bundle.missing_files.to_a.inspect}")
     fail_unless(bundle.later_files.empty?,
       "minimal bundle unexpectedly has later files: #{bundle.later_files.to_a.inspect}")
-    fail_unless(bundle.manifest["capabilities"].nil?,
-      "minimal bundle declares a host capability")
+    assert_capability_membership(bundle)
     fail_unless(bundle.manifest["format_host"].nil?,
       "minimal bundle declares a formatting adapter")
     fail_unless(!bundle.files.include?("mochi-format.js"),
       "minimal bundle includes mochi-format.js")
     fail_unless(bundle.duplicate_files.empty?,
       "duplicate package/resource files: #{bundle.duplicate_files.inspect}")
+  end
+
+  # Every adapter is a member of the initial bundle exactly when one of its
+  # declared Ruby packages is in the component dependency closure. Keep this
+  # generic so each capability fixture exercises the same loading boundary.
+  def assert_capability_membership(bundle)
+    capabilities = bundle.manifest["capabilities"] || {}
+    closure = bundle.initial_dependency_closure
+    capabilities.each do |name, capability|
+      host = capability["host"]
+      packages = capability["packages"] || []
+      fail_unless(host.is_a?(String) && !host.empty?,
+        "capability #{name} has no host adapter")
+      fail_unless(packages.all? { |package| bundle.manifest.fetch("packages").key?(package) },
+        "capability #{name} references a missing Ruby package")
+      used = packages.any? { |package| closure.include?(package) }
+      included = bundle.initial_files.include?(host)
+      packages.each do |package_id|
+        package_file = bundle.manifest.fetch("packages").fetch(package_id).fetch("file")
+        package_used = closure.include?(package_id)
+        fail_unless(bundle.initial_files.include?(package_file) == package_used,
+          "capability #{name} package #{package_id} initial membership mismatch")
+      end
+      fail_unless(included == used,
+        "capability #{name} adapter membership mismatch: used=#{used}, initial=#{included}")
+      if used
+        fail_unless(bundle.files.include?(host),
+          "used capability #{name} adapter is absent from bundle")
+      else
+        fail_unless(!bundle.initial_files.include?(host),
+          "unused capability #{name} adapter entered initial bundle")
+      end
+    end
+
+    if (legacy_host = bundle.manifest["format_host"])
+      formatting = capabilities["formatting"]
+      fail_unless(formatting && formatting["host"] == legacy_host,
+        "legacy formatting host is not registered in the capability table")
+    end
   end
 
   def assert_feature_boundary(bundle)

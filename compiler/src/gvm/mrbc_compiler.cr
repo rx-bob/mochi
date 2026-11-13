@@ -8,11 +8,15 @@ require "../webcomponents/resource_manifest"
 require "./package_graph"
 require "./source_preparer"
 require "./rite_verifier"
+require "./capacity_config"
+require "./capacity_artifact_builder"
 
 class MrbcCompiler
   RITE_HEADER     = "RITE0400\u0000\u0000"
   COMPONENTS_DIR  = "components"
   COMPILE_WORKERS = 4
+
+  @capacity_artifacts : CapacityArtifactBuilder::Artifacts?
 
   getter manifest_path : String?
   getter chi_paths : Array(String)
@@ -26,6 +30,7 @@ class MrbcCompiler
   getter host_adapter_paths : Hash(String, String)
   getter package_graph : MochiPackaging::PackageGraph?
   getter warnings : Array(String)
+  getter capacity_config : CapacityConfig
 
   def initialize(
     @mrbc_path : String? = ENV["MRBC"]?,
@@ -34,7 +39,10 @@ class MrbcCompiler
     @js_source : String? = ENV["MOCHI_GVM_JS"]?,
     @format_host_source : String? = ENV["MOCHI_FORMAT_HOST"]?,
     @host_adapter_sources : Hash(String, String)? = nil,
+    capacity_config_path : String? = nil,
   )
+    @capacity_config = capacity_config_path ? CapacityConfig.read(capacity_config_path) : CapacityConfig.default
+    @capacity_artifacts = nil
     @manifest_path = nil
     @chi_paths = [] of String
     @helper_chi_paths = [] of String
@@ -174,8 +182,14 @@ class MrbcCompiler
     sorted_components.each do |component|
       write_component_descriptor(component.manifest, output_dir)
     end
-    @wasm_path = copy_asset(resolved_wasm_source, output_dir, "mochi-gvm.wasm")
-    @js_path = copy_asset(resolved_js_source, output_dir, "mochi-gvm.js")
+    if @capacity_config.fingerprint != CapacityConfig.default.fingerprint
+      gvm_root = InstallationPaths.new.gvm_root || raise("Mochi setup: GVM source not found for custom capacity build")
+      @capacity_artifacts = CapacityArtifactBuilder.new(gvm_root, @capacity_config).build
+    end
+    wasm_source = selected_wasm_source
+    validate_capacity_artifact!(wasm_source) if wasm_source
+    @wasm_path = copy_asset(wasm_source, output_dir, "mochi-gvm.wasm")
+    @js_path = copy_asset(selected_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
     used_hosts = graph.capabilities.values.compact_map(&.host)
     used_hosts << "mochi-format.js" if format_host
@@ -435,6 +449,31 @@ class MrbcCompiler
     @wasm_source || InstallationPaths.new.wasm
   end
 
+  private def selected_wasm_source : String?
+    @capacity_artifacts.try(&.wasm) || resolved_wasm_source
+  end
+
+  private def selected_js_source : String?
+    @capacity_artifacts.try(&.js) || resolved_js_source
+  end
+
+  private def validate_capacity_artifact!(wasm_source : String) : Nil
+    profile_path = wasm_source.sub(/\.wasm\z/, ".capacity.json")
+    unless File.file?(profile_path)
+      raise "Mochi setup: capacity profile metadata is missing beside #{wasm_source}; rebuild GVM"
+    end
+    actual = JSON.parse(File.read(profile_path))
+    expected = JSON.parse(@capacity_config.profile_json)
+    actual_fingerprint = actual.as_h?.try(&.["fingerprint"]?).try(&.as_s?) || "invalid"
+    unless actual == expected
+      raise "Mochi setup: GVM capacity profile mismatch (expected #{@capacity_config.fingerprint}, actual #{actual_fingerprint}); select or rebuild the matching runtime"
+    end
+  rescue ex : JSON::ParseException
+    raise "Mochi setup: invalid GVM capacity profile metadata at #{profile_path}: #{ex.message}"
+  rescue ex : TypeCastError
+    raise "Mochi setup: invalid GVM capacity profile metadata at #{profile_path}: expected an object"
+  end
+
   private def resolved_js_source : String?
     return @js_source if @js_source
 
@@ -502,6 +541,9 @@ class MrbcCompiler
     JSON.build do |json|
       json.object do
         json.field "schema_version", MochiPackaging::SCHEMA_VERSION
+        json.field "capacity_profile" do
+          json.raw(@capacity_config.profile_json)
+        end
         if prelude = @prelude_path
           json.field "prelude", File.basename(prelude)
         end
@@ -530,6 +572,15 @@ class MrbcCompiler
                       json.field "packages" do
                         json.array do
                           capability.packages.sort.each { |id| json.string(id) }
+                        end
+                      end
+                      unless capability.limit_keys.empty?
+                        json.field "limits" do
+                          json.object do
+                            capability.limit_keys.sort_by(&.first).each do |name, capacity_key|
+                              json.field name, @capacity_config[capacity_key]
+                            end
+                          end
                         end
                       end
                     end

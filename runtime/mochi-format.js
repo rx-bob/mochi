@@ -117,11 +117,14 @@
     return parts.join("\u0000");
   }
 
-  function cached(cache, key, create) {
+  function cached(cache, key, create, maxEntries) {
     var formatter = cache.get(key);
     if (formatter) return formatter;
     formatter = create();
-    if (cache.size >= MAX_CACHED_FORMATTERS) cache.clear();
+    var capacity = Number.isSafeInteger(maxEntries) && maxEntries > 0
+      ? maxEntries
+      : MAX_CACHED_FORMATTERS;
+    if (cache.size >= capacity) cache.clear();
     cache.set(key, formatter);
     return formatter;
   }
@@ -169,7 +172,7 @@
     return value / Math.pow(10, scale);
   }
 
-  function formatNumber(rawValue, rawOptions) {
+  function formatNumber(rawValue, rawOptions, cacheCapacity) {
     var options = readOptions(rawOptions);
     var locale = readLocale(options);
     var value = decodeValue(rawValue);
@@ -195,7 +198,7 @@
     var key = cacheKey(locale, intl);
     var formatter = cached(numberCache, key, function () {
       return createNumberFormatter(locale, intl);
-    });
+    }, cacheCapacity);
     try {
       return formatter.format(value);
     } catch (error) {
@@ -219,7 +222,7 @@
     return parsed;
   }
 
-  function formatDate(rawValue, rawOptions) {
+  function formatDate(rawValue, rawOptions, cacheCapacity) {
     var options = readOptions(rawOptions);
     var locale = readLocale(options);
     var text = String(rawValue);
@@ -247,7 +250,7 @@
     var key = cacheKey(locale, intl);
     var formatter = cached(dateCache, key, function () {
       return createDateFormatter(locale, intl);
-    });
+    }, cacheCapacity);
     try {
       return formatter.format(date);
     } catch (error) {
@@ -270,7 +273,7 @@
   }
 
   // Host capability contract: one JSON argument array, one typed JSON result.
-  function formatArgs(argsJson) {
+  function formatArgs(argsJson, limits) {
     var args;
     try {
       args = JSON.parse(argsJson);
@@ -283,8 +286,12 @@
     var kind = args[0];
     var value = args[1];
     var options = args[2] && typeof args[2] === "object" ? args[2] : {};
-    if (kind === "number") return formatNumber(value, options);
-    if (kind === "date") return formatDate(value, options);
+    var cacheCapacity = limits && limits.cache_entries;
+    if (!Number.isSafeInteger(cacheCapacity) || cacheCapacity <= 0) {
+      fail("formatting capability has no valid cache capacity");
+    }
+    if (kind === "number") return formatNumber(value, options, cacheCapacity);
+    if (kind === "date") return formatDate(value, options, cacheCapacity);
     fail("unsupported formatting kind '" + String(kind) + "'");
   }
 

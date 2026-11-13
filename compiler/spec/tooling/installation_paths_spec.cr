@@ -86,7 +86,7 @@ describe InstallationPaths do
     paths = valid_installation_paths_fixture(root, "default")[0]
     loader = File.join(root, "checkout", "runtime", "mochi-loader.js")
     File.write(loader, "var MANIFEST_SCHEMA_VERSION = 1;")
-    expect_raises(Exception, /does not support bundle schema 2/) do
+    expect_raises(Exception, /does not support bundle schema 3/) do
       paths.validate_build_resources!
     end
   ensure
@@ -98,6 +98,18 @@ describe InstallationPaths do
     paths = valid_installation_paths_fixture(root, "default")[0]
     File.write(File.join(root, "gvm", "dist", "mochi-gvm.wasm"), "\0asm\x01\0\0\0different")
     expect_raises(Exception, /gvm_wasm does not match installed runtime identity/) do
+      paths.validate_build_resources!
+    end
+  ensure
+    FileUtils.rm_rf(root) if root
+  end
+
+  it "rejects a default runtime with mismatched capacity metadata before compilation" do
+    root = File.join(Dir.tempdir, "mochi install capacity profile #{Random.rand(1_000_000)}")
+    paths = valid_installation_paths_fixture(root, "default")[0]
+    profile = File.join(root, "gvm", "dist", "mochi-gvm.capacity.json")
+    File.write(profile, "{}")
+    expect_raises(Exception, /default GVM capacity profile mismatch/) do
       paths.validate_build_resources!
     end
   ensure
@@ -121,13 +133,14 @@ private def valid_installation_paths_fixture(root : String, profile : String) : 
   File.write(compiler, "#!/bin/sh\nexit 0\n")
   File.chmod(compiler, 0o755)
   File.write(wasm, "\0asm\x01\0\0\0")
+  File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
   File.write(js, "var MochiModule = {};")
-  File.write(loader, "var MANIFEST_SCHEMA_VERSION = 2;")
+  File.write(loader, "var MANIFEST_SCHEMA_VERSION = 3;")
   File.write(record, JSON.build do |json|
     json.object do
       json.field "schema_version", 1
       json.field "owner", "mochi-development-install"
-      json.field "manifest_schema", 2
+      json.field "manifest_schema", 3
       json.field "runtime_profile", profile
       json.field "compiler", compiler
       json.field "compiler_sha256", Digest::SHA256.hexdigest(File.read(compiler))
@@ -137,6 +150,9 @@ private def valid_installation_paths_fixture(root : String, profile : String) : 
       json.field "gvm_wasm_sha256", Digest::SHA256.hexdigest(File.read(wasm))
       json.field "gvm_js", js
       json.field "gvm_js_sha256", Digest::SHA256.hexdigest(File.read(js))
+      profile = File.join(gvm, "dist", "mochi-gvm.capacity.json")
+      json.field "gvm_capacity_sha256", Digest::SHA256.hexdigest(File.read(profile))
+      json.field "capacity_fingerprint", CapacityConfig.default.fingerprint
       json.field "loader", loader
     end
   end)

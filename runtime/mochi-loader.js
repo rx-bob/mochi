@@ -5,8 +5,16 @@
   var RITE_HEADER = new Uint8Array([0x52, 0x49, 0x54, 0x45, 0x30, 0x34, 0x30, 0x30, 0x00, 0x00]);
   var COMPONENT_DIR = "components/";
   var DEFAULT_MANIFEST = "mochi-manifest.json";
-  var MANIFEST_SCHEMA_VERSION = 2;
-  var MAX_PENDING_FETCHES = 256;
+  var MANIFEST_SCHEMA_VERSION = 3;
+  var CAPABILITY_LIMIT_KEYS = {
+    formatting: { cache_entries: "host_format_cache_entries" },
+    network: {
+      pending_requests: "host_network_pending_requests",
+      response_bytes: "host_network_response_bytes",
+      response_buffer_bytes: "host_network_buffer_bytes",
+      envelope_bytes: "host_fetch_envelope_bytes"
+    }
+  };
 
   // Custom element reactions for a same-task DOM move run before queued
   // microtasks, so deferring disposal one microtask distinguishes a renderer
@@ -54,6 +62,29 @@
 
   function absoluteUrl(path, base) {
     return new URL(path, base).href;
+  }
+
+  function assertCapacityProfile(module, manifest) {
+    var expected = manifest.capacity_profile && manifest.capacity_profile.fingerprint;
+    var actual = "<missing>";
+    var actualProfile = null;
+    if (module && typeof module._mochi_capacity_profile === "function" &&
+        typeof module.UTF8ToString === "function") {
+      try {
+        actualProfile = JSON.parse(module.UTF8ToString(module._mochi_capacity_profile()));
+        actual = actualProfile && actualProfile.fingerprint || "<invalid>";
+      } catch (_) {
+        actual = "<invalid>";
+      }
+    }
+    var sameCapacities = actualProfile && manifest.capacity_profile &&
+      actualProfile.schema_version === manifest.capacity_profile.schema_version &&
+      actualProfile.memory_bytes === manifest.capacity_profile.memory_bytes &&
+      JSON.stringify(actualProfile.capacities) === JSON.stringify(manifest.capacity_profile.capacities);
+    if (typeof expected !== "string" || actual !== expected || !sameCapacities) {
+      throw new Error("mochi-loader: runtime capacity fingerprint mismatch (expected " +
+        JSON.stringify(expected || "<missing>") + ", actual " + JSON.stringify(actual) + ")");
+    }
   }
 
   function runtimeUrl(manifest, manifestUrl) {
@@ -175,12 +206,18 @@
     var location = source && source.file
       ? source.file + (line > 0 ? ":" + line : "")
       : "";
+    var profile = state.manifest && state.manifest.capacity_profile;
+    var capacityProfile = /(?:exhausted|exceeded)/i.test(detail) && profile
+      ? profile.fingerprint
+      : "";
+    if (capacityProfile) detail += " (capacity profile " + capacityProfile + ")";
     return {
       phase: phase,
       tagName: component && component.tag_name || "",
       className: component && component.class_name || "",
       method: method || "",
       source: location,
+      capacityProfile: capacityProfile,
       vmText: vmText,
       message: location ? detail + " at " + location : detail
     };
@@ -635,7 +672,7 @@
       active.cancelled = true;
       var network = state.hostAdapters.get("network");
       if (network && network.sync && typeof network.sync.cancel === "function") {
-        network.sync.cancel(fetchRequestKey(request));
+        network.sync.cancel(fetchRequestKey(request), network.limits);
       }
       forgetFetch(active.request);
     }
@@ -720,6 +757,14 @@
       }
       state.latestFetches.set(latestKey, fetchRequestKey(request));
     }
+    var pendingLimit = capabilityLimit(state.manifest, "network", "pending_requests");
+    if (state.activeFetches.size >= pendingLimit) {
+      deliverFetch(module, element, request, {
+        status: 0, ok: false, body: "", data: null,
+        error: "network request capacity exceeded (capacity " + pendingLimit + ")"
+      });
+      return;
+    }
     var active = { request: request, cancelled: false };
     state.activeFetches.set(fetchRequestKey(request), active);
     var adapter = state.hostAdapters.get("network");
@@ -735,7 +780,7 @@
     try {
       responsePromise = operation.call(adapter.async, JSON.stringify({
         request_key: fetchRequestKey(request), url: request.url, options: options
-      }));
+      }), adapter.limits);
     } catch (error) {
       deliverFetch(module, element, request, {
         status: 0, ok: false, body: "", data: null,
@@ -848,7 +893,7 @@
 
     var result;
     try {
-      result = operation.call(adapter.async, argsJson);
+      result = operation.call(adapter.async, argsJson, adapter.limits);
     } catch (error) {
       deliverHostResult(module, element, request, {
         ok: false,
@@ -882,6 +927,7 @@
     }
     var requests = state.pendingFetches;
     state.pendingFetches = [];
+    var pendingLimit = capabilityLimit(state.manifest, "network", "pending_requests");
     var length = module._mochi_fetch_outbox_len();
     if (length > 0) {
       var offset = module._mochi_fetch_outbox_offset();
@@ -905,7 +951,7 @@
         return;
       }
       if (!state.unmountedInstances.has(String(request.instance))
-          && state.pendingFetches.length < MAX_PENDING_FETCHES) {
+          && state.activeFetches.size + state.pendingFetches.length < pendingLimit) {
         state.pendingFetches.push(request);
       }
     });
@@ -1087,6 +1133,7 @@
           drainEmits(module);
           drainFetches(module);
         } catch (error) {
+          discardHostOutboxes(module);
           reportError(element, "timer", callbackName, error, module);
         }
       };
@@ -1469,6 +1516,8 @@
         throw new Error("mochi-loader: invalid mochi-gvm module");
       }
 
+      assertCapacityProfile(module, state.manifest);
+
       if (module._mochi_init_runtime() !== 0) {
         throw new Error("mochi-loader: runtime init failed: " + lastError(module));
       }
@@ -1717,10 +1766,16 @@
         version: 1,
         host: manifest.format_host,
         operations: { format: "sync" },
-        packages: []
+        packages: [],
+        limits: { cache_entries: manifest.capacity_profile.capacities.host_format_cache_entries }
       };
     }
     return null;
+  }
+
+  function capabilityLimit(manifest, name, key) {
+    var capability = capabilityEntry(manifest, name);
+    return capability && capability.limits && capability.limits[key];
   }
 
   function capabilityOperations(capability) {
@@ -1837,12 +1892,19 @@
       }
       return existing;
     }
+    var limits = Object.freeze(Object.assign({}, capability.limits || {}));
     if (spec.sync) Object.freeze(spec.sync);
     if (spec.async) Object.freeze(spec.async);
-    Object.freeze(spec);
-    hosts[name] = spec;
-    state.hostAdapters.set(name, spec);
-    return spec;
+    var installedSpec = Object.freeze({
+      name: spec.name,
+      version: spec.version,
+      sync: spec.sync,
+      async: spec.async,
+      limits: limits
+    });
+    hosts[name] = installedSpec;
+    state.hostAdapters.set(name, installedSpec);
+    return installedSpec;
   }
 
   async function loadHostAdapter(module, name, capability, manifest, manifestUrl, tag) {
@@ -2352,6 +2414,7 @@
     });
 
     if (instance === 0 || instance === 0n) {
+      discardHostOutboxes(module);
       throw new Error("mochi-loader: mount failed for " + component.class_name + ": " + lastError(module));
     }
 
@@ -4148,6 +4211,7 @@
           try {
             if (syncDeclaredProps(module, instance, element, attrNames)) changed = true;
           } catch (error) {
+            discardHostOutboxes(module);
             reportError(element, "attribute",
               error.mochiContext && error.mochiContext.property || "",
               error, module);
@@ -4159,6 +4223,7 @@
                 changed = true;
               }
             } catch (error) {
+              discardHostOutboxes(module);
               reportError(element, "attribute", attrName, error, module, {
                 attribute: attrName,
                 property: attrName.replace(/-/g, "_")
@@ -4171,6 +4236,7 @@
             drainEmits(module);
             drainFetches(module);
           } catch (error) {
+            discardHostOutboxes(module);
             reportError(element, "attribute", "", error, module);
           }
         });
@@ -4445,6 +4511,7 @@
           drainEmits(mounted.module);
           drainFetches(mounted.module);
         }).catch(function (error) {
+          discardHostOutboxes(element._mochiModule);
           reportError(element, "event", method, error, element._mochiModule);
         });
       }
@@ -4491,6 +4558,7 @@
             drainFetches(module);
           }
         } catch (error) {
+          discardHostOutboxes(module);
           reportError(this, "action", action, error, module);
         }
       }
@@ -4512,6 +4580,23 @@
     if (!Array.isArray(manifest.components)) {
       throw new Error("mochi-loader: manifest " + manifestUrl + " has no components array");
     }
+    var profile = manifest.capacity_profile;
+    if (!profile || typeof profile !== "object" || Array.isArray(profile) ||
+        profile.schema_version !== 1 || typeof profile.fingerprint !== "string" ||
+        !/^[a-f0-9]{64}$/.test(profile.fingerprint) ||
+        !Number.isSafeInteger(profile.memory_bytes) || profile.memory_bytes <= 0 ||
+        !profile.capacities || typeof profile.capacities !== "object" || Array.isArray(profile.capacities)) {
+      throw new Error("mochi-loader: manifest " + manifestUrl + " has an invalid capacity profile");
+    }
+    Object.keys(CAPABILITY_LIMIT_KEYS).forEach(function (name) {
+      Object.keys(CAPABILITY_LIMIT_KEYS[name]).forEach(function (limitName) {
+        var capacityName = CAPABILITY_LIMIT_KEYS[name][limitName];
+        var value = profile.capacities[capacityName];
+        if (!Number.isSafeInteger(value) || value <= 0) {
+          throw new Error("mochi-loader: capacity profile is missing positive " + capacityName);
+        }
+      });
+    });
     manifest.components.forEach(function (entry, index) {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         throw new Error("mochi-loader: manifest component index entry " + index +
@@ -4553,6 +4638,25 @@
             (!localAdapterLocation(capability.host))) {
           throw new Error("mochi-loader: capability '" + name +
             "' has an invalid adapter location in " + manifestUrl);
+        }
+        var limitSchema = CAPABILITY_LIMIT_KEYS[name];
+        if (limitSchema && capability.host) {
+          var limits = capability.limits;
+          if (!limits || typeof limits !== "object" || Array.isArray(limits)) {
+            throw new Error("mochi-loader: capability '" + name + "' has no host limits in " + manifestUrl);
+          }
+          Object.keys(limitSchema).forEach(function (limitName) {
+            var value = limits[limitName];
+            var capacityName = limitSchema[limitName];
+            if (!Number.isSafeInteger(value) || value <= 0 ||
+                value !== profile.capacities[capacityName]) {
+              throw new Error("mochi-loader: capability '" + name + "' limit '" + limitName +
+                "' does not match compiled capacity '" + capacityName + "' in " + manifestUrl);
+            }
+          });
+          if (Object.keys(limits).length !== Object.keys(limitSchema).length) {
+            throw new Error("mochi-loader: capability '" + name + "' has unknown host limits in " + manifestUrl);
+          }
         }
         if (capability.operations !== undefined) {
           if (!capability.operations || typeof capability.operations !== "object" ||
@@ -4609,6 +4713,9 @@
       storageSubscriberCount += subscribers.size;
     });
     return {
+      capacityProfile: module && typeof module._mochi_capacity_profile === "function" &&
+        typeof module.UTF8ToString === "function"
+        ? JSON.parse(module.UTF8ToString(module._mochi_capacity_profile())) : null,
       bindings: module && typeof module._mochi_binding_count === "function"
         ? Number(module._mochi_binding_count()) : -1,
       components: module && typeof module._mochi_component_count === "function"

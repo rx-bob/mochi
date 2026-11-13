@@ -197,6 +197,7 @@ describe MrbcCompiler do
 
       write_fake_mrbc(mrbc, stripped_source_path)
       File.write(wasm, "WASM")
+      File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
       File.write(js, "JS")
       File.write(loader, "LOADER")
 
@@ -218,7 +219,10 @@ describe MrbcCompiler do
       stripped_source.should contain("@count = 0")
 
       json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
-      json["schema_version"].as_i.should eq(2)
+      json["schema_version"].as_i.should eq(3)
+      profile = json["capacity_profile"].as_h
+      profile["fingerprint"].as_s.should eq(CapacityConfig.default.fingerprint)
+      profile["capacities"]["state_objects"].as_i.should eq(32_768)
       json["entry_packages"].as_a.map(&.as_s).should eq(["component:my-counter"])
       packages = json["packages"].as_h
       packages.size.should eq(1)
@@ -242,7 +246,7 @@ describe MrbcCompiler do
       component_json = JSON.parse(
         File.read(File.join(output, "components", "my-counter.json"))
       ).as_h
-      component_json["schema_version"].as_i.should eq(2)
+      component_json["schema_version"].as_i.should eq(3)
       component_json["tag_name"].as_s.should eq("my-counter")
       component_json["class_name"].as_s.should eq("MyCounter")
       component_json["chi_file"].as_s.should eq("my-counter.chi")
@@ -348,6 +352,7 @@ describe MrbcCompiler do
 
       write_fake_mrbc(mrbc, stripped_source_path)
       File.write(wasm, "WASM")
+      File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
       File.write(js, "JS")
       File.write(loader, "LOADER")
 
@@ -372,7 +377,7 @@ describe MrbcCompiler do
       File.exists?(stale_descriptor).should be_false
 
       descriptor = JSON.parse(File.read(File.join(output, "components", "my-counter.json"))).as_h
-      descriptor["schema_version"].as_i.should eq(2)
+      descriptor["schema_version"].as_i.should eq(3)
       descriptor["style_resources"].as_a.map(&.as_s).should eq(["css-shared"])
       descriptor["html_template"].as_s.should contain("Count: {count}")
 
@@ -402,6 +407,7 @@ describe MrbcCompiler do
 
       write_fake_mrbc(mrbc, stripped_source_path)
       File.write(wasm, "WASM")
+      File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
       File.write(js, "JS")
       File.write(loader, "LOADER")
 
@@ -584,6 +590,8 @@ RUBY
         manifest["format_host"].as_s.should eq("mochi-format.js")
         manifest["capabilities"]["formatting"]["version"].as_i.should eq(1)
         manifest["capabilities"]["formatting"]["operations"]["format"].as_s.should eq("sync")
+        manifest["capabilities"]["formatting"]["limits"]["cache_entries"].as_i
+          .should eq(CapacityConfig.default["host_format_cache_entries"])
         compiler.host_adapter_paths.keys.should eq(["mochi-format.js"])
         descriptor = JSON.parse(
           File.read(File.join(output, manifest["components"][0]["descriptor"].as_s))

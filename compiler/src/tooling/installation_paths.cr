@@ -2,6 +2,7 @@ require "json"
 require "path"
 require "digest/sha256"
 require "../gvm/package_graph"
+require "../gvm/capacity_config"
 
 # Resolves Mochi's development resources from explicit overrides, an installed
 # development record, then paths inside this compiler's source checkout.
@@ -101,7 +102,7 @@ class InstallationPaths
 
   # Validate all artifacts needed by a standard build before output cleanup or
   # compilation begins. E5 will extend the runtime identity record with the
-  # selected fixed-capacity profile; current bundles use manifest schema 2.
+  # selected fixed-capacity profile; current bundles use manifest schema 3.
   def validate_build_resources! : Nil
     compiler = required_path("MOCHI_COMPILER", "compiler", [File.join(@development_root, "compiler", "mochi")], executable: true)
     required_path("MRBC", "mrbc", mrbc_defaults, executable: true)
@@ -113,6 +114,7 @@ class InstallationPaths
     unless wasm.bytesize >= 8 && wasm.byte_slice(0, 4) == "\0asm"
       raise setup_error("#{wasm_path} is not a WebAssembly runtime; rebuild Mochi GVM with `task gvm:wasm`")
     end
+    validate_capacity_profile!(wasm_path)
     runtime_js = File.read(js_path)
     raise setup_error("#{js_path} is empty; rebuild Mochi GVM with `task gvm:wasm`") if runtime_js.empty?
     unless runtime_js.includes?("MochiModule")
@@ -163,6 +165,22 @@ class InstallationPaths
       File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
       File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
     ]
+  end
+
+  private def validate_capacity_profile!(wasm_path : String) : Nil
+    profile_path = wasm_path.sub(/\.wasm\z/, ".capacity.json")
+    unless File.file?(profile_path)
+      raise setup_error("capacity profile metadata missing beside #{wasm_path}; rebuild GVM with `task gvm:wasm`")
+    end
+    actual = JSON.parse(File.read(profile_path))
+    expected = JSON.parse(CapacityConfig.default.profile_json)
+    return if actual == expected
+    actual_fingerprint = actual.as_h?.try(&.["fingerprint"]?).try(&.as_s?) || "invalid"
+    raise setup_error("default GVM capacity profile mismatch (expected #{CapacityConfig.default.fingerprint}, actual #{actual_fingerprint}); rebuild and reinstall matching Mochi runtime artifacts")
+  rescue ex : JSON::ParseException
+    raise setup_error("invalid capacity profile metadata at #{profile_path}: #{ex.message}")
+  rescue ex : TypeCastError
+    raise setup_error("invalid capacity profile metadata at #{profile_path}: expected an object")
   end
 
   private def wasm_defaults : Array(String)
@@ -291,6 +309,10 @@ class InstallationPaths
       raise setup_error("installation record is missing a supported runtime profile; rerun `task install:dev:update`") if profile.nil?
       raise setup_error("installed runtime profile '#{profile}' is not supported by this compiler; rebuild and reinstall matching Mochi runtime artifacts")
     end
+    fingerprint = record_value("capacity_fingerprint")
+    unless fingerprint == CapacityConfig.default.fingerprint
+      raise setup_error("installed capacity fingerprint #{fingerprint || "missing"} does not match the default compiler profile; run `task install:dev:update`")
+    end
     schema = @record.not_nil!["manifest_schema"]?.try(&.as_i?)
     unless schema == MANIFEST_SCHEMA
       raise setup_error("installed compiler/runtime manifest schema #{schema || "missing"} does not match #{MANIFEST_SCHEMA}; run `task build` and `task install:dev:update`")
@@ -300,6 +322,7 @@ class InstallationPaths
       {paths[0], "compiler_sha256"},
       {paths[1], "gvm_wasm_sha256"},
       {paths[2], "gvm_js_sha256"},
+      {paths[1].sub(/\.wasm\z/, ".capacity.json"), "gvm_capacity_sha256"},
     ]
     identities.each do |path, key|
       expected = record_value(key)

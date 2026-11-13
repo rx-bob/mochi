@@ -219,3 +219,15 @@ test("formatter caches are bounded and reused", () => {
   }
   assert.ok(adapter.debugStats().dateFormatters <= 32);
 });
+
+test("host formatting operation uses its immutable profile cache limit", () => {
+  const adapter = host();
+  const limits = Object.freeze({ cache_entries: 1 });
+  adapter.sync.format(JSON.stringify(["number", 1, { minimum_integer_digits: 1 }]), limits);
+  adapter.sync.format(JSON.stringify(["number", 1, { minimum_integer_digits: 2 }]), limits);
+  assert.equal(adapter.debugStats().numberFormatters, 1);
+  assert.throws(
+    () => adapter.sync.format(JSON.stringify(["number", 1, {}]), {}),
+    /no valid cache capacity/,
+  );
+});

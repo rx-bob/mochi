@@ -26,7 +26,56 @@
     return { status: status, ok: ok, body: body || "", data: data, error: error };
   }
 
-  function fetchRequest(argsJson) {
+  function responseTextBounded(response, maxBytes) {
+    var declaredLength = Number(response && response.headers && response.headers.get
+      ? response.headers.get("content-length") : 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      return Promise.reject(new Error("response exceeds configured byte limit " + maxBytes));
+    }
+    var body = response && response.body;
+    if (!body || typeof body.getReader !== "function") {
+      return Promise.reject(new Error("bounded response reader is unavailable"));
+    }
+    var reader = body.getReader();
+    var chunks = [];
+    var total = 0;
+    function read() {
+      return reader.read().then(function (result) {
+        if (result.done) {
+          var bytes = new Uint8Array(total);
+          var offset = 0;
+          chunks.forEach(function (chunk) {
+            bytes.set(chunk, offset);
+            offset += chunk.length;
+          });
+          return new TextDecoder("utf-8").decode(bytes);
+        }
+        var chunk = result.value instanceof Uint8Array
+          ? result.value
+          : new Uint8Array(result.value);
+        total += chunk.length;
+        if (total > maxBytes) {
+          return Promise.resolve(reader.cancel()).then(function () {
+            throw new Error("response exceeds configured byte limit " + maxBytes);
+          });
+        }
+        chunks.push(chunk);
+        return read();
+      });
+    }
+    return read().finally(function () {
+      try { reader.releaseLock(); } catch (_) {}
+    });
+  }
+
+  function fetchRequest(argsJson, limits) {
+    var maxResponseBytes = limits && limits.response_bytes;
+    if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
+      return Promise.resolve({
+        status: 0, ok: false, body: "", data: null,
+        error: "network capability has no valid response byte limit"
+      });
+    }
     var request = JSON.parse(argsJson || "{}");
     var options = request.options && typeof request.options === "object" ? request.options : {};
     var fetchOptions = Object.assign({}, options);
@@ -65,10 +114,16 @@
       return Promise.resolve({ status: 0, ok: false, body: "", data: null, error: messageOf(error) });
     }
     return Promise.resolve(response).then(function (result) {
-      var responseValue = result;
-      var bodyPromise = result && typeof result.text === "function" ? result.text() : "";
-      return Promise.resolve(bodyPromise).then(function (bodyText) {
-        return responseEnvelope(responseValue, bodyText);
+      return responseTextBounded(result, maxResponseBytes).then(function (bodyText) {
+        return responseEnvelope(result, bodyText);
+      }, function (error) {
+        return {
+          status: result && typeof result.status === "number" ? result.status : 0,
+          ok: false,
+          body: "",
+          data: null,
+          error: messageOf(error)
+        };
       });
     }, function (error) {
       return { status: 0, ok: false, body: "", data: null, error: messageOf(error) };

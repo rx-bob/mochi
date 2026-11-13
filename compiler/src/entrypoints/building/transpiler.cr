@@ -31,7 +31,7 @@ class Compiler
   @ruby_parser : TreeSitter::RubyParser
   @verbose : Bool
 
-  def initialize(@verbose : Bool = false)
+  def initialize(@verbose : Bool = false, @capacity_config_path : String? = nil)
     @ruby_parser = TreeSitter::RubyParser.new
   end
 
@@ -108,7 +108,7 @@ class Compiler
                 end
 
     trace_slice(trace, "EmitBytecode", sequence_id) do
-      compiler = MrbcCompiler.new
+      compiler = MrbcCompiler.new(capacity_config_path: @capacity_config_path)
       compiler.compile_graph(
         components,
         output_dir,

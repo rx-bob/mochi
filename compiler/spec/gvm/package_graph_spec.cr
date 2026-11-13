@@ -350,6 +350,12 @@ RUBY
       graph.capabilities["network"].host.should eq("mochi-fetch.js")
       graph.capabilities["network"].operations.map { |operation| {operation.name, operation.mode} }
         .should eq([{"fetch", "async"}, {"cancel", "sync"}])
+      graph.capabilities["network"].limit_keys.sort_by(&.first).should eq([
+        {"envelope_bytes", "host_fetch_envelope_bytes"},
+        {"pending_requests", "host_network_pending_requests"},
+        {"response_buffer_bytes", "host_network_buffer_bytes"},
+        {"response_bytes", "host_network_response_bytes"},
+      ])
       plain.manifest.capabilities.should eq([] of String)
       fetched.manifest.capabilities.should eq(["network"])
       graph.capability_package_ids.should eq(Set{"component:fetch-panel"})

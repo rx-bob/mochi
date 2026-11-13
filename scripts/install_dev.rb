@@ -8,7 +8,7 @@ require "digest"
 
 OWNER = "mochi-development-install"
 SCHEMA_VERSION = 1
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 LAUNCHER_MARKER = "# mochi-managed-launcher-v1"
 
 def fail_setup(message)
@@ -60,6 +60,10 @@ def runtime_files(checkout_root, gvm_root)
         key == "mrbc" ? executable_file?(path) : File.file?(path)
       end
     end
+  end
+  if wasm = result["gvm_wasm"]
+    profile = wasm.sub(/\.wasm\z/, ".capacity.json")
+    result["gvm_capacity"] = File.file?(profile) ? profile : nil
   end
   result
 end
@@ -136,13 +140,13 @@ def main
   end
   gvm_root = File.expand_path(ENV["MOCHI_GVM_DIR"] || File.join(checkout_root, "..", "mochi-gvm"))
   files = runtime_files(checkout_root, gvm_root)
-  required = %w[mrbc gvm_wasm gvm_js loader]
+  required = %w[mrbc gvm_wasm gvm_js gvm_capacity loader]
   missing = required.reject { |key| files[key] }
   unless missing.empty?
     commands = missing.map do |key|
       case key
       when "mrbc" then "build mruby in #{gvm_root.inspect} or set MRBC"
-      when "gvm_wasm", "gvm_js" then "run `task gvm:wasm` in #{gvm_root.inspect} or set MOCHI_GVM_WASM/MOCHI_GVM_JS"
+      when "gvm_wasm", "gvm_js", "gvm_capacity" then "run `task gvm:wasm` in #{gvm_root.inspect} or set MOCHI_GVM_WASM/MOCHI_GVM_JS"
       when "loader" then "restore #{File.join(checkout_root, "runtime/mochi-loader.js").inspect} or set MOCHI_LOADER"
       end
     end
@@ -158,6 +162,15 @@ def main
   end
   unless File.read(files.fetch("gvm_js")).include?("MochiModule")
     fail_setup("#{files.fetch("gvm_js")} is not Mochi's GVM JavaScript runtime; rebuild with `task gvm:wasm`")
+  end
+  begin
+    capacity_profile = JSON.parse(File.read(files.fetch("gvm_capacity")))
+  rescue JSON::ParserError => error
+    fail_setup("invalid GVM capacity profile at #{files.fetch("gvm_capacity")}: #{error.message}")
+  end
+  unless capacity_profile.is_a?(Hash) && capacity_profile["schema_version"] == 1 &&
+         capacity_profile["fingerprint"].is_a?(String) && capacity_profile["fingerprint"].match?(/\A[0-9a-f]{64}\z/)
+    fail_setup("#{files.fetch("gvm_capacity")} is not a valid GVM capacity profile; rebuild with `task gvm:wasm`")
   end
   loader_text = File.read(files.fetch("loader"))
   unless loader_text.match?(/MANIFEST_SCHEMA_VERSION\s*=\s*#{MANIFEST_SCHEMA_VERSION}\b/)
@@ -177,6 +190,8 @@ def main
     "gvm_wasm_sha256" => Digest::SHA256.file(files.fetch("gvm_wasm")).hexdigest,
     "gvm_js" => files["gvm_js"],
     "gvm_js_sha256" => Digest::SHA256.file(files.fetch("gvm_js")).hexdigest,
+    "gvm_capacity_sha256" => Digest::SHA256.file(files.fetch("gvm_capacity")).hexdigest,
+    "capacity_fingerprint" => capacity_profile.fetch("fingerprint"),
     "loader" => files["loader"],
     "format_host" => files["format_host"],
     "host_adapters" => {

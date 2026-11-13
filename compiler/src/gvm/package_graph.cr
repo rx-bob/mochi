@@ -13,7 +13,7 @@ require "../tree-sitter/source_symbols"
 module MochiPackaging
   # Bundle schema shared by the entry manifest and the per-component
   # descriptors it points at. Both halves move together.
-  SCHEMA_VERSION   = 2
+  SCHEMA_VERSION   = 3
   RUNTIME_REQUIRES = Set{"json", "await"}
 
   # A host capability operation is either a synchronous WASM-to-JS call or an
@@ -31,7 +31,8 @@ module MochiPackaging
     version : Int32,
     host : String?,
     exporting : String,
-    operations : Array(CapabilityOperation)
+    operations : Array(CapabilityOperation),
+    limit_keys : Array(Tuple(String, String))
 
   CAPABILITY_DEFINITIONS = [
     CapabilityDefinition.new(
@@ -39,14 +40,21 @@ module MochiPackaging
       1,
       "mochi-format.js",
       "MochiFormat",
-      [CapabilityOperation.new("format", "sync")]
+      [CapabilityOperation.new("format", "sync")],
+      [{"cache_entries", "host_format_cache_entries"}]
     ),
     CapabilityDefinition.new(
       "network",
       1,
       "mochi-fetch.js",
       "Mochi.fetch",
-      [CapabilityOperation.new("fetch", "async"), CapabilityOperation.new("cancel", "sync")]
+      [CapabilityOperation.new("fetch", "async"), CapabilityOperation.new("cancel", "sync")],
+      [
+        {"pending_requests", "host_network_pending_requests"},
+        {"response_bytes", "host_network_response_bytes"},
+        {"response_buffer_bytes", "host_network_buffer_bytes"},
+        {"envelope_bytes", "host_fetch_envelope_bytes"},
+      ]
     ),
   ]
 
@@ -55,7 +63,8 @@ module MochiPackaging
     version : Int32,
     host : String?,
     operations : Array(CapabilityOperation),
-    packages : Array(String)
+    packages : Array(String),
+    limit_keys : Array(Tuple(String, String))
 
   class PackageNode
     getter id : String
@@ -558,7 +567,8 @@ module MochiPackaging
           definition.version,
           definition.host,
           definition.operations,
-          active_packages
+          active_packages,
+          definition.limit_keys
         )
       end
     end
@@ -575,7 +585,8 @@ module MochiPackaging
         definition.version,
         definition.host,
         definition.operations,
-        [] of String
+        [] of String,
+        definition.limit_keys
       )
     end
 

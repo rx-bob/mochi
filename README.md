@@ -944,9 +944,10 @@ record, then known paths in the compiler's development checkout and its
 the operation; it never falls through to another resource. The launcher sets
 `MOCHI_INSTALL_RECORD` for its installation. Builds validate required files,
 WebAssembly format, loader manifest schema, and installed compiler/runtime
-identity before changing output. The current runtime uses the `default`
-capacity profile; custom profile identity will be supplied by the capacity
-artifact work.
+identity before changing output. The loader checks the capacity fingerprint
+embedded in the runtime against the bundle manifest before runtime
+initialization. See [fixed VM capacities](docs/fixed-capacities.md) for the
+build-time profile format and custom artifact workflow.
 
 #### Creating a new project
 ```

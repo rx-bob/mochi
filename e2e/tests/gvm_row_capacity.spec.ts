@@ -243,7 +243,31 @@ class OversizedMount
 end
 `;
 
-async function compileProject(): Promise<{
+const manyRowsSource = `
+class ManyRows
+  @tag_name = "many-rows"
+  @rows
+
+  def initialize
+    @rows = []
+    index = 0
+    while index < 540
+      @rows.push({"id" => index, "label" => "row-" + index.to_s})
+      index = index + 1
+    end
+  end
+
+  def row_label(row)
+    row["label"]
+  end
+
+  def html
+    %Q{<div class="rows">{each @rows as row}<span class="row">{row_label(row)}</span>{end}</div>}
+  end
+end
+`;
+
+async function compileProject(capacities?: Record<string, number>): Promise<{
   projectDir: string;
   bundleDir: string;
   server: http.Server;
@@ -254,6 +278,7 @@ async function compileProject(): Promise<{
   fs.mkdirSync(path.join(projectDir, "lib"), { recursive: true });
   fs.writeFileSync(path.join(projectDir, "lib", "RowScreen.rb"), rowScreenSource);
   fs.writeFileSync(path.join(projectDir, "lib", "OversizedMount.rb"), oversizedSource);
+  fs.writeFileSync(path.join(projectDir, "lib", "ManyRows.rb"), manyRowsSource);
   fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
 <html>
   <head>
@@ -264,7 +289,14 @@ async function compileProject(): Promise<{
 </html>
 `);
 
-  execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
+  const args = ["-i", projectDir, "-o", bundleDir];
+  if (capacities) {
+    const configPath = path.join(projectDir, "capacity.json");
+    fs.writeFileSync(configPath, JSON.stringify({ schema_version: 1, capacities }));
+    args.push("--capacity-config", configPath);
+  }
+
+  execFileSync(compilerBinary, args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: "pipe",
@@ -293,6 +325,13 @@ test("thirty-day model rows and mixed row arities rebuild without forced aggrega
     await expect(host.locator(".compact .compact-row").last()).toHaveText("compact-7|70|7");
     await expect(host.locator(".detail .detail-row")).toHaveCount(8);
     await expect(host.locator(".detail .detail-row").last()).toHaveText("detail-7|70|7|model");
+    const manyRows = await page.evaluate(async () => {
+      const element = document.createElement("many-rows");
+      document.body.appendChild(element);
+      await (element as any)._mochiReady;
+      return element.shadowRoot.querySelectorAll(".row").length;
+    });
+    expect(manyRows).toBe(540);
     const initialStats = await page.evaluate(() => (window as any).MochiLoader.debugStats());
 
     for (let round = 0; round < 4; round += 1) {
@@ -325,13 +364,21 @@ test("thirty-day model rows and mixed row arities rebuild without forced aggrega
 test("oversized retained rows report the exhausted scratch resource and keep the VM usable", async ({ page }) => {
   test.setTimeout(120_000);
   setupConsoleLogging(page, { expectedMochiErrors: true });
-  const { projectDir, server, baseURL } = await compileProject();
+  const { projectDir, server, baseURL } = await compileProject({ scratch_objects: 512 });
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
 
   try {
     await page.goto(`${baseURL}/index.html`);
     await page.waitForFunction(() => Boolean((window as any).customElements.get("row-screen")));
+
+    const constrainedRows = await page.evaluate(async () => {
+      const element = document.createElement("many-rows");
+      document.body.appendChild(element);
+      await (element as any)._mochiReady;
+      return element.shadowRoot.querySelectorAll(".row").length;
+    });
+    expect(constrainedRows).toBe(540);
 
     const oversized = await page.evaluate(async () => {
       const element = document.createElement("oversized-mount");
@@ -347,8 +394,9 @@ test("oversized retained rows report the exhausted scratch resource and keep the
     expect(oversized.message).toContain("OversizedMount#initialize");
     expect(oversized.message).toContain("scratch objects exhausted");
     expect(oversized.message).toContain("requested 1");
-    expect(oversized.message).toContain("used 2048 of 2048");
+    expect(oversized.message).toContain("used 512 of 512");
     expect(oversized.message).toContain("lib/OversizedMount.rb:");
+    expect(oversized.message).toMatch(/capacity profile [a-f0-9]{64}/);
     expect(oversized.message).not.toContain("component mount failed");
 
     await page.evaluate(async () => {

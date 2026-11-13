@@ -22,9 +22,14 @@ Fixtures:
 - `compiler/spec/fixtures/payload/minimal` — one `MyCounter` entry component.
 - `compiler/spec/fixtures/payload/feature` — the same entry component plus a
   later `FormatBadge` component that calls `MochiFormat`.
+- `compiler/spec/fixtures/payload/network` — an entry `NetworkPanel` that calls
+  `Mochi.fetch`, making the network adapter part of its initial load.
 
-Both fixtures are compiled twice in separate temporary roots. The script
-requires byte-identical file sets and SHA-256 hashes for both builds.
+Every fixture is compiled twice in separate temporary roots. The script
+requires byte-identical file sets and SHA-256 hashes for both builds. A generic
+capability membership check compares each adapter's initial membership with
+the initial dependency closure of its declared Ruby packages, so unused
+adapters stay out of the initial load and used adapters are present.
 
 The compiler copies the current runtime artifacts:
 
@@ -32,6 +37,7 @@ The compiler copies the current runtime artifacts:
 - `../mochi-gvm/dist/mochi-gvm.js`
 - `runtime/mochi-loader.js`
 - `runtime/mochi-format.js` when the formatting capability is reachable
+- `runtime/mochi-fetch.js` when the network capability is reachable
 
 Compression uses Ruby `Zlib::GzipWriter` at level 9 with the gzip modification
 time fixed to 1. Raw byte counts are file sizes.

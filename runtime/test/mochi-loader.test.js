@@ -31,6 +31,27 @@ const COMPONENT = {
   ],
 };
 
+const TEST_CAPACITY_FINGERPRINT = "a".repeat(64);
+const TEST_HOST_CAPACITIES = {
+  host_patch_bytes: 65536,
+  host_fetch_envelope_bytes: 65536,
+  host_emit_envelope_bytes: 16384,
+  host_event_args_bytes: 8192,
+  host_command_bytes: 8192,
+  host_network_pending_requests: 256,
+  host_network_response_bytes: 5000,
+  host_network_buffer_bytes: 4194304,
+  host_format_cache_entries: 32,
+  host_event_queue_entries: 256,
+  host_event_queue_bytes: 524288,
+  host_drag_payload_bytes: 1024,
+  host_file_handles: 128,
+  host_file_readers: 4,
+  host_file_chunk_bytes: 8192,
+  host_file_whole_read_bytes: 48000,
+  host_file_buffer_bytes: 262144,
+};
+
 const LOGS_COMPONENT = {
   ...COMPONENT,
   tag_name: "my-logs",
@@ -131,7 +152,13 @@ function componentIndexEntry(component) {
 
 function manifest(components, resources, formatHost) {
   return {
-    schema_version: 2,
+    schema_version: 3,
+    capacity_profile: {
+      schema_version: 1,
+      fingerprint: TEST_CAPACITY_FINGERPRINT,
+      memory_bytes: 100663296,
+      capacities: TEST_HOST_CAPACITIES,
+    },
     packages: {},
     components: components.map(componentIndexEntry),
     ...(resources ? { resources } : {}),
@@ -222,6 +249,7 @@ function encodePatches(records) {
 
 function fakeModule(log) {
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
   const symbols = new Map();
   const patchOffset = 4096;
   const emitOffset = 8192;
@@ -241,6 +269,7 @@ function fakeModule(log) {
   log.mountProps = [];
   log.propSets = [];
   log.failProps = false;
+  log.failMount = false;
   log.components = new Set();
   log.failDispatch = new Set();
   log.errorText = "";
@@ -261,6 +290,27 @@ function fakeModule(log) {
   const module = {
     HEAPU8: new Uint8Array(65536),
     patchQueue: [],
+    UTF8ToString(pointer) {
+      let end = pointer;
+      while (module.HEAPU8[end] !== 0) end += 1;
+      return decoder.decode(module.HEAPU8.slice(pointer, end));
+    },
+    _mochi_capacity_fingerprint() {
+      const bytes = encoder.encode(TEST_CAPACITY_FINGERPRINT + "\0");
+      module.HEAPU8.set(bytes, 16);
+      return 16;
+    },
+    _mochi_capacity_profile() {
+      const profile = {
+        schema_version: 1,
+        fingerprint: TEST_CAPACITY_FINGERPRINT,
+        memory_bytes: 100663296,
+        capacities: TEST_HOST_CAPACITIES,
+      };
+      const bytes = encoder.encode(JSON.stringify(profile) + "\0");
+      module.HEAPU8.set(bytes, 128);
+      return 128;
+    },
     _malloc(size) {
       const pointer = nextPointer;
       nextPointer += size + 16;
@@ -305,6 +355,7 @@ function fakeModule(log) {
       return log.methods.has(name) ? 1 : 0;
     },
     _mochi_mount_component() {
+      if (log.failMount) return 0;
       const instance = String(nextInstance++);
       log.components.add(instance);
       return instance;
@@ -477,13 +528,24 @@ async function setup(components, options) {
   if (options.fetch) {
     body.capabilities = {
       ...(body.capabilities || {}),
-      network: { version: 1, host: "mochi-fetch.js", operations: { fetch: "async", cancel: "sync" }, packages: [] },
+      network: {
+        version: 1,
+        host: "mochi-fetch.js",
+        operations: { fetch: "async", cancel: "sync" },
+        packages: [],
+        limits: {
+          pending_requests: TEST_HOST_CAPACITIES.host_network_pending_requests,
+          response_bytes: TEST_HOST_CAPACITIES.host_network_response_bytes,
+          response_buffer_bytes: TEST_HOST_CAPACITIES.host_network_buffer_bytes,
+          envelope_bytes: TEST_HOST_CAPACITIES.host_fetch_envelope_bytes,
+        },
+      },
     };
   }
   const descriptors = new Map();
   components.forEach((component) => {
     descriptors.set(`components/${component.tag_name}.json`, {
-      schema_version: 2,
+      schema_version: 3,
       ...component,
       ...(options.fetch ? { capabilities: [...new Set([...(component.capabilities || []), "network"])] } : {}),
     });
@@ -536,6 +598,28 @@ async function setup(components, options) {
   await loader.boot(options.manifestUrl || "mochi-manifest.json");
   return { dom, loader, module, log };
 }
+
+test("boot rejects a runtime whose compiled capacity profile differs from the manifest", async () => {
+  await assert.rejects(
+    async () => {
+      await setup([COMPONENT], {
+      manifest: {
+        ...manifest([COMPONENT]),
+        capacity_profile: {
+          schema_version: 1,
+          fingerprint: "b".repeat(64),
+          memory_bytes: 100663296,
+          capacities: TEST_HOST_CAPACITIES,
+        },
+      },
+      });
+      const element = document.createElement("my-counter");
+      document.body.appendChild(element);
+      await element._mochiReady;
+    },
+    /runtime capacity fingerprint mismatch/
+  );
+});
 
 test("boot defines a custom element with a static shadow template and scoped style", async () => {
   const { loader, module, log } = await setup([COMPONENT]);
@@ -936,7 +1020,7 @@ test("a component descriptor with a mismatched schema fails with its identity", 
   dom.window.document.body.appendChild(element);
   await assert.rejects(
     element._mochiReady,
-    /component descriptor for 'my-counter' uses schema 1 .*loader supports schema 2/,
+    /component descriptor for 'my-counter' uses schema 1 .*loader supports schema 3/,
   );
 });
 
@@ -997,7 +1081,7 @@ test("removal during the descriptor download does not mount an abandoned instanc
 
   releaseDescriptor({
     ok: true,
-    json: async () => ({ schema_version: 2, ...COMPONENT }),
+    json: async () => ({ schema_version: 3, ...COMPONENT }),
   });
   await ready;
   await flushLifecycle();
@@ -1129,8 +1213,8 @@ test("shared style files load on first use once for concurrent components", asyn
 test("boot rejects a manifest schema the loader does not understand", async () => {
   const base = manifest([], undefined, undefined);
   await assert.rejects(
-    setup([], { manifest: { ...base, schema_version: 3 } }),
-    /unsupported manifest schema 3 .*loader supports schema 2/,
+    setup([], { manifest: { ...base, schema_version: 4 } }),
+    /unsupported manifest schema 4 .*loader supports schema 3/,
   );
 
   const { schema_version, ...missingVersion } = base;
@@ -1222,6 +1306,7 @@ test("formatting capability host is read from the versioned capabilities map", a
       host: "mochi-format.js",
       operations: { format: "sync" },
       packages: [],
+      limits: { cache_entries: TEST_HOST_CAPACITIES.host_format_cache_entries },
     },
   };
   base.packages = {
@@ -1248,7 +1333,14 @@ test("formatting capability host is read from the versioned capabilities map", a
 
   assert.equal(log.hostUrls.length, 1);
   assert.ok(log.hostUrls[0].endsWith("/mochi-format.js"));
-  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
+  const installed = module.__mochiHostCapabilities.formatting;
+  assert.notEqual(installed, adapter);
+  assert.ok(Object.isFrozen(installed));
+  assert.ok(Object.isFrozen(installed.limits));
+  assert.deepEqual(installed.limits, {
+    cache_entries: TEST_HOST_CAPACITIES.host_format_cache_entries,
+  });
+  assert.equal(installed.sync, adapter.sync);
 });
 
 test("shared style resources use one adopted sheet before the local override", async () => {
@@ -1370,6 +1462,45 @@ test("runtime failures report one source-mapped error and clear on remount", asy
   document.body.appendChild(element);
   await element._mochiReady;
   assert.equal(element.mochiError, undefined);
+});
+
+test("capacity errors include the compiled profile and failed outboxes are discarded", async () => {
+  const component = {
+    ...COMPONENT,
+    source: { file: "lib/counter.rb", line: 3 },
+    methods: { initialize: 8, increment: 12 },
+  };
+  const { module, log } = await setup([component]);
+  const details = [];
+  document.addEventListener("mochi:error", (error) => details.push(error.detail));
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  module.queueEmit('{"action":"should-not-run"}\n');
+  log.errorText = "MyCounter#increment: scratch objects exhausted (requested 1, used 2048 of 2048)";
+  log.failDispatch.add("increment");
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(element.mochiError.message, /lib\/counter\.rb:12/);
+  assert.match(element.mochiError.message, new RegExp("capacity profile " + TEST_CAPACITY_FINGERPRINT));
+  assert.equal(details.at(-1).capacityProfile, TEST_CAPACITY_FINGERPRINT);
+  assert.equal(module._mochi_emit_outbox_len(), 0);
+  element.remove();
+  await flushLifecycle();
+});
+
+test("a capacity-rejected VM mount discards its pending host commands", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  module.queueEmit('{"action":"must-not-run"}\n');
+  log.errorText = "MyCounter#initialize: state objects exhausted (requested 1, used 32768 of 32768)";
+  log.failMount = true;
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await assert.rejects(element._mochiReady, /MyCounter#initialize/);
+  assert.equal(module._mochi_emit_outbox_len(), 0);
+  assert.equal(log.components.size, 0);
 });
 
 test("disconnect dispatches unmounted and stops routing actions", async () => {
@@ -5387,8 +5518,13 @@ test("formatting components register the optional adapter before mounting", asyn
 
   assert.equal(log.hostUrls.length, 1);
   assert.ok(log.hostUrls[0].endsWith("/mochi-format.js"));
-  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
-  assert.equal(module.__mochiHostCapabilities.formatting.sync.format(), "1");
+  const installed = module.__mochiHostCapabilities.formatting;
+  assert.notEqual(installed, adapter);
+  assert.ok(Object.isFrozen(installed));
+  assert.deepEqual(installed.limits, {
+    cache_entries: TEST_HOST_CAPACITIES.host_format_cache_entries,
+  });
+  assert.equal(installed.sync.format(), "1");
 });
 
 test("adapter scripts can register through the loader registrar", async () => {
@@ -5404,8 +5540,9 @@ test("adapter scripts can register through the loader registrar", async () => {
   document.body.appendChild(element);
   await element._mochiReady;
 
-  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
-  assert.ok(Object.isFrozen(adapter));
+  assert.notEqual(module.__mochiHostCapabilities.formatting, adapter);
+  assert.ok(Object.isFrozen(module.__mochiHostCapabilities.formatting));
+  assert.ok(Object.isFrozen(module.__mochiHostCapabilities.formatting));
   assert.ok(Object.isFrozen(adapter.sync));
 });
 
@@ -5426,7 +5563,8 @@ test("concurrent formatting components share one host request", async () => {
   await Promise.all([first._mochiReady, second._mochiReady]);
 
   assert.equal(calls, 1);
-  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
+  assert.notEqual(module.__mochiHostCapabilities.formatting, adapter);
+  assert.ok(Object.isFrozen(module.__mochiHostCapabilities.formatting.limits));
 });
 
 test("components without formatting never request the optional adapter", async () => {
@@ -5489,7 +5627,8 @@ test("a failed host adapter load is evicted and can be retried", async () => {
 
   assert.equal(attempts, 2);
   assert.equal(element._mochiMountState, "mounted");
-  assert.equal(module.__mochiHostCapabilities.formatting, adapter);
+  assert.notEqual(module.__mochiHostCapabilities.formatting, adapter);
+  assert.ok(Object.isFrozen(module.__mochiHostCapabilities.formatting.limits));
 });
 
 test("a host adapter must register the declared capability before mount", async () => {
@@ -5540,11 +5679,32 @@ test("a host adapter cannot register an undeclared operation", async () => {
 test("manifest capability operations must be sync or async", async () => {
   const base = manifest([COMPONENT]);
   base.capabilities = {
-    formatting: { version: 1, host: "mochi-format.js", operations: { format: "later" } },
+    formatting: {
+      version: 1,
+      host: "mochi-format.js",
+      operations: { format: "later" },
+      limits: { cache_entries: TEST_HOST_CAPACITIES.host_format_cache_entries },
+    },
   };
   await assert.rejects(
     setup([COMPONENT], { manifest: base }),
     /capability 'formatting' operation 'format' must be sync or async/
+  );
+});
+
+test("manifest capability limits must match the compiled host profile", async () => {
+  const base = manifest([FORMAT_COMPONENT]);
+  base.capabilities = {
+    formatting: {
+      version: 1,
+      host: "mochi-format.js",
+      operations: { format: "sync" },
+      limits: { cache_entries: TEST_HOST_CAPACITIES.host_format_cache_entries + 1 },
+    },
+  };
+  await assert.rejects(
+    setup([FORMAT_COMPONENT], { manifest: base }),
+    /limit 'cache_entries' does not match compiled capacity 'host_format_cache_entries'/
   );
 });
 
@@ -5555,6 +5715,7 @@ test("manifest capability adapters must be local artifacts", async () => {
       version: 1,
       host: "https://cdn.example/mochi-format.js",
       operations: { format: "sync" },
+      limits: { cache_entries: TEST_HOST_CAPACITIES.host_format_cache_entries },
     },
   };
   await assert.rejects(

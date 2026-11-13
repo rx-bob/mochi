@@ -76,6 +76,7 @@ is_standalone_typecheck = false
 is_ruby_test = false
 test_browsers = "chromium,firefox,webkit"
 keep_granular_build_artifacts = false
+capacity_config_path : String? = nil
 
 desc_dev_server = "Launch dev server"
 
@@ -113,6 +114,10 @@ OptionParser.parse do |p|
 
   p.on("--keep_granular_build_artifacts", "Preserves all granular build artifacts (meant for developers working on Mochi)") do
     keep_granular_build_artifacts = true
+  end
+
+  p.on("--capacity-config=PATH", "Build with fixed VM capacities from a versioned JSON file") do |path|
+    capacity_config_path = path
   end
 
   p.on("--experimental-new-engine", "Use the new experimental rendering engine") do
@@ -189,6 +194,7 @@ else
       output_dir,
       with_tc,
       keep_granular_build_artifacts,
+      capacity_config_path,
     )
   end
 end
