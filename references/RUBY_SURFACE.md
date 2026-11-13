@@ -29,6 +29,43 @@ as SVG values. This does not add SVG custom-element composition, slots, or
 automatic deep mutation observation. Replace root state to publish nested
 model changes.
 
+## Boolean props, child events, and form controls
+
+A component can declare `prop :required, Boolean, required: true`,
+`prop :disabled, Boolean, default: false`, and
+`event :save, value: String, valid: Boolean`. These declarations work in
+ordinary builds and `--typecheck`, including `# typed: true` sources.
+`Boolean` is declaration syntax, not a general Ruby constant. Typecheck
+preparation adapts only these metadata positions to Sorbet's Boolean type and
+supplies declaration/emitter method stubs only inside the owning component.
+Other unknown constants and ordinary signed-method type errors still fail.
+Diagnostics retain authored lines and columns.
+
+The compiler rejects incompatible literal defaults such as
+`default: "false"` for a Boolean prop. Existing defaults remain a narrower
+contract: `nil` is permitted for every prop type, and constant defaults are
+evaluated as Ruby without checking the resulting value against the prop type.
+Sorbet still checks whether those constants resolve. Declarations do not infer
+Sorbet ivar types or statically check arbitrary emitted hashes. At runtime,
+supplied props and declared event payloads are checked; a Boolean payload field
+requires actual `true` or `false`, and a mismatch stops parent delivery.
+
+Declared child props retain values even when their names are also native HTML
+Boolean attributes. A child's `required="{false}"` supplies false; an ordinary
+input's `required="{false}"` removes its required attribute. Static, conditional,
+and repeated children follow the same distinction without fetching their
+component descriptors early.
+
+The nested-form fixture uses associated labels, native text inputs, required
+validation, and form submission. Save emits the current draft and Boolean
+validity to the parent, which updates that field's saved value. Cancel closes
+the form, discards local drafts, and returns focus to the static toggle button
+through `Mochi.focus`. Closing the form also returns focus there. Reopening
+creates editors from the latest saved values. Keyed reorders preserve the
+focused input; Save and Cancel explicitly use `tabindex="0"` so WebKit's
+platform tab policy also includes those buttons. No custom keyboard handler
+replaces native Tab or Enter behavior.
+
 ## Bound controls and explicit handlers
 
 `bind:value="{@draft}"` writes `@draft` on text input's `input` event;

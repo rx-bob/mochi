@@ -39,7 +39,13 @@ arguments after keyed moves, property resets, branch recreation, and remount.
 The existing Ruby `fill` operation selects a value on a select and dispatches
 its native input/change sequence; `click` toggles a checkbox. The framework
 capacity probe fails the actual VM setter before its callback, then verifies
-recovery on a smaller input. Boolean typechecking remains E2.S4.
+recovery on a smaller input. E2.S4 adds required/defaulted Boolean props, native required validation,
+typed save/cancel events, and keyboard/focus acceptance. `BooleanPropsRoot`
+checks static and conditional children; repeated editors use the same contract.
+Save updates the parent's saved field value. Cancel closes the form and returns
+focus to the toggle; reopening discards unsaved local drafts. Both ordinary
+builds and `--typecheck` are covered. `probes/11-boolean-contracts` rejects a
+string-valued Boolean event field and then delivers a valid Boolean payload.
 
 From the Mochi repository root:
 
@@ -81,3 +87,11 @@ for example `[data-field='a'] field-editor >>> .draft`. Pointer lifecycle
 coverage continues through the shared runner in
 `framework_contracts/test/pointer_contracts_test.rb`. Later capability stories
 extend the DSL when they need new operations.
+
+Ruby keyboard scenarios use `focus "selector"`, `press "Tab"` or `press "Enter"`,
+and `assert_focused "selector"`. Focus selectors support the same `>>>` child
+shadow boundaries as other assertions. `press` drives the browser keyboard,
+including native focus traversal, form validation, and submit behavior. These
+operations are test-only and add no shipped adapter. Typecheck's supported
+scope and default-value limits are documented in
+[the Ruby surface](../../../references/RUBY_SURFACE.md#boolean-props-child-events-and-form-controls).

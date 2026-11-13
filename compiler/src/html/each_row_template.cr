@@ -15,7 +15,7 @@ struct EachRowBindingDescriptor
   getter expression : String
   getter span : TemplateSourceSpan?
   getter trusted_markup : Bool
-  getter attr_kind : String?
+  property attr_kind : String?
 
   def initialize(
     @slot : Int32,

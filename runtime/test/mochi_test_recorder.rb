@@ -21,6 +21,19 @@ module Mochi
         record("fill", { "selector" => selector.to_s, "value" => value.to_s })
       end
 
+      def focus(selector)
+        record("focus", { "selector" => test_selector(selector) })
+      end
+
+      def press(key)
+        raise ArgumentError, "press requires a non-empty key" unless key.is_a?(String) && !key.strip.empty?
+        record("press", { "key" => key })
+      end
+
+      def assert_focused(selector)
+        record("assert_focused", { "selector" => test_selector(selector) })
+      end
+
       def select_files(selector, files:)
         record("select_files", { "selector" => test_selector(selector), "files" => test_files(files) })
       end

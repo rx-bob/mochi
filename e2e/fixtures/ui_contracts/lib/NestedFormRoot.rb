@@ -1,10 +1,12 @@
 class NestedFormRoot
   @tag_name = "nested-form-root"
-  prop :open, Integer, default: 1
+  prop :open, Boolean, default: true
   @groups
   @last
   @events
   @quoted
+  @saved
+  @cancelled
 
   def initialize
     @groups = [
@@ -17,6 +19,8 @@ class NestedFormRoot
         field("d", "Country", "Delta", false, false)
       ]}
     ]
+    @saved = "none"
+    @cancelled = false
     @last = "none"
     @events = 0
     @quoted = {"label" => "Quoted title", "active" => true}
@@ -31,7 +35,8 @@ class NestedFormRoot
   end
 
   def toggle
-    @open = @open == 1 ? 0 : 1
+    @open = !@open
+    Mochi.focus("toggle") unless @open
   end
 
   def reorder
@@ -82,6 +87,26 @@ class NestedFormRoot
     @last = "#{group_id}:#{field_id}:#{group_index}:#{field_index}:#{event['value']}"
   end
 
+  def record_save(group_id, field_id, event)
+    @groups = @groups.map do |group|
+      fields = group["fields"].map do |item|
+        if group["id"] == group_id && item["id"] == field_id
+          field(item["id"], item["label"], event["value"], item["help"], item["invalid"])
+        else
+          item
+        end
+      end
+      group_copy(group, fields, group["enabled"])
+    end
+    @saved = "#{field_id}:#{event['value']}:#{event['valid']}"
+  end
+
+  def cancel_form(event)
+    @cancelled = event["discarded"]
+    @open = false
+    Mochi.focus("toggle")
+  end
+
   def pick(group_id, field_id, group_index, field_index)
     @events += 1
     @last = "#{group_id}:#{field_id}:#{group_index}:#{field_index}:picked"
@@ -109,15 +134,16 @@ class NestedFormRoot
       <p class="quoted-static" title="{@quoted["label"]}" data-alt='{@quoted['label']}' data-interpolated="{"#{@quoted["label"]}:#{%q[}]}"}" data-literal="{{literal}}">{@quoted["label"]}</p>
       <button class="quoted-event" onclick="{quote_event("#{@quoted["label"]}:#{%q[}]}")}">Read quoted title</button>
       <button class="quoted-escape" onclick="{quote_event("quote: \"x\"")}">Read escaped quotes</button>
-      <button class="toggle" onclick="{toggle}">Toggle form</button>
+      <button ref="toggle" class="toggle" onclick="{toggle}">Toggle form</button>
       <button class="reorder" onclick="{reorder}">Reorder groups</button>
       <button class="reorder-fields" onclick="{reorder_fields}">Reorder fields</button>
       <button class="insert" onclick="{insert_neighbor}">Insert neighbor</button>
       <button class="remove" onclick="{remove_neighbor}">Remove neighbor</button>
       <button class="toggle-group" onclick="{toggle_group}">Toggle identity group</button>
       <button class="fresh" onclick="{fresh_values}">Fresh values</button>
+      <output class="saved">{@saved}</output><output class="cancelled">{@cancelled}</output>
       <output class="last">{@last}</output><output class="events">{@events}</output>
-      {if @open == 1}
+      {if @open}
         <p class="quoted-branch {if @quoted["active"]}active{end}" title="{@quoted["label"]}" data-entity="{if @quoted["active"]}&quot; {@quoted["label"]} &amp;{else}none{end}">{@quoted['label']}</p>
         <div class="groups">
           {each @groups as group, gi, key: group["id"]}
@@ -127,7 +153,7 @@ class NestedFormRoot
                 <div class="fields">
                   {each group["fields"] as item, fi, key: item["id"]}
                     <div class="field" data-field="{item['id']}" data-index="{fi}" title="{item["label"]}" data-alt=' {item['label']} ' data-literal="{{row}}" data-entity="{if item["help"]}&quot; {item["label"]} &amp;{else}plain{end}">
-                      <field-editor field_id="{item["id"]}" label="{group["label"]} / {item['label']}" initial_value="{item["value"]}" on:edit="{record_edit(group["id"], item["id"], gi, fi, $event)}"></field-editor>
+                      <field-editor required="{item['help']}" disabled="{item['id'] == 'd'}" on:save="{record_save(group['id'], item['id'], $event)}" on:cancel="{cancel_form($event)}" field_id="{item["id"]}" label="{group["label"]} / {item['label']}" initial_value="{item["value"]}" on:edit="{record_edit(group["id"], item["id"], gi, fi, $event)}"></field-editor>
                       <button class="quoted-row-event" onclick="{quote_event("#{group["label"]}|#{item["label"]}")}">Read field label</button>
                       {if item["help"]}
                         <aside class="help" data-for="{group['id']}:{item['id']}">

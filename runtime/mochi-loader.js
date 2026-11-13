@@ -4067,10 +4067,11 @@
     return { textHosts: textHosts, htmlHosts: htmlHosts };
   }
 
-  function rowAttributeKind(descriptor, name) {
+  function rowAttributeKind(descriptor, name, template) {
     var kind = null;
     (descriptor.bindings || []).forEach(function (binding) {
       if (binding.kind !== "attr" || binding.attr_name !== name) return;
+      if (template.indexOf("\uE002" + binding.slot + "\uE003") === -1) return;
       if (binding.attr_kind === "boolean" || binding.attr_kind === "text") {
         kind = binding.attr_kind;
       }
@@ -4102,7 +4103,7 @@
           element: element,
           name: name,
           template: value,
-          attrKind: rowAttributeKind(descriptor, name),
+          attrKind: rowAttributeKind(descriptor, name, value),
           property: (descriptor.bindings || []).some(function (binding) {
             return binding.kind === "prop" && binding.attr_name === name &&
               value.indexOf("\uE002" + binding.slot + "\uE003") !== -1;

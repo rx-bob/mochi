@@ -5,6 +5,7 @@ require "../mochi_cmp"
 require "../tooling/installation_paths"
 require "../sorbet/type_stripper"
 require "../webcomponents/resource_manifest"
+require "../webcomponents/component_prop_attributes"
 require "./package_graph"
 require "./source_preparer"
 require "./rite_verifier"
@@ -145,6 +146,7 @@ class MrbcCompiler
     end
 
     sorted_components = graph.component_order
+    ComponentPropAttributes.apply(sorted_components.map(&.manifest))
     jobs = [] of Tuple(String, String, String, String?, Int32)
     graph.ruby_order.each do |package|
       jobs << {

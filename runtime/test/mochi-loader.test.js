@@ -6770,3 +6770,33 @@ test("row bound properties update edited controls without treating ordinary attr
   assert.equal(check.checked, false);
   assert.equal(element.shadowRoot.querySelector(".bound"), bound);
 });
+
+test("row attribute kinds belong to their slots, preserving false child props beside native controls", async () => {
+  const component = {
+    tag_name: "boolean-slot-check", class_name: "BooleanSlotCheck", chi_file: "boolean-slot.chi", css: "",
+    html_template: "<!--each-anchor-0-->", events: [],
+    bindings: [{ id: 0, path: [0], kind: "each", getter_sym: "__mochi_each_0_rows", each_rows: {
+      id: 0, template: '<custom-child required="\uE0020\uE003"></custom-child><input required="\uE0021\uE003">',
+      bindings: [{ slot: 0, kind: "attr", attr_name: "required", attr_kind: "text" },
+        { slot: 1, kind: "attr", attr_name: "required", attr_kind: "boolean" }], children: [],
+    } }],
+  };
+  const { module, loader } = await setup([component]);
+  const patch = value => module.patchQueue.push({ patches: [{ id: 0, value: JSON.stringify([["a", [value, value]]]) }] });
+  patch(false);
+  const element = document.createElement("boolean-slot-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  const child = element.shadowRoot.querySelector("custom-child");
+  const input = element.shadowRoot.querySelector("input");
+  assert.equal(child.getAttribute("required"), "false");
+  assert.equal(input.required, false);
+  patch(true);
+  loader.applyPatches(element);
+  assert.equal(child.getAttribute("required"), "true");
+  assert.equal(input.required, true);
+  patch(false);
+  loader.applyPatches(element);
+  assert.equal(child.getAttribute("required"), "false");
+  assert.equal(input.required, false);
+});

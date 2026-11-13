@@ -306,32 +306,21 @@ for (const name of runtimeProbes) {
   });
 }
 
-test("feedback evidence 11-boolean: typecheck rejects documented Boolean prop @ui-form", async ({}, testInfo) => {
-  testInfo.annotations.push({ type: "owner", description: "E2.S4" });
-  const source = path.join(fixture, "probes/11-boolean");
-  await attachArtifacts(testInfo, source);
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-ui-typecheck-"));
-  try {
-    fs.cpSync(source, project, { recursive: true });
-    let diagnostic = "";
-    try {
-      execFileSync(compiler, ["--typecheck", "-i", project, "-o", path.join(project, "bundle")], { stdio: "pipe" });
-    } catch (error: any) {
-      expect(error.status).toBe(1);
-      diagnostic = error.stdout.toString();
-      expect(error.stderr.toString()).toContain("Sorbet typecheck failed");
-    }
-    const errors = diagnostic.split("\n").filter(line => line.includes("[Error #"));
-    expect(errors.length).toBeGreaterThan(0);
-    for (const error of errors) {
-      expect(error).toContain("Unable to resolve constant `Boolean`");
-      expect(error).toMatch(/lib\/ProbeRoot\.rb@\d+:\d+/);
-    }
-    await testInfo.attach("typecheck-diagnostic", { body: diagnostic, contentType: "text/plain" });
-  } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-  }
+for (const name of ["11-boolean", "11-boolean-contracts", "shared-form"]) {
+  test(`Boolean declarations typecheck and build: ${name} @ui-form`, async ({}, testInfo) => {
+    const source = name === "shared-form" ? fixture : path.join(fixture, "probes", name);
+    await withCompiledProject(source, async (_baseURL, bundle) => {
+      await attachArtifacts(testInfo, source, bundle);
+      expect(fs.existsSync(path.join(bundle, "mochi-manifest.json"))).toBe(true);
+    }, undefined, ["--typecheck"]);
+  });
+}
+
+test("Ruby Boolean event contracts reject mismatches and recover @ui-form", async ({ browserName }) => {
+  const output = runRubyProject(path.join(fixture, "probes/11-boolean-contracts"), browserName);
+  expect(output).toContain(`PASS [${browserName}] Boolean event payloads retain runtime validation`);
 });
+
 
 test("quoted form labels stay data across attributes, props, branches and events @ui-form", async ({ page }, testInfo) => {
   const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);

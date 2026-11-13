@@ -106,3 +106,18 @@ test("Ruby recorder requires an explicit nonempty error matcher", () => {
     }
   });
 });
+
+test("Ruby recorder preserves keyboard/focus steps and authored locations", () => {
+  withTestProject((root, testDir) => {
+    const source = path.join(testDir, "focus_test.rb");
+    const plan = path.join(root, "plan.json");
+    fs.writeFileSync(source, 'Mochi::Test.test("keyboard") do\n  focus "field-editor >>> .draft"\n  press "Tab"\n  assert_focused ".save"\nend\n');
+    const result = spawnSync("ruby", [recorder, testDir, plan], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const steps = JSON.parse(fs.readFileSync(plan, "utf8")).tests[0].steps;
+    assert.deepEqual(steps.map(step => [step.operation, step.selector || step.key, step.line]), [
+      ["focus", "field-editor >>> .draft", 2], ["press", "Tab", 3], ["assert_focused", ".save", 4],
+    ]);
+    assert.ok(steps.every(step => step.ruby_file === source));
+  });
+});

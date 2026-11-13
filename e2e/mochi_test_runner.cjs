@@ -352,7 +352,10 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             });
             if (captured) throw new Error(`${origin}: pointer capture remained active`);
           }
-        } else if (["click", "fill", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
+        } else if (step.operation === "press") {
+          if (!host) throw new Error(`${origin}: mount a component before using press`);
+          await page.keyboard.press(step.key);
+        } else if (["click", "fill", "focus", "assert_focused", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
           if (!host) throw new Error(`${origin}: mount a component before using ${step.operation}`);
           const result = await page.evaluate(({ tag, step }) => {
             const element = document.querySelector(tag);
@@ -368,6 +371,12 @@ async function runCase(browser, browserName, baseUrl, testCase) {
               return found;
             })();
             if (!target) return { missing: true };
+            if (step.operation === "focus" || step.operation === "assert_focused") {
+              if (step.operation === "focus") target.focus();
+              let active = document.activeElement;
+              while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+              return { focused: active === target };
+            }
             if (step.operation === "click") {
               target.click();
               return { ok: true };
@@ -392,6 +401,9 @@ async function runCase(browser, browserName, baseUrl, testCase) {
 
           if (result.missing) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
           if (result.invalid) throw new Error(`${origin}: ${result.invalid}`);
+          if (["focus", "assert_focused"].includes(step.operation) && !result.focused) {
+            throw new Error(`${origin}: expected focus at '${step.selector}'`);
+          }
           if (step.operation === "assert_attribute" && (!result.present || result.actual !== step.expected)) {
             throw new Error(`${origin}: expected attribute '${step.name}' to equal '${step.expected}', got ${result.present ? `'${result.actual}'` : "absent"}`);
           }

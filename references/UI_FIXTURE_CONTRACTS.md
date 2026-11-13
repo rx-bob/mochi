@@ -51,7 +51,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
 | `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
 | `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported:** `10-next` renders `alpha,beta`; E1.S3 adds nested `each`, `map` with `next value`, lexical-local updates, and continuation after iteration across helper/component contexts. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; E1.S3 covers helper parity in 03 and rejects unsupported nonlocal control flow before mounting. | E1.S2, E1.S3 |
-| `11-boolean-typecheck.md` | Documented `prop :enabled, Boolean, default: false` works in both runtime and typecheck. | **supported-in-isolation:** `11-boolean` renders `false`. **reproduced-defect:** compiling the identical source with `--typecheck` exits 1 with `Unable to resolve constant Boolean` at the prop declaration. | E2.S4 |
+| `11-boolean-typecheck.md` | Documented `prop :enabled, Boolean, default: false` works in both runtime and typecheck. | **supported:** `11-boolean`, the typed Boolean event probe, and the shared form build with `--typecheck`. Static/conditional/repeated child props retain false values; wrong Boolean event payloads are rejected before parent delivery. Genuine Sorbet errors remain covered. | E2.S4 |
 | `12-assets-and-css-imports.md` | Public assets retain the documented output path; CSS resolution and icon packaging have explicit source-backed behavior. | **intentional-contract:** `12-assets-css` serves `/public/probe.svg`, resolves `lib/nested/../themes/base.css`, applies its color, and packages only the referenced `home` icon. **intentional-contract:** `12-missing-css` fails at build time with component/path details. **reproduced-defect:** `12-root-css` cannot import a present project-root `styles/base.css` through `../../styles/base.css`: the isolated compiler tree omits that directory. This differs from direct StyleComposer support. | E7.S2: document supported source layout and resolve or explicitly retain the root-style boundary |
 
 ### Boundaries not established by these probes
@@ -410,3 +410,84 @@ WASM SHA-256 remains
 `c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
 Per-probe artifacts remain attached to browser reports. No GVM or external
 application source changed. Next in the recommended order: E2.S4.
+
+### E2.S4: typed Boolean declarations and ordinary form behavior
+
+[Component typecheck preparation](../compiler/src/sorbet/component_source_preparer.cr)
+uses the existing declaration validator and rewrites Boolean type positions
+only in recognized component `prop`/`event` calls. Sorbet sees `T::Boolean`
+and component-local metadata/emitter shims. Authored files and shipped Ruby
+remain unchanged; unrelated constants, helper DSL calls, and ordinary signed
+method errors still fail. A byte-column map accounts for multiple same-line
+adaptations, inline generated shims, and Unicode. CLI diagnostics now display
+one-based authored lines and columns.
+
+Form coverage exposed a separate defect: a declared child prop named
+`required` or `disabled` lost its false value through native HTML Boolean
+attribute handling. After resolving the component inventory, the compiler
+marks declared prop bindings as textual values in static, conditional, and
+row descriptors. Row lookup normalizes authored HTML case. The loader matches
+attribute semantics to the exact slot, preserving native input behavior next
+to a child with a same-named prop. Child descriptors remain lazy; no schema
+or new adapter is added to initial loading.
+
+`FieldEditor` now declares required/defaulted Boolean props and typed save/cancel
+events. Associated labels, required inputs, conditional validation messages,
+ARIA state, and native form submit behavior remain ordinary HTML. Save sends
+the current draft and Boolean validity; the parent updates that field's saved
+value. Cancel closes the form, discards unsaved local state, and uses the
+existing named-ref focus API to return focus to the toggle. Reopening restores
+saved values. Keyed moves preserve the focused input. Explicit zero tab indices
+keep Save/Cancel in WebKit's tab sequence without replacing native keyboard
+behavior. The Ruby runner adds `focus`, `press`, and `assert_focused`, including
+nested shadow selectors and authored failure locations.
+
+`BooleanPropsRoot` covers static/conditional props; repeated editors cover the
+same false/true contract. `11-boolean-contracts` also passes `# typed: true`
+builds, rejects a string Boolean event payload before parent delivery, and
+then delivers a valid false value. The original report 11 probe and the shared
+form both build with `--typecheck`. Literal default mismatches remain compile
+errors. Defaults retain the documented narrower existing surface: nil is
+allowed for all prop types, and constant defaults are not checked against the
+prop type after Ruby evaluation. Dynamic event payload validation remains a
+runtime contract; declaration shims do not promise static Hash field inference.
+
+Verification on 2026-11-13:
+
+- `task specs`: **548 examples passed**, no failures/errors/pending. Includes
+  real Sorbet sessions, genuine negative diagnostics, source-column mapping,
+  literal-default validation, and native-versus-child attribute descriptors.
+- `task runtime:test`: **196 tests passed**, no skips. New checks cover exact
+  row slot semantics and Ruby keyboard/focus recording.
+- Final `task framework:e2e`: **336 checks passed** across Chromium, Firefox,
+  WebKit (276 main framework/UI checks, including all 180 UI/workflow checks,
+  plus 60 asset/install/evolved-feature checks). Earlier failures exposed a
+  stale integer-valued mount test and WebKit's native tab policy; both now
+  have direct passing coverage.
+- `task payload`: passed with **96 raw / 22 gzip bytes** added to the loader.
+  Core is **495,321 raw / 159,951 gzip bytes**. Budgets increase by exactly the
+  measured delta. WASM, JS glue, optional downloads, and default capacities are
+  unchanged; the typecheck and keyboard test adaptations are build/test-only.
+- `task compile-time:framework`: all **15 builds passed**, **199.8–207.8 ms**,
+  below the unchanged 1,000 ms limit. This run followed other compiler uses;
+  it does not establish a repair for the historical first-launch outlier.
+- Crystal formatting, Ruby/JavaScript syntax, documentation links, and
+  whitespace checks passed. No commits were made.
+
+The previously recorded **intermittent Sorbet process failure remains
+unresolved**. One earlier full run hit `Negative count: -1459520515` during
+`--typecheck` process exit; a separate context probe observed Sorbet's native
+LSP owner-thread assertion preceding that same secondary failure. Local FFI
+inspection found no proven safe ownership fix. The final complete run passed,
+but no retry, skip, or diagnostic suppression was added, and that passing run
+does not prove the native crash repaired.
+
+Compiler SHA-256:
+`170998b424c17574600129312954795149ad9008914d4c066a382e1c961ee2dc`.
+Loader SHA-256:
+`42eea031f2d7f4f584d7dd006a48743caf9f5497de56c68ab7bfd85630f6ffaa`.
+WASM SHA-256 remains
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe source, descriptor, bytecode, and bundle identities remain attached
+to browser reports. No GVM or external application source changed.
+Next pending fixture story: E3.S1, before its dependent E3.S2.

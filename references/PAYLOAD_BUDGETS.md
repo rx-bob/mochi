@@ -57,13 +57,25 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 495,225 | 159,929 | 3 |
-| Minimal initial | 498,903 | 161,635 | 7 |
-| Feature initial | 499,715 | 161,820 | 7 |
+| Core runtime | 495,321 | 159,951 | 3 |
+| Minimal initial | 498,999 | 161,657 | 7 |
+| Feature initial | 499,811 | 161,842 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 513,951 | 166,421 | 11 |
-| Network initial | 504,038 | 163,133 | 8 |
-| Network total | 504,038 | 163,133 | 8 |
+| Feature total | 514,047 | 166,443 | 11 |
+| Network initial | 504,134 | 163,155 | 8 |
+| Network total | 504,134 | 163,155 | 8 |
+
+### Boolean prop and form contract cost
+
+UI-contract story E2.S4 adds **96 raw / 22 gzip bytes** to the loader,
+from 219,462 / 46,552 to 219,558 / 46,574. Row attribute classification now
+matches the exact binding slot, allowing a declared child prop such as
+`required=false` beside a native input whose `required=false` removes the
+attribute. The compiler resolves declared prop attributes after the component
+inventory is known; it needs no eager child descriptors or runtime schema
+lookup. Boolean typecheck adaptation and keyboard test operations are
+build/test-only. WASM, JS glue, capacity defaults, and optional downloads are
+unchanged. Baselines increase by exactly the measured loader delta.
 
 ### Bound event composition cost
 

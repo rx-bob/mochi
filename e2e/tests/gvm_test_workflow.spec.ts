@@ -91,7 +91,7 @@ test("Ruby runner matches a rejected mount and consumes all diagnostic channels"
 
 test("Ruby wait_for_settled waits for a lazily mounted child descriptor", async ({ browser, browserName }, testInfo) => {
   const scenario = recordCase(testInfo, [
-    'mount "nested-form-root", open: 0', 'click ".toggle"', 'wait_for_settled',
+    'mount "nested-form-root", open: false', 'click ".toggle"', 'wait_for_settled',
     'assert_value "[data-field=\'a\'] field-editor >>> .draft", "Alpha"',
   ]);
   let delayed = false;
