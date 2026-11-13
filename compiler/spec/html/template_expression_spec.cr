@@ -2,6 +2,44 @@ require "spec"
 require "../../src/html/template_expression"
 
 describe TemplateExpressionParser do
+  it "balances Ruby strings, interpolation, percent literals and adjacent hashes" do
+    [
+      %q(@field["label"]),
+      %q(@field['label']),
+      %q(format({"a" => {"b" => "}"}})),
+      %q("#{@field["label"]}:#{wrap("}")}"),
+      %q("escaped \"quote\" and }"),
+      %q(%Q|#{@field["label"]} and }|),
+      %q(%q[a"b\]c]),
+      %q("{if @wrong}{each @wrong as wrong}{end}"),
+      %q(@field["&quot;<tag>&"]),
+    ].each do |source|
+      template = %(<p title="{#{source}}">{#{source}}</p>)
+      expressions = TemplateExpressionParser.new.scan(template, "attribute")
+      expressions.map(&.source).should eq([source, source])
+      expressions.each { |expression| expression.full_text(template).should eq("{#{source}}") }
+    end
+  end
+
+  it "escapes literal braces without changing braces inside Ruby" do
+    source = %q(<p title="{format({"a" => {"b" => 1}})}">{{literal}} {"{{text}}"}</p>)
+    escaped = TemplateExpressionParser.escape_literal_braces(source)
+    escaped.should contain("\uE000literal\uE001")
+    expressions = TemplateExpressionParser.new.scan(escaped, "template")
+    expressions.map(&.source).should eq([%q(format({"a" => {"b" => 1}})), %q("{{text}}")])
+  end
+
+  it "reports authored locations for unclosed strings, interpolation and malformed delimiters" do
+    [%q(<p title="{@field["label]}"/>), %q(<p title="{"#{@field["label"]}"/>),
+     %q(<p title="{format([1, 2)}"/>)].each do |template|
+      source = "class Form\n  def html\n    %Q{\n#{template}\n}\nend\nend"
+      parser = TemplateExpressionParser.new(TemplateSourceLocator.new(source, "lib/Form.rb"))
+      error = expect_raises(TemplateExpressionError) { parser.scan(template, "attribute") }
+      error.message.to_s.should contain("lib/Form.rb:4:")
+      error.message.to_s.should match(/unclosed template placeholder|invalid Ruby expression/)
+    end
+  end
+
   it "keeps nested calls, hash arguments, and quoted braces in one expression" do
     template = %q(<p>{format(@h["key"], {a: 1})} and {wrap(number(@total), "}")}</p>)
     expressions = TemplateExpressionParser.new.scan(template, "text")

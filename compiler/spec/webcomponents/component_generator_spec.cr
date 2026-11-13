@@ -167,6 +167,13 @@ describe ComponentGenerator do
     expression.path.should eq([0])
   end
 
+  it "keeps event expression bindings even when text or attributes use the same Ruby" do
+    html = EventArgumentExtractor.process(%q(<p title="{@field["label"]}">{@field["label"]}</p><button onclick="{pick(@field["label"])}">Pick</button>))
+    manifest = ComponentGenerator.new.generate("Form", "form-root", "", html, method_names: ["pick"])
+    manifest.bindings.map(&.kind).should eq(["attr", "text", "expr"])
+    manifest.bindings.last.getter_expr.should eq(%q(@field["label"]))
+  end
+
   it "generates two-way property bindings and setters for bind:value and bind:checked" do
     html = %Q(<input bind:value="{@query}"><input type="checkbox" bind:checked="{@enabled}">)
     manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)

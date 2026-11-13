@@ -45,7 +45,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `02-array-slice-and-brackets.md` | `[1,2,3,4][1,2]` and `.slice(1,2)` return a fresh `[2,3]`. | **supported:** both probes now return a fresh two-element array containing `2,3`. `02-array-contexts` verifies Ruby boundaries, initialization/helper/handler/template parity, shallow identity, source-located errors, and slot exhaustion/recovery. Original `.to_s` expressions remain in the probes: Array text rendering still returns empty and is a separate unresolved surface, not a slicing failure. | E1.S2; history acceptance E3.S3 |
 | `03-qualified-constants.md` | `RecordData::BASE` and `RecordData.base_ms` return `1794571200000` in component contexts. | **supported:** both original probes return the correct value. `03-helper-contexts` compares direct Ruby with initializer, ordinary method, handler, and template results; separate helpers retain independent `BASE` values. Missing constants/methods name their references and the component call site. Arbitrary nested module/class registration remains outside this contract. | E1.S3 |
 | `04-scratch-capacity.md` | Structured local data work either completes correctly or reports the actual configured resource; later valid work recovers. | **supported-in-isolation:** `04-structured-records` mounts 480 hashes with nested attribute arrays; `04-concatenation` builds 360 lines / 24,370 bytes; `04-repeated-split` evaluates 480-line splits in 20 bindings. No exhaustion occurs for these inputs. Original richer object/byte exhaustion and repeated-update/recovery behavior remain **unresolved**. Configurability is an existing, tested **intentional-contract**. | E4.S1–E4.S3 |
-| `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **reproduced-defect:** `05-attribute-quotes` rejects `aria-label="{@modal["title"]}"` as an unclosed placeholder; independent `05-conditional-quotes` rejects `class="{if @node["ghost"]}ghost{end}"` with `stray '}' in template`. Both diagnostics identify the Ruby source. | E2.S2 |
+| `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **supported, repaired by E2.S2:** both original probes render `Open record` with the `ghost` class and the expected aria-label. The nested form adds both quote styles, nested interpolation, escaped quotes, typed props, event arguments, literal braces/entities, and adversarial labels that remain text. Malformed expressions retain authored source diagnostics. | E2.S2 |
 | `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, repaired by E2.S1 shared fragment lowering:** dynamic SVG attributes are inert during parsing and receive evaluated values before insertion. `06-svg-each` checks both paths and zero console errors; structural context tests add circle/rect branches, toggles, and HTML inside foreignObject. The editable graph fixture remains E3.S1; SVG custom-element children remain explicitly deferred. | E2.S1 shared fix; E3.S1 graph |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **reproduced-defect:** `07-binding-handler` shows input value `needle`, Ruby query empty, and callback observation `:a`. **supported-in-isolation:** selecting `b` updates project and callback observation to `:b`. This separate native input/change sequence does not establish same-event composition or attribute-order independence. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
@@ -68,7 +68,7 @@ These links identify related coverage, not retroactive proof that a new report i
 
 | Reports | Existing coverage and limits |
 | --- | --- |
-| 01, 05 | [structural composition specs](../compiler/spec/html/structural_composition_spec.cr), [each row compiler](../compiler/spec/html/each_row_compiler_spec.cr), [template expressions](../compiler/spec/html/template_expression_spec.cr). E2.S1 directly covers mixed branches and contexts; report 05's attribute quote scanner remains E2.S2. |
+| 01, 05 | [structural composition specs](../compiler/spec/html/structural_composition_spec.cr), [attribute scanner specs](../compiler/spec/html/template_attributes_spec.cr), [template expressions](../compiler/spec/html/template_expression_spec.cr). E2.S1 covers mixed branches and contexts; E2.S2 covers Ruby-aware attribute boundaries and escaping. |
 | 02, 03, 10 | [source preparation](../compiler/spec/gvm/source_preparer_spec.cr), [Ruby surface](RUBY_SURFACE.md), framework numeric/collection browser tests. E1.S2/E1.S3 now directly cover slicing, scoped helper constants/receivers, and local block next in VM/compiler/browser tests. |
 | 04 | [capacity config](../compiler/spec/gvm/capacity_config_spec.cr), [capacity boundaries](../e2e/tests/gvm_capacity_boundaries.spec.ts), [capacity contract](CAPACITY_CONTRACT.md). Config tests build two isolated profiles, validate limits, and verify VM source stays unchanged. |
 | 06–09 | [loader tests](../runtime/test/mochi-loader.test.js), [pointer contracts](../e2e/tests/gvm_pointer_contracts.spec.ts), [drag/file contracts](../e2e/tests/gvm_drag_file_contracts.spec.ts), [file adapter tests](../runtime/test/mochi-files.test.js). File tests cover exact bounds, streaming, cancellation and lifetime cleanup. |
@@ -219,8 +219,9 @@ Next in the recommended order: E2.S1.
 typed [FieldEditor](../e2e/fixtures/ui_contracts/lib/FieldEditor.rb) child now
 exercise keyed groups/fields, conditional help and validation, initially
 closed mounting, edits, reorder, neighbor insertion/removal, and recreation.
-Ruby scenarios use explicit input handlers; attribute quote scanning,
-same-event binding composition, and Boolean typechecking remain E2.S2–E2.S4.
+The E2.S1 baseline used explicit input handlers and left attribute quotes,
+same-event binding composition, and Boolean typechecking to E2.S2–E2.S4.
+E2.S2 results below supersede that quote-scanning limitation.
 
 Rows and branches share a compiled fragment representation with lexical
 scope, source spans, slots, events, and structural children. Branches add no
@@ -276,3 +277,72 @@ to the browser reports. All implementation changes stay in Mochi; no GVM or
 external application edits are required.
 Crystal formatting, Ruby/JavaScript syntax, documentation links, and whitespace
 checks passed. Next in the recommended order: E2.S2.
+
+### E2.S2: Ruby-aware attribute expressions
+
+One [attribute scanner](../compiler/src/html/template_attributes.cr) finds
+attribute boundaries while skipping complete Ruby placeholders. Conditional
+attributes, attribute hashes, events, and row event metadata use those spans.
+The shared expression scanner handles nested string interpolation, escaped
+quotes, percent-literal delimiters, and adjacent hash braces. Structural
+scanners skip whole expressions, so strings containing `{if ...}` or `{end}`
+cannot become template blocks.
+
+Ruby source remains intact through lowering. Only the HTML parser boundary
+encodes placeholder contents; one HTML decode restores exact expressions for
+text, attribute, and prop bindings. Generated conditional-attribute methods
+quote literal pieces separately from Ruby expressions and decode literal HTML
+entities once. Literal brace escaping leaves Ruby expressions intact. Quoted
+attribute hashes and doubled-brace literals follow the explicit grammar in
+[Ruby surface](RUBY_SURFACE.md#ruby-expressions-inside-attributes); malformed
+explicit hashes still fail validation.
+
+Event strings with escapes or interpolation execute through Ruby. Plain
+literal strings keep their existing fast path. Browser coverage also exposed
+an event-cache collision: a text/attribute binding with the same expression
+suppressed the hidden event binding, although only hidden `expr` bindings
+export the expression identity used by dispatch. Deduplication now uses only
+`expr` bindings in the current branch's list. The nested form exercises that
+exact attribute/event combination.
+
+Both original report 05 probes now assert successful rendering. The form's
+new Ruby scenario and framework test put quotes, `<img>` text, ampersands,
+literal entities, and `{end}` into labels. Static and conditional attributes,
+nested rows, typed child props, event arguments, and recreated branches retain
+the exact values; no image/script/injected attribute appears. Compiler tests
+check source-located malformed input in ordinary, branch, row, conditional
+attribute, and event contexts. Inputs still use explicit handlers; E2.S3 owns
+binding/handler composition and E2.S4 owns Boolean typechecking.
+
+Verification on 2026-11-13:
+
+- `task specs`: **537 examples passed**, no failures/errors/pending.
+- `task runtime:test`: **192 tests passed**, no skips.
+- `task framework:e2e`: **321 checks passed** across Chromium, Firefox, and
+  WebKit (261 main framework/UI checks, including all 165 UI/workflow checks,
+  plus 60 asset/install/evolved-feature checks). An earlier UI run exposed
+  the event-cache collision described above; its regression now passes.
+- `task payload`: passed with **zero core or baseline payload growth**.
+  Core remains **494,862 raw / 159,867 gzip bytes**; optional downloads and
+  budgets are unchanged. Generated expression helpers ship only with the
+  components using them; no VM or runtime JavaScript change is needed.
+- `task compile-time:framework`: final isolated run passed all **15 builds**
+  at **201.2–211.0 ms**, below the unchanged 1,000 ms limit. The first run
+  after rebuilding failed its first cold invocation at **2,229.3 ms**;
+  the remaining 14 passed. The first-launch outlier recorded in E2.S1 remains
+  unresolved. A temporary copy of the same binary took **1,397.7 ms** for its
+  first `--help` invocation and **235.0 ms** for its second, demonstrating a
+  launch delay even without an application compile. This does not establish
+  the underlying cause or repair the outlier; no threshold/retry policy changed.
+- Crystal formatting, Ruby syntax, documentation links, and whitespace checks
+  passed. No commits were made.
+
+Compiler SHA-256:
+`e596e3b29fee51af19b3db9505840aa2cf9bd7e514a5351440fd5975b6ecd7e8`.
+Loader SHA-256 remains
+`73249a3f30119134d84c80231e64753250af47b2f76e8fda8455e0eaf9295649`;
+WASM remains
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe artifacts remain attached to browser reports. No GVM or external
+application files changed, and no regression is skipped.
+Next in the recommended order: E2.S3.

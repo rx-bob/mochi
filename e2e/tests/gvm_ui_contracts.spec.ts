@@ -142,8 +142,6 @@ test("array errors retain authored methods, source lines, and capacity details @
 // oracle in UI_FIXTURE_CONTRACTS.md; never skip the reproducer.
 const compileFailures: Record<string, { message: string; owner: string }> = {
   "03-unsupported-rescue": { message: "lib/ProbeRoot.rb:6: unsupported rescue/ensure (OP_EXCEPT)", owner: "E1.S3 unsupported control flow" },
-  "05-attribute-quotes": { message: 'unclosed template placeholder near "{@modal["', owner: "E2.S2" },
-  "05-conditional-quotes": { message: "stray '}' in template", owner: "E2.S2" },
   "10-redo": { message: 'unsupported redo in template expression "redo"', owner: "intentional Ruby keyword; E1.S3" },
   "12-root-css": { message: 'CSS import "../../styles/base.css"', owner: "E7.S2" },
   "12-missing-css": { message: 'CSS import "missing.css"', owner: "intentional missing-file error; E7.S2" },
@@ -165,6 +163,8 @@ const textProbes: Record<string, { selector: string; text: string; count?: numbe
   "04-structured-records": { selector: "output", text: "480", owner: "E4.S1–E4.S3" },
   "04-concatenation": { selector: "output", text: "24370", owner: "E4.S1–E4.S3" },
   "04-repeated-split": { selector: "output", text: "480", count: 20, owner: "E4.S1–E4.S3" },
+  "05-attribute-quotes": { selector: 'div.ghost[aria-label="Open record"]', text: "Open record", owner: "E2.S2" },
+  "05-conditional-quotes": { selector: "div.ghost", text: "Open record", owner: "E2.S2" },
   "10-next": { selector: "output", text: "alpha,beta", owner: "E1.S3" },
   "11-boolean": { selector: "output", text: "false", owner: "E2.S4" },
 };
@@ -330,6 +330,46 @@ test("feedback evidence 11-boolean: typecheck rejects documented Boolean prop @u
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }
+});
+
+test("quoted form labels stay data across attributes, props, branches and events @ui-form", async ({ page }, testInfo) => {
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(fixture, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, fixture, bundle);
+    await page.goto(baseURL);
+    const root = page.locator("nested-form-root");
+    await expect(root.locator("field-editor .label").first()).toHaveText("Identity / Name");
+    await root.locator(".adversarial").click();
+    const label = `Label "' <img data-injected='yes'> & &quot; {end}`;
+    await expect(root.locator(".quoted-static")).toHaveText(label);
+    await expect(root.locator(".quoted-static")).toHaveAttribute("title", label);
+    await expect(root.locator(".quoted-static")).toHaveAttribute("data-alt", label);
+    await expect(root.locator(".quoted-static")).toHaveAttribute("data-interpolated", `${label}:}`);
+    await expect(root.locator(".quoted-static")).toHaveAttribute("data-literal", "{literal}");
+    await expect(root.locator(".quoted-branch")).toHaveAttribute("class", "quoted-branch active");
+    await expect(root.locator(".quoted-branch")).toHaveAttribute("title", label);
+    await expect(root.locator(".quoted-branch")).toHaveAttribute("data-entity", `" ${label} &`);
+    await expect(root.locator('[data-field="a"] field-editor .label')).toHaveText(`Identity / ${label}`);
+    await expect(root.locator('[data-field="a"]')).toHaveAttribute("title", label);
+    await expect(root.locator('[data-field="a"]')).toHaveAttribute("data-literal", "{row}");
+    await expect(root.locator('[data-field="a"]')).toHaveAttribute("data-entity", `" ${label} &`);
+    await expect(root.locator('[data-field="a"] .pick')).toHaveAttribute("title", label);
+    await root.locator(".quoted-event").click();
+    await expect(root.locator(".last")).toHaveText(`${label}:}`);
+    await root.locator(".quoted-escape").click();
+    await expect(root.locator(".last")).toHaveText('quote: "x"');
+    await root.locator('[data-field="a"] .quoted-row-event').click();
+    await expect(root.locator(".last")).toHaveText(`Identity|${label}`);
+    await root.locator(".toggle").click();
+    await root.locator(".toggle").click();
+    await expect(root.locator(".quoted-branch")).toHaveText(label);
+    await expect(root.locator("field-editor")).toHaveCount(4);
+    await expect(root.locator("img, script, [data-injected]")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<nested-form-root></nested-form-root>");
 });
 
 test("nested form retains keyed editors and disposes conditional children @ui-form", async ({ page }, testInfo) => {

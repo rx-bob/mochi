@@ -20,7 +20,6 @@ class ComponentGenerator
   @next_binding_id : Int32 = 0
   @next_each_id : Int32 = 0
   @mochi_cmp_name : String = ""
-  @event_expressions : Array(String) = [] of String
   @ref_names : Array(String) = [] of String
   @expression_parser : TemplateExpressionParser
 
@@ -37,7 +36,7 @@ class ComponentGenerator
   end
 
   def self.escape_double_braces(html : String) : String
-    html.gsub("{{", ESCAPED_LBRACE).gsub("}}", ESCAPED_RBRACE)
+    TemplateExpressionParser.escape_literal_braces(html)
   end
 
   def self.unescape_double_braces(html : String) : String
@@ -65,7 +64,6 @@ class ComponentGenerator
     @each_row_templates.clear
     @next_binding_id = 0
     @next_each_id = each_blocks.empty? ? 0 : each_blocks.max_of(&.id) + 1
-    @event_expressions.clear
     @ref_names.clear
     @expression_parser = expression_parser || TemplateExpressionParser.new(source_locator)
 
@@ -99,6 +97,7 @@ class ComponentGenerator
 
   private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor),
                         context : EachRowDomContext = EachRowDomContext.new) : String
+    html = @expression_parser.html_safe(html)
     # Lexbor's document parser drops comments at the body boundary. Mochi uses
     # comment anchors as binding targets, so preserve those markers as inert
     # elements while traversing and restore their exact comment markup after.
@@ -475,10 +474,10 @@ class ComponentGenerator
     return unless argument.kind == "expr"
     expression = argument.value.try(&.strip)
     return if expression.nil? || expression.empty?
-    return if @event_expressions.includes?(expression)
-    return if bindings.any? { |binding| binding.getter_expr == expression && binding.kind != "prop" }
-
-    @event_expressions << expression
+    # Only expr bindings publish the expression identity used by event
+    # dispatch. A text/attribute binding with the same Ruby is not a substitute.
+    # Keep deduplication local to this branch's binding list.
+    return if bindings.any? { |binding| binding.getter_expr == expression && binding.kind == "expr" }
     bindings << new_binding(path, "expr", nil, expression, expression)
   end
 
@@ -489,7 +488,7 @@ class ComponentGenerator
     html = self.class.escape_double_braces(branch_with_anchors(branch))
     each_result = EachProcessor.process(html, @next_each_id)
     span = @expression_parser.locator.try(&.locate(branch.condition || branch.content))
-    EachRowCompiler.validate_context_nesting(each_result.html, context, span)
+    EachRowCompiler.validate_context_nesting(each_result.html, context, span, @expression_parser)
 
     unless each_result.each_blocks.empty?
       @each_blocks.concat(each_result.each_blocks)
@@ -635,7 +634,7 @@ class ComponentGenerator
   end
 
   private def validate_template_placeholders(class_name : String, template : String)
-    @expression_parser.scan(scannable_template(template), "template", validate: false).each do |expression|
+    @expression_parser.scan(HTML.unescape(scannable_template(template)), "template", validate: false).each do |expression|
       inner = expression.source
       if CONTROL_TEMPLATE_KEYWORDS.includes?(inner) || CONTROL_TEMPLATE_PREFIXES.any? { |prefix| inner.starts_with?(prefix) }
         raise TemplateExpressionError.new(

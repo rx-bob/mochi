@@ -4,6 +4,7 @@ class NestedFormRoot
   @groups
   @last
   @events
+  @quoted
 
   def initialize
     @groups = [
@@ -18,6 +19,7 @@ class NestedFormRoot
     ]
     @last = "none"
     @events = 0
+    @quoted = {"label" => "Quoted title", "active" => true}
   end
 
   def field(id, label, value, help, invalid)
@@ -85,9 +87,28 @@ class NestedFormRoot
     @last = "#{group_id}:#{field_id}:#{group_index}:#{field_index}:picked"
   end
 
+  def adversarial_labels
+    label = %q(Label "' <img data-injected='yes'> & &quot; {end})
+    @quoted = {"label" => label, "active" => true}
+    @groups = @groups.map do |group|
+      fields = group["fields"].map do |item|
+        field(item["id"], label, item["value"], item["help"], item["invalid"])
+      end
+      group_copy(group, fields, group["enabled"])
+    end
+  end
+
+  def quote_event(value)
+    @last = value
+  end
+
   def html
     %Q{
       <h1>Nested form</h1>
+      <button class="adversarial" onclick="{adversarial_labels}">Use quoted labels</button>
+      <p class="quoted-static" title="{@quoted["label"]}" data-alt='{@quoted['label']}' data-interpolated="{"#{@quoted["label"]}:#{%q[}]}"}" data-literal="{{literal}}">{@quoted["label"]}</p>
+      <button class="quoted-event" onclick="{quote_event("#{@quoted["label"]}:#{%q[}]}")}">Read quoted title</button>
+      <button class="quoted-escape" onclick="{quote_event("quote: \"x\"")}">Read escaped quotes</button>
       <button class="toggle" onclick="{toggle}">Toggle form</button>
       <button class="reorder" onclick="{reorder}">Reorder groups</button>
       <button class="reorder-fields" onclick="{reorder_fields}">Reorder fields</button>
@@ -97,6 +118,7 @@ class NestedFormRoot
       <button class="fresh" onclick="{fresh_values}">Fresh values</button>
       <output class="last">{@last}</output><output class="events">{@events}</output>
       {if @open == 1}
+        <p class="quoted-branch {if @quoted["active"]}active{end}" title="{@quoted["label"]}" data-entity="{if @quoted["active"]}&quot; {@quoted["label"]} &amp;{else}none{end}">{@quoted['label']}</p>
         <div class="groups">
           {each @groups as group, gi, key: group["id"]}
             <section class="group" data-group="{group['id']}" data-index="{gi}">
@@ -104,11 +126,12 @@ class NestedFormRoot
               {if group["enabled"]}
                 <div class="fields">
                   {each group["fields"] as item, fi, key: item["id"]}
-                    <div class="field" data-field="{item['id']}" data-index="{fi}">
-                      <field-editor field_id="{item['id']}" label="{group['label']} / {item['label']}" initial_value="{item['value']}" on:edit="{record_edit(group['id'], item['id'], gi, fi, $event)}"></field-editor>
+                    <div class="field" data-field="{item['id']}" data-index="{fi}" title="{item["label"]}" data-alt=' {item['label']} ' data-literal="{{row}}" data-entity="{if item["help"]}&quot; {item["label"]} &amp;{else}plain{end}">
+                      <field-editor field_id="{item["id"]}" label="{group["label"]} / {item['label']}" initial_value="{item["value"]}" on:edit="{record_edit(group["id"], item["id"], gi, fi, $event)}"></field-editor>
+                      <button class="quoted-row-event" onclick="{quote_event("#{group["label"]}|#{item["label"]}")}">Read field label</button>
                       {if item["help"]}
                         <aside class="help" data-for="{group['id']}:{item['id']}">
-                          <button class="pick" onclick="{pick(group['id'], item['id'], gi, fi)}">Help {item["label"]}</button>
+                          <button class="pick" title="{item["label"]}" onclick="{pick(group["id"], item["id"], gi, fi)}">Help {item["label"]}</button>
                           {if item["invalid"]}<span class="validation">Check {item["label"]}</span>{else}<span class="valid">Ready</span>{end}
                         </aside>
                       {elsif item["invalid"]}

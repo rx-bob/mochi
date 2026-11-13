@@ -480,7 +480,8 @@ class Compiler
     amped_ruby_code = component_source_without_templates
 
     # 1. Extract hash attributes BEFORE anything else (since {{...}} breaks Lexbor parsing)
-    attr_hash_result = AttributeHashExtractor.process(html)
+    expression_parser = TemplateExpressionParser.new(source_locator)
+    attr_hash_result = AttributeHashExtractor.process(html, expression_parser)
     protected_rows, each_blocks = AttributeScopeMask.protect(attr_hash_result.html)
     html = AttributeScopeMask.restore(
       ComponentGenerator.escape_double_braces(protected_rows),
@@ -494,7 +495,7 @@ class Compiler
     )
 
     # 2. Extract attribute conditionals
-    attr_cond_result = AttributeConditionalExtractor.process(html)
+    attr_cond_result = AttributeConditionalExtractor.process(html, expression_parser)
     html = attr_cond_result.html
 
     amped_ruby_code = AttributeMethodGenerator.inject_methods_into_class(
@@ -504,7 +505,6 @@ class Compiler
     )
 
     # 3. Extract event handler arguments into data- attributes
-    expression_parser = TemplateExpressionParser.new(source_locator)
     html = EventArgumentExtractor.process(html, source_locator, expression_parser)
 
     # Analyze instance variables to determine reactables automatically

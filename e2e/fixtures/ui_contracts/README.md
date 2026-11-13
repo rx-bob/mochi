@@ -27,8 +27,13 @@ validation, and fallback branches exercise nested conditions in row scope.
 The `01-structural-contexts` probe covers table/select/SVG/foreignObject,
 shadowed loop locals, and inactive branches that must not evaluate.
 
-Inputs use explicit handlers for this story. Binding/handler composition,
-mixed attribute quotes, and Boolean typechecking remain E2.S2–E2.S4.
+E2.S2 adds mixed attribute quotes, nested Ruby interpolation, and an action
+that puts quotes, angle brackets, ampersands, entities, and braces into every
+field label. Ruby scenarios check static/conditional/row attributes, typed
+child props, and event arguments. Framework assertions verify these values
+create no extra elements. The original report 05 probes now render normally.
+Inputs still use explicit handlers: binding/handler composition and Boolean
+typechecking remain E2.S3/E2.S4.
 
 From the Mochi repository root:
 

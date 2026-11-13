@@ -32,6 +32,22 @@ end
 
 describe Compiler do
   describe "#transpile_component" do
+    it "reports malformed attribute expressions at their authored line in every scope" do
+      [
+        %q(<p title="{@field["label"]"></p>),
+        %q({if @open}<p title="{@field["label"]"></p>{end}),
+        %q({each @rows as row}<p title="{row["label"]"></p>{end}),
+        %q(<p class="{if @field[}active{end}"></p>),
+        %q(<button onclick="{pick(@field[)}">Pick</button>),
+      ].each do |template|
+        source = "class BrokenQuotes\n  @tag_name = \"broken-quotes\"\n  def html\n    %q~#{template}~\n  end\nend\n"
+        error = expect_raises(TemplateExpressionError) { transpile_source(source, "BrokenQuotes") }
+        error.message.to_s.should match(/\.rb:4:/)
+        error.message.to_s.should match(/unclosed template placeholder|invalid Ruby expression/)
+        error.message.to_s.should match(/field|row/)
+      end
+    end
+
     it "allows a component without a css method and injects helpers after the class body" do
       source = <<-RUBY
 class BareComponent

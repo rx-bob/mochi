@@ -2,6 +2,7 @@ require "../html/conditional_processor"
 require "./inject_utils"
 require "../html/attribute_conditional_extractor"
 require "../html/each_row_template"
+require "html"
 
 class AttributeMethodGenerator
   METHOD_PREFIX   = "__mochi_attr_cond_"
@@ -96,15 +97,19 @@ RUBY
 
   # Convert `{var}` to `\#{var}` or `\#{@var}` to allow Ruby interpolation
   private def self.escape_and_interpolate(text : String) : String
-    # First, escape double quotes so we don't break the generated ruby string literal
-    escaped = text.gsub("\"", "\\\"")
-
-    # Then replace {var} with \#{var}
-    # Note: we need to handle {@var} and {var}
-    # If it's already {@var}, it becomes \#{@var}
-    escaped.gsub(/\{([^}]+)\}/) do |match, m|
-      inner = m[1].strip
-      "\#{#{inner}}"
+    escaped = TemplateExpressionParser.escape_literal_braces(text)
+    String.build do |io|
+      cursor = 0
+      TemplateExpressionParser.new.scan(escaped, "attribute").each do |expression|
+        io << literal_part(escaped.byte_slice(cursor, expression.template_start - cursor))
+        io << "\#{" << expression.source << "}"
+        cursor = expression.template_end
+      end
+      io << literal_part(escaped.byte_slice(cursor))
     end
+  end
+
+  private def self.literal_part(text : String) : String
+    HTML.unescape(text.gsub('\u{E000}', "{").gsub('\u{E001}', "}")).inspect[1...-1]
   end
 end

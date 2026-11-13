@@ -1,4 +1,5 @@
 require "./attribute_scope_mask"
+require "./template_attributes"
 
 class ExtractedAttributeConditional
   property id : Int32
@@ -18,30 +19,24 @@ class AttributeConditionalResult
 end
 
 class AttributeConditionalExtractor
-  def self.process(html : String) : AttributeConditionalResult
+  def self.process(html : String, parser : TemplateExpressionParser = TemplateExpressionParser.new) : AttributeConditionalResult
     conditionals = [] of ExtractedAttributeConditional
     return AttributeConditionalResult.new(html, conditionals) unless html.includes?("{if ") || html.includes?("{unless ")
     protected_html, each_blocks = AttributeScopeMask.protect(html)
-    next_id = 0
-    
-    # Regex finds attributes whose values contain `{if ` or `{unless `
-    # Group 1: attribute name
-    # Group 2: quote character (" or ')
-    # Group 3: attribute value
-    regex = /([a-zA-Z0-9_\-\:]+)\s*=\s*(["'])((?:(?!\2).)*(?:\{if |\{unless )(?:(?!\2).)*)\2/m
-    
-    processed_html = protected_html.gsub(regex) do |match, m|
-      attr_name = m[1]
-      quote = m[2]
-      attr_value = m[3]
-      
-      cond = ExtractedAttributeConditional.new(next_id, attr_value, attr_name)
-      conditionals << cond
-      
-      replacement_value = "{__mochi_attr_cond_#{next_id}}"
-      next_id += 1
-      
-      "#{attr_name}=#{quote}#{replacement_value}#{quote}"
+    processed_html = TemplateAttributes.rewrite(protected_html, parser) do |attribute|
+      value = attribute.value(protected_html)
+      expressions = parser.scan(value, "attribute", validate: false)
+      next nil unless expressions.any? { |expression| expression.source.starts_with?("if ") || expression.source.starts_with?("unless ") }
+      expressions.each do |expression|
+        source = expression.source
+        next if source == "else" || source == "end"
+        source = source.sub(/\A(?:if|elsif|unless)\s+/, "")
+        parser.validate_source!(source, "attribute")
+      end
+      id = conditionals.size
+      conditionals << ExtractedAttributeConditional.new(id, value, attribute.name)
+      quote = attribute.quote.try(&.chr) || '"'
+      "#{attribute.name}=#{quote}{__mochi_attr_cond_#{id}}#{quote}"
     end
 
     AttributeConditionalResult.new(AttributeScopeMask.restore(processed_html, each_blocks), conditionals)

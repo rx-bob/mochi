@@ -12,6 +12,13 @@ private def compile_row_template(
 end
 
 describe EachRowCompiler do
+  it "does not lower event metadata or refs written inside Ruby string values" do
+    row = compile_row_template(%q({each @rows as row}<p title="{%q| ref="literal" onclick="{fake}" data-mochi-args-click="[]" |}">{row}</p><button onclick="{pick(row)}">Pick</button>{end}))
+    row.bindings.first.expression.should eq(%q(%q| ref="literal" onclick="{fake}" data-mochi-args-click="[]" |))
+    row.events.size.should eq(1)
+    row.events.first.handler.should eq("pick")
+  end
+
   it "keeps nested loop scopes distinct and compiles events with row arguments" do
     row = compile_row_template(%(
       <ul>

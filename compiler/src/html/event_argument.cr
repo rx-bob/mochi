@@ -1,4 +1,5 @@
 require "json"
+require "./template_expression"
 
 # One argument passed from a template event handler into a Ruby method.
 # Literals carry their JSON type so the loader can reconstruct numbers and
@@ -47,8 +48,16 @@ struct EventArgumentDescriptor
     return event if argument == "$event" || argument == "event"
     return element if argument == "$element" || argument == "element"
 
-    if argument.size >= 2 && (argument[0] == '\'' || argument[0] == '"') && argument[-1] == argument[0]
-      return literal_string(unescape_string(argument[1...-1]))
+    if argument.size >= 2 && (argument[0] == '\'' || argument[0] == '"') && argument[-1] == argument[0] &&
+       TemplateExpressionParser.skip_quoted(argument, 0) == argument.bytesize
+      # Ruby owns escape and interpolation semantics. Only plain strings can
+      # be copied into the literal fast path without evaluating Ruby.
+      value = argument[1...-1]
+      interpolated = argument[0] == '"' &&
+                     (value.includes?("#" + "{") || value.includes?("#@") || value.includes?("#$"))
+      unless value.includes?('\\') || interpolated
+        return literal_string(value)
+      end
     end
 
     return literal_number(argument) if argument.matches?(/\A-?\d+\z/)
@@ -78,32 +87,6 @@ struct EventArgumentDescriptor
         descriptors.each do |descriptor|
           json.object { descriptor.write_fields(json) }
         end
-      end
-    end
-  end
-
-  private def self.unescape_string(value : String) : String
-    String.build do |io|
-      index = 0
-      while index < value.size
-        char = value[index]
-        if char == '\\' && index + 1 < value.size
-          index += 1
-          escaped = value[index]
-          case escaped
-          when 'n'
-            io << '\n'
-          when 'r'
-            io << '\r'
-          when 't'
-            io << '\t'
-          else
-            io << escaped
-          end
-        else
-          io << char
-        end
-        index += 1
       end
     end
   end

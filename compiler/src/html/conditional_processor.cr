@@ -183,7 +183,7 @@ class ConditionalProcessor
         # handles the block when the surrounding branch is compiled.
         pos = skip_each_block(html, each_start)
       else
-        pos += 1
+        pos = TemplateExpressionParser.after_placeholder(html, pos)
       end
     end
 
@@ -241,13 +241,13 @@ class ConditionalProcessor
 
       if block_open_at?(html, pos)
         depth += 1
-        pos += 1
+        pos = TemplateExpressionParser.after_placeholder(html, pos)
       elsif try_match_end_token(html, pos)
         depth -= 1
         return pos + END_TOKEN_LEN if depth == 0
         pos += END_TOKEN_LEN
       else
-        pos += 1
+        pos = TemplateExpressionParser.after_placeholder(html, pos)
       end
     end
 

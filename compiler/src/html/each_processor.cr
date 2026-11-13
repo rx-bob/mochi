@@ -155,7 +155,7 @@ class EachProcessor
         pos = match.content_start
       elsif try_match_control_token(html, pos)
         block_stack << false
-        pos += 1
+        pos = TemplateExpressionParser.after_placeholder(html, pos)
       elsif try_match_end_token(html, pos)
         unless block_stack.empty?
           closes_each = block_stack.pop
@@ -173,7 +173,7 @@ class EachProcessor
         end
         pos += END_TOKEN_LEN
       else
-        pos += 1
+        pos = TemplateExpressionParser.after_placeholder(html, pos)
       end
     end
     link_nested_blocks(result)

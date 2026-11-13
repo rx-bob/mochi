@@ -1,4 +1,5 @@
 require "./attribute_scope_mask"
+require "./template_attributes"
 
 class ExtractedAttributeHash
   property id : Int32
@@ -18,38 +19,38 @@ class AttributeHashResult
 end
 
 class AttributeHashExtractor
-  def self.process(html : String) : AttributeHashResult
+  def self.process(html : String, parser : TemplateExpressionParser = TemplateExpressionParser.new) : AttributeHashResult
     hashes = [] of ExtractedAttributeHash
     return AttributeHashResult.new(html, hashes) unless html.includes?("{{")
     protected_html, each_blocks = AttributeScopeMask.protect(html)
-    next_id = 0
-
-    # 1. Unquoted attribute={{...}}
-    unquoted_regex = /([a-zA-Z0-9_\-\:]+)\s*=\s*\{\{(.*?)\}\}/m
-    processed_html = protected_html.gsub(unquoted_regex) do |_, m|
-      attr_name = m[1]
-      attr_value = "{{#{m[2]?}}}"
-      cond = ExtractedAttributeHash.new(next_id, attr_value, attr_name)
-      hashes << cond
-      replacement_value = "{__mochi_attr_hash_#{next_id}}"
-      next_id += 1
-      "#{attr_name}=\"#{replacement_value}\""
-    end
-
-    # 2. Quoted attribute="... {{...}} ..." (supports standalone or mixed with static tokens)
-    quoted_regex = /([a-zA-Z0-9_\-\:]+)\s*=\s*(["'])((?:(?!\2).)*?\{\{.*?\}\}(?:(?!\2).)*?)\2/m
-    processed_html = processed_html.gsub(quoted_regex) do |_, m|
-      attr_name = m[1]
-      quote = m[2]
-      inner = m[3]
-      replaced_inner = inner.gsub(/\{\{(.*?)\}\}/m) do |hash_match|
-        cond = ExtractedAttributeHash.new(next_id, hash_match, attr_name)
-        hashes << cond
-        rep = "{__mochi_attr_hash_#{next_id}}"
-        next_id += 1
-        rep
+    processed_html = TemplateAttributes.rewrite(protected_html, parser) do |attribute|
+      value = attribute.value(protected_html)
+      changed = false
+      replaced = String.build do |io|
+        i = 0
+        while i < value.bytesize
+          if value.byte_at(i) == 123_u8 && (close = TemplateExpressionParser.matching_brace(value, i))
+            token = value.byte_slice(i, close - i + 1)
+            if token.starts_with?("{{") && token.ends_with?("}}") &&
+               (attribute.quote.nil? || parser.hash_literal_intent?(token[1...-1]))
+              parser.validate_source!(token[1...-1], "attribute hash")
+              id = hashes.size
+              hashes << ExtractedAttributeHash.new(id, token, attribute.name)
+              io << "{__mochi_attr_hash_#{id}}"
+              changed = true
+            else
+              io << token
+            end
+            i = close + 1
+          else
+            io.write_byte(value.byte_at(i))
+            i += 1
+          end
+        end
       end
-      "#{attr_name}=#{quote}#{replaced_inner}#{quote}"
+      next nil unless changed
+      quote = attribute.quote.try(&.chr) || '"'
+      "#{attribute.name}=#{quote}#{replaced}#{quote}"
     end
 
     AttributeHashResult.new(AttributeScopeMask.restore(processed_html, each_blocks), hashes)

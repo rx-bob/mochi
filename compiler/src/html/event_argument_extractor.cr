@@ -1,5 +1,6 @@
 require "./event_argument"
 require "./template_expression"
+require "./template_attributes"
 
 # One event attribute discovered in a template. The replacement callback in
 # `rewrite` decides whether the DOM receives a plain handler name or a compiled
@@ -42,7 +43,7 @@ struct EventCall
 end
 
 class EventArgumentExtractor
-  EVENT_START = /(?<![A-Za-z0-9_:-])(on:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*)\s*=\s*(["'])?\{/
+  EVENT_NAME = /\Aon:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*\z/
 
   # Rewrites event attributes with call arguments into a plain method name plus
   # a JSON descriptor list. Keeping the descriptors on the element lets the
@@ -69,40 +70,20 @@ class EventArgumentExtractor
   ) : Tuple(String, Array(EventCall))
     expression_parser = parser || TemplateExpressionParser.new(locator)
     calls = [] of EventCall
-    result = String.build do |io|
-      cursor = 0
-
-      while match = EVENT_START.match(html, TemplateExpressionParser.byte_to_char(html, cursor))
-        start = TemplateExpressionParser.char_to_byte(html, match.begin(0))
-        io << html.byte_slice(cursor, start - cursor)
-
-        event_name = match[1].downcase
-        quote = match[2]?
-        content_start = TemplateExpressionParser.char_to_byte(html, match.end(0))
-        close = TemplateExpressionParser.matching_brace(html, content_start - 1)
-
-        unless close
-          io << html.byte_slice(start, html.bytesize - start)
-          cursor = html.bytesize
-          break
-        end
-
-        content = html.byte_slice(content_start, close - content_start).strip
-        attribute_end = close + 1
-        if quote && attribute_end < html.bytesize && html.byte_at(attribute_end) == quote[0].ord.to_u8
-          attribute_end += 1
-        end
-
-        method_name, arguments = expression_parser.parse_call(content)
-        validate_arguments(expression_parser, arguments)
-        call = EventCall.new(event_name, method_name, arguments, locator.try(&.locate(content)))
-        validate_modifiers(call)
-        calls << call
-        io << replacement.call(call)
-        cursor = attribute_end
-      end
-
-      io << html.byte_slice(cursor, html.bytesize - cursor)
+    result = TemplateAttributes.rewrite(html, expression_parser) do |attribute|
+      event_name = attribute.name.downcase
+      next nil unless EVENT_NAME.matches?(event_name)
+      value = attribute.value(html).strip
+      next nil unless value.starts_with?("{")
+      expressions = expression_parser.scan(value, "event", validate: false)
+      next nil unless expressions.size == 1 && expressions.first.full_text(value) == value
+      content = expressions.first.source
+      method_name, arguments = expression_parser.parse_call(content)
+      validate_arguments(expression_parser, arguments)
+      call = EventCall.new(event_name, method_name, arguments, locator.try(&.locate(content)))
+      validate_modifiers(call)
+      calls << call
+      replacement.call(call)
     end
     {result, calls}
   end
@@ -158,5 +139,7 @@ class EventArgumentExtractor
       .gsub('"', "&quot;")
       .gsub('<', "&lt;")
       .gsub('>', "&gt;")
+      .gsub('{', "&#123;")
+      .gsub('}', "&#125;")
   end
 end

@@ -27,8 +27,43 @@ expressions report authored source locations. SVG numeric/path attributes
 receive evaluated values before insertion, without parsing placeholder text
 as SVG values. This does not add SVG custom-element composition, slots, or
 automatic deep mutation observation. Replace root state to publish nested
-model changes. Mixed attribute quote scanning and same-event binding/handler
-composition retain their separately documented limitations.
+model changes. Same-event binding/handler composition retains its separately
+documented limitation.
+
+## Ruby expressions inside attributes
+
+HTML attribute quotes do not end an embedded Ruby expression. Both forms
+below evaluate the same hash lookup, including in rows, conditional branches,
+typed child props, and event arguments:
+
+```ruby
+def html
+  %q~<p title="{@field["label"]}" data-alt='{@field['label']}'>
+    {@field["label"]}
+  </p>~
+end
+```
+
+Ruby strings can contain escaped quotes, braces, nested hashes, and string
+interpolation inside an explicit `{...}` placeholder. Percent literals use
+their Ruby delimiters and escape rules. Choose an outer Ruby template string
+delimiter that does not conflict with its contents, as in `%q~...~` above.
+Bare `#{...}` outside a placeholder remains unsupported template syntax.
+Event arguments with escapes or interpolation execute through Ruby; they do
+not use a separate JavaScript string evaluator.
+
+Dynamic values stay data in text and attributes, even when they contain
+quotes, `<img>` markup, `&quot;`, or `{end}`. Only a whole text expression
+wrapped with `Mochi.raw(...)` opts into trusted markup. Literal HTML entities
+outside Ruby expressions decode once, including conditional attribute text;
+entities inside Ruby strings retain their exact Ruby value.
+
+`{{literal}}` escapes braces in text and quoted attributes. Attribute hashes
+retain `class={{ "active" => @active }}` and the quoted equivalent. In quoted
+attributes a valid hash, an empty hash, or explicit pair/splat syntax selects
+the hash form; malformed explicit pairs still fail validation. Other doubled
+braces remain literal text. Unquoted `{{...}}` always requires a valid hash.
+Malformed/unclosed placeholders report the authored Ruby file and line.
 
 ## Helper constants, receivers, and block control flow
 

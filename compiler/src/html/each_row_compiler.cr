@@ -1,4 +1,5 @@
 require "json"
+require "html"
 require "lexbor"
 require "./each_processor"
 require "./each_row_template"
@@ -17,7 +18,6 @@ class EachRowCompiler
   SENTINEL_START   = "\u{E002}"
   SENTINEL_END     = "\u{E003}"
   SENTINEL_PATTERN = Regex.new(SENTINEL_START + "([0-9]+)" + SENTINEL_END)
-  EVENT_WITH_ARGS  = /(on:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*)="\{([a-zA-Z0-9_!?]+)\}"\s+data-mochi-args-[a-zA-Z0-9_-]+="([^"]*)"/m
   ARG_MARKER       = /\A__mochi_row_args_(\d+)__(.*)\z/m
   CONTROL_PREFIXES = ["if ", "unless ", "elsif ", "each "]
   CONTROL_KEYWORDS = ["else", "end"]
@@ -85,9 +85,10 @@ class EachRowCompiler
       protected_loops[marker] = template[child.start_pos...child.end_pos]
       template = EachProcessor.replace_range(template, child.start_pos, child.end_pos, marker)
     end
-    hash_attributes = AttributeHashExtractor.process(template)
-    conditional_attributes = AttributeConditionalExtractor.process(hash_attributes.html)
+    hash_attributes = AttributeHashExtractor.process(template, parser)
+    conditional_attributes = AttributeConditionalExtractor.process(hash_attributes.html, parser)
     template = rewrite_row_attribute_helpers(conditional_attributes.html, fragment_id, scope)
+    template = TemplateExpressionParser.escape_literal_braces(template)
     protected_loops.each { |marker, source| template = template.gsub(marker, source) }
     conditional_result = ConditionalProcessor.process(template)
     blocks = conditional_result.conditionals.reject do |block|
@@ -102,15 +103,15 @@ class EachRowCompiler
     ids.next_id += each_result.each_blocks.size
     children_blocks = EachProcessor.roots(each_result.each_blocks)
     template = each_result.html.gsub("<!--each-anchor-", "<!--mochi-each-")
-    child_contexts = contexts_for_children(template, children_blocks, context)
-    validate_context_nesting(template, context, row_span)
-    if template.matches?(/\sref\s*=/)
+    child_contexts = contexts_for_children(template, children_blocks, context, parser)
+    validate_context_nesting(template, context, row_span, parser)
+    if TemplateAttributes.scan(template, parser).any? { |attribute| attribute.name.downcase == "ref" }
       raise TemplateExpressionError.new(
         "ref is not supported inside each rows; place named refs in the static component template",
         row_span
       )
     end
-    template, preprocessed_args = extract_event_arguments(template)
+    template, preprocessed_args = extract_event_arguments(template, parser)
     event_index = 0
     row_events = [] of EachRowEventDescriptor
 
@@ -206,7 +207,7 @@ class EachRowCompiler
     end
     conditionals = blocks.map do |block|
       id = conditional_ids[block.id]
-      branch_context = context_for_marker(template, "mochi-cond-#{id}", context)
+      branch_context = context_for_marker(template, "mochi-cond-#{id}", context, parser)
       conditions = block.branches.map(&.condition)
       conditions.each { |condition| parser.validate_source!(condition, "row condition") if condition }
       branches = block.branches.map do |branch|
@@ -276,18 +277,23 @@ class EachRowCompiler
   # expression text for list rows.
   private def self.extract_event_arguments(
     template : String,
+    parser : TemplateExpressionParser,
   ) : Tuple(String, Hash(Int32, Array(EventArgumentDescriptor)))
     arguments_by_marker = {} of Int32 => Array(EventArgumentDescriptor)
+    attributes = TemplateAttributes.scan(template, parser)
     result = String.build do |io|
       cursor = 0
-      template.scan(EVENT_WITH_ARGS) do |match|
-        start = TemplateExpressionParser.char_to_byte(template, match.begin(0))
-        finish = TemplateExpressionParser.char_to_byte(template, match.end(0))
-        io << template.byte_slice(cursor, start - cursor)
-
-        event = match[1]
-        handler = match[2]
-        raw = unescape_attribute(match[3])
+      attributes.each_with_index do |attribute, index|
+        event = attribute.name
+        next unless EventArgumentExtractor::EVENT_NAME.matches?(event)
+        next unless metadata = attributes[index + 1]?
+        event_name = EventCall.new(event, "", [] of String).event
+        next unless metadata.name == "data-mochi-args-#{event_name}"
+        # The first pass emits the descriptor immediately after its event.
+        next unless template.byte_slice(attribute.finish, metadata.start - attribute.finish).strip.empty?
+        handler = attribute.value(template).lchop('{').rchop('}')
+        raw = unescape_attribute(metadata.value(template))
+        io << template.byte_slice(cursor, attribute.start - cursor)
         marker = arguments_by_marker.size
         begin
           parsed = JSON.parse(raw).as_a
@@ -299,7 +305,7 @@ class EachRowCompiler
         end
 
         io << event << "=\"{__mochi_row_args_" << marker << "__" << handler << "}\""
-        cursor = finish
+        cursor = metadata.finish
       end
       io << template.byte_slice(cursor, template.bytesize - cursor)
     end
@@ -307,11 +313,7 @@ class EachRowCompiler
   end
 
   private def self.unescape_attribute(value : String) : String
-    value.gsub("&quot;", "\"")
-      .gsub("&#39;", "'")
-      .gsub("&lt;", "<")
-      .gsub("&gt;", ">")
-      .gsub("&amp;", "&")
+    HTML.unescape(value)
   end
 
   private def self.scope_names_for(scope : Array(EachRowScope)) : Array(String)
@@ -371,8 +373,8 @@ class EachRowCompiler
     body.try(&.css(context.tag).first?)
   end
 
-  private def self.context_for_marker(template : String, text : String, context : EachRowDomContext) : EachRowDomContext
-    body = Lexbor.new(wrap_in_context(template, context)).body
+  private def self.context_for_marker(template : String, text : String, context : EachRowDomContext, parser : TemplateExpressionParser) : EachRowDomContext
+    body = Lexbor.new(wrap_in_context(parser.html_safe(template), context)).body
     marker = body.try { |root| find_comment(root, text) }
     parent = marker.try(&.parent)
     return context unless parent
@@ -395,12 +397,13 @@ class EachRowCompiler
     template : String,
     children : Array(EachBlock),
     context : EachRowDomContext,
+    parser : TemplateExpressionParser,
   ) : Hash(Int32, EachRowDomContext)
     return {} of Int32 => EachRowDomContext if children.empty?
 
     result = {} of Int32 => EachRowDomContext
     children.each do |child|
-      result[child.id] = context_for_marker(template, "mochi-each-#{child.id}", context)
+      result[child.id] = context_for_marker(template, "mochi-each-#{child.id}", context, parser)
     end
     result
   end
@@ -418,8 +421,10 @@ class EachRowCompiler
     template : String,
     context : EachRowDomContext,
     span : TemplateSourceSpan?,
+    parser : TemplateExpressionParser = TemplateExpressionParser.new,
   ) : Nil
     return if context.namespace == "svg"
+    template = parser.html_safe(template)
 
     parent_tag = context.tag.downcase
     invalid_tag = root_tags(template).find do |tag|

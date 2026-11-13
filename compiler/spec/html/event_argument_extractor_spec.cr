@@ -1,19 +1,25 @@
 require "json"
+require "html"
 require "spec"
 require "../../src/html/event_argument_extractor"
 
 private def event_arguments(html : String, event : String) : Array(JSON::Any)
   match = html.match(/data-mochi-args-#{event}="(.*?)"/)
   match.should_not be_nil
-  raw = match.not_nil![1]
-    .gsub("&quot;", "\"")
-    .gsub("&lt;", "<")
-    .gsub("&gt;", ">")
-    .gsub("&amp;", "&")
+  raw = HTML.unescape(match.not_nil![1])
   JSON.parse(raw).as_a
 end
 
 describe EventArgumentExtractor do
+  it "leaves escapes and interpolation to Ruby evaluation" do
+    [%q("#{@field["label"]}"), %q("#@label"), %q("#$global"), %q('a\nb'), %q("a\"b"), %q("a" + "b")].each do |source|
+      argument = EventArgumentDescriptor.parse(source)
+      argument.kind.should eq("expr")
+      argument.value.should eq(source)
+    end
+    EventArgumentDescriptor.parse(%q('#{literal}')).value.should eq("#" + "{literal}")
+  end
+
   it "extracts a single expression argument" do
     html = %Q(<button onclick="{delete_item(item.id)}">Delete</button>)
     result = EventArgumentExtractor.process(html)

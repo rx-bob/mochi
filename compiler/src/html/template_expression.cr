@@ -127,9 +127,9 @@ end
 # Supported template expressions are instance variables, literals, indexed
 # hash/array access, and method calls with nested arguments. Conditions, each
 # enumerables, and event arguments use the same Ruby validation. Assignments,
-# control flow, blocks, method/class definitions, backticks, and Ruby string
-# interpolation are rejected at build time; interpolation belongs inside
-# helper methods, not in the template string.
+# control flow, blocks, method/class definitions and backticks are rejected.
+# Ruby string interpolation inside an explicit placeholder remains Ruby;
+# bare interpolation outside a placeholder is not template syntax.
 class TemplateExpressionParser
   # The only construct that opts a template value into raw markup. It is
   # recognized at compile time so ordinary values, including helper results,
@@ -294,6 +294,22 @@ class TemplateExpressionParser
     validate!(TemplateExpression.new(source, 0, source.bytesize, context, [] of String, span))
   end
 
+  # Quoted doubled braces also escape literal braces. A valid Ruby hash or
+  # explicit pair/splat syntax selects the hash form; malformed explicit
+  # pairs still go through validation rather than silently becoming text.
+  def hash_literal_intent?(source : String) : Bool
+    tree = @parser.parse(source)
+    root = tree.root_node
+    return false unless root.named_child_count == 1
+    node = root.named_child(0)
+    return false unless node.type == "hash"
+    return true unless node.has_error?
+    node.each_named_child do |child|
+      return true if child.type == "pair" || child.type == "hash_splat_argument"
+    end
+    false
+  end
+
   def split_arguments(text : String) : Array(String)
     self.class.split_arguments(text)
   end
@@ -373,6 +389,48 @@ class TemplateExpressionParser
 
   def self.matching_brace(text : String, open : Int32) : Int32?
     matching_delimiter(text, open, 123, 125)
+  end
+
+  # Escape only Ruby placeholders at the HTML parser boundary. Lexbor decodes
+  # these entities once, restoring exact Ruby before expression validation.
+  def html_safe(template : String) : String
+    String.build do |io|
+      cursor = 0
+      scan(template, "template", validate: false).each do |expression|
+        io << template.byte_slice(cursor, expression.template_start - cursor)
+        io << expression.full_text(template).gsub('&', "&amp;").gsub('"', "&quot;")
+          .gsub('\'', "&#39;").gsub('<', "&lt;").gsub('>', "&gt;")
+        cursor = expression.template_end
+      end
+      io << template.byte_slice(cursor)
+    end
+  end
+
+  def self.escape_literal_braces(text : String) : String
+    String.build do |io|
+      i = 0
+      while i < text.bytesize
+        pair = text.byte_slice(i, Math.min(2, text.bytesize - i))
+        if pair == "{{" || pair == "}}"
+          io << (pair == "{{" ? '\u{E000}' : '\u{E001}')
+          i += 2
+        elsif text.byte_at(i) == 123_u8 && (close = matching_brace(text, i))
+          io << text.byte_slice(i, close - i + 1)
+          i = close + 1
+        else
+          io.write_byte(text.byte_at(i))
+          i += 1
+        end
+      end
+    end
+  end
+
+  # Structural scanners use character positions; skip a whole Ruby token so
+  # strings containing {if ...} or {end} cannot become structural directives.
+  def self.after_placeholder(text : String, char_pos : Int32) : Int32
+    open = char_to_byte(text, char_pos)
+    close = matching_brace(text, open)
+    close ? byte_to_char(text, close) + 1 : char_pos + 1
   end
 
   # Crystal regex and String#index report character offsets while the
@@ -459,6 +517,10 @@ class TemplateExpressionParser
         escaped = false
       elsif byte == 92_u8
         escaped = true
+      elsif quote != 39_u8 && byte == 35_u8 && index + 1 < text.bytesize && text.byte_at(index + 1) == 123_u8
+        close = matching_brace(text, index + 1)
+        return text.bytesize unless close
+        index = close
       elsif byte == quote
         return index + 1
       end
@@ -480,31 +542,34 @@ class TemplateExpressionParser
     delimiter = text.byte_at(delimiter_index)
     closing = case delimiter
               when 123_u8 then 125_u8
-              when 91_u8 then 93_u8
-              when 40_u8 then 41_u8
-              when 60_u8 then 62_u8
-              else delimiter
+              when  91_u8 then 93_u8
+              when  40_u8 then 41_u8
+              when  60_u8 then 62_u8
+              else             delimiter
               end
 
-    if delimiter == closing
-      cursor = delimiter_index + 1
-      escaped = false
-      while cursor < text.bytesize
-        byte = text.byte_at(cursor)
-        if escaped
-          escaped = false
-        elsif byte == 92_u8
-          escaped = true
-        elsif byte == closing
-          return cursor + 1
-        end
-        cursor += 1
+    cursor = delimiter_index + 1
+    depth = 1
+    interpolate = "QWIrxX".to_slice.includes?(kind)
+    while cursor < text.bytesize
+      byte = text.byte_at(cursor)
+      if byte == 92_u8
+        cursor += 2
+        next
+      elsif interpolate && byte == 35_u8 && cursor + 1 < text.bytesize && text.byte_at(cursor + 1) == 123_u8
+        close = matching_brace(text, cursor + 1)
+        return text.bytesize unless close
+        cursor = close + 1
+        next
+      elsif byte == closing
+        depth -= 1
+        return cursor + 1 if depth == 0
+      elsif delimiter != closing && byte == delimiter
+        depth += 1
       end
-      return text.bytesize
+      cursor += 1
     end
-
-    close = matching_delimiter(text, delimiter_index, delimiter, closing)
-    close ? close + 1 : text.bytesize
+    text.bytesize
   end
 
   def find_unquoted(text : String, needle : Int32) : Int32?
