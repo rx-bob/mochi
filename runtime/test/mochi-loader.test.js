@@ -247,7 +247,13 @@ function encodePatches(records) {
   return bytes;
 }
 
-function fakeModule(log) {
+function fakeModule(log, capacityProfile) {
+  capacityProfile = capacityProfile || {
+    schema_version: 1,
+    fingerprint: TEST_CAPACITY_FINGERPRINT,
+    memory_bytes: 100663296,
+    capacities: TEST_HOST_CAPACITIES,
+  };
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const symbols = new Map();
@@ -301,13 +307,7 @@ function fakeModule(log) {
       return 16;
     },
     _mochi_capacity_profile() {
-      const profile = {
-        schema_version: 1,
-        fingerprint: TEST_CAPACITY_FINGERPRINT,
-        memory_bytes: 100663296,
-        capacities: TEST_HOST_CAPACITIES,
-      };
-      const bytes = encoder.encode(JSON.stringify(profile) + "\0");
+      const bytes = encoder.encode(JSON.stringify(capacityProfile) + "\0");
       module.HEAPU8.set(bytes, 128);
       return 128;
     },
@@ -403,7 +403,9 @@ function fakeModule(log) {
     },
     _mochi_dispatch_event_args(instance, methodSymbol, pointer, length) {
       const json = decoder.decode(module.HEAPU8.slice(pointer, pointer + length));
-      log.dispatchedArgs.push({ instance, methodSymbol, args: JSON.parse(json) });
+      const args = JSON.parse(json);
+      log.dispatchedArgs.push({ instance, methodSymbol, args });
+      if (log.onDispatch) log.onDispatch(log.symbolNames.get(methodSymbol), instance, args);
       return 1;
     },
     _goose_vm_method_req_argc(instance, methodSymbol) {
@@ -589,7 +591,7 @@ async function setup(components, options) {
 
   delete require.cache[require.resolve(LOADER_PATH)];
   const loader = require(LOADER_PATH);
-  const module = fakeModule(log);
+  const module = fakeModule(log, options.runtimeCapacityProfile);
   loader.moduleFactory = async () => module;
   if (options.hostModuleFactory) loader.hostModuleFactory = options.hostModuleFactory;
   else if (options.fetch) loader.hostModuleFactory = async (url) =>
@@ -1848,13 +1850,14 @@ test("unmount releases the owner's timer, route, storage, and global event subsc
 });
 
 test("unmounted hook failure still removes VM registrations", async () => {
-  const { log } = await setup([COMPONENT]);
+  const { module, log } = await setup([COMPONENT]);
   log.methods.add("unmounted");
   log.failDispatch.add("unmounted");
 
   const element = document.createElement("my-counter");
   document.body.appendChild(element);
   await element._mochiReady;
+  module.queueEmit('{"__host":"storage_set","key":"failed-unmount","value":"bad"}\n');
   element.remove();
   await flushLifecycle();
 
@@ -1863,6 +1866,8 @@ test("unmounted hook failure still removes VM registrations", async () => {
   assert.deepEqual(log.unmounts, ["1"]);
   assert.equal(log.components.size, 0);
   assert.equal(log.bindings.length, 0);
+  assert.equal(localStorage.getItem("failed-unmount"), null);
+  assert.equal(module._mochi_emit_outbox_len(), 0);
 });
 
 test("late fetch delivery cannot reach a component that reused the instance slot", async () => {
@@ -2844,6 +2849,249 @@ test("global event subscribers receive explicit null payload as null argument", 
     log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
     [{ instance: "1", methodSymbol: selectSymbol, args: [null] }]
   );
+});
+
+test("global event delivery is FIFO and uses each publication's subscriber snapshot", async () => {
+  const component = {
+    ...COMPONENT,
+    source: { file: "lib/events.rb", line: 2 },
+    methods: { initialize: 5, increment: 9, first: 13, second: 17, added: 21 },
+  };
+  const { module, log } = await setup([component]);
+  ["first", "second", "added"].forEach((method) => {
+    log.methods.add(method);
+    log.requiredArgs.set(method, 1);
+  });
+  const first = document.createElement("my-counter");
+  const second = document.createElement("my-counter");
+  document.body.append(first, second);
+  await Promise.all([first._mochiReady, second._mochiReady]);
+  const sub = (instance, event, callback) => ({
+    __host: "event_subscribe", instance, event, callback,
+  });
+  module.queueEmit([
+    sub(first._mochiInstance, "start", "first"),
+    sub(second._mochiInstance, "start", "second"),
+    sub(first._mochiInstance, "follow", "added"),
+    sub(second._mochiInstance, "follow", "added"),
+  ].map(JSON.stringify).join("\n") + "\n");
+  first._dispatchAction("increment");
+
+  let changedSnapshot = false;
+  log.onDispatch = (name) => {
+    if (name !== "first" || changedSnapshot) return;
+    changedSnapshot = true;
+    module.queueEmit([
+      {
+        __host: "event_unsubscribe", instance: second._mochiInstance,
+        event: "start", callback: "second",
+      },
+      sub(first._mochiInstance, "start", "added"),
+      { __host: "event_publish", event: "follow", payload: { id: 2 } },
+    ].map(JSON.stringify).join("\n") + "\n");
+  };
+
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "start", payload: { id: 1 },
+  }) + "\n");
+  first._dispatchAction("increment");
+  const names = log.dispatchedArgs.map((entry) => log.symbolNames.get(entry.methodSymbol));
+  assert.deepEqual(names, ["first", "added", "added"]);
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueEntries, 0);
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueBytes, 0);
+
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "start", payload: { id: 3 },
+  }) + "\n");
+  first._dispatchAction("increment");
+  assert.deepEqual(
+    log.dispatchedArgs.map((entry) => log.symbolNames.get(entry.methodSymbol)),
+    ["first", "added", "added", "first", "added"]
+  );
+  first.remove();
+  second.remove();
+  await flushLifecycle();
+});
+
+test("disposing a snapshotted subscriber skips its queued turn and releases its reference", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  log.methods.add("receive");
+  log.requiredArgs.set("receive", 1);
+  const first = document.createElement("my-counter");
+  const second = document.createElement("my-counter");
+  document.body.append(first, second);
+  await Promise.all([first._mochiReady, second._mochiReady]);
+  module.queueEmit([
+    { __host: "event_subscribe", event: "dispose", callback: "receive", instance: first._mochiInstance },
+    { __host: "event_subscribe", event: "dispose", callback: "receive", instance: second._mochiInstance },
+  ].map(JSON.stringify).join("\n") + "\n");
+  first._dispatchAction("increment");
+  log.onDispatch = (_name, instance) => {
+    if (instance === first._mochiInstance) second.remove();
+  };
+  module.queueEmit('{"__host":"event_publish","event":"dispose","payload":{}}\n');
+  first._dispatchAction("increment");
+  assert.deepEqual(log.dispatchedArgs.map((entry) => entry.instance), [String(first._mochiInstance)]);
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueEntries, 0);
+  await flushLifecycle();
+  assert.equal(global.MochiLoader.debugStats().globalEventSubscribers, 1);
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueBytes, 0);
+  first.remove();
+  await flushLifecycle();
+});
+
+test("self-published event loops and two-instance cycles stop at the profile bound and recover", async () => {
+  const profile = {
+    ...manifest([COMPONENT]).capacity_profile,
+    capacities: { ...TEST_HOST_CAPACITIES, host_event_queue_entries: 6 },
+  };
+  const selfComponent = {
+    ...COMPONENT,
+    source: { file: "lib/self_loop.rb", line: 2 },
+    methods: { initialize: 5, increment: 9, loop_once: 13, recover: 17 },
+  };
+  const { module, log } = await setup([selfComponent], {
+    manifest: { ...manifest([selfComponent]), capacity_profile: profile },
+    runtimeCapacityProfile: profile,
+  });
+  ["loop_once", "recover"].forEach((method) => {
+    log.methods.add(method);
+    log.requiredArgs.set(method, 1);
+  });
+  const errors = [];
+  document.addEventListener("mochi:error", (event) => errors.push(event.detail));
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  module.queueEmit([
+    { __host: "event_subscribe", event: "loop", callback: "loop_once", instance: element._mochiInstance },
+    { __host: "event_subscribe", event: "recovery", callback: "recover", instance: element._mochiInstance },
+  ].map(JSON.stringify).join("\n") + "\n");
+  element._dispatchAction("increment");
+  log.onDispatch = (name) => {
+    if (name === "loop_once") {
+      module.queueEmit(JSON.stringify({
+        __host: "event_publish", event: "loop", payload: { step: 1 },
+      }) + "\n");
+    }
+  };
+  module.queueEmit([
+    { __host: "event_publish", event: "loop", payload: { step: 0 } },
+    { __host: "event_publish", event: "recovery", payload: { ok: true } },
+  ].map(JSON.stringify).join("\n") + "\n");
+  element._dispatchAction("increment");
+  assert.equal(log.dispatchedArgs.filter((entry) =>
+    log.symbolNames.get(entry.methodSymbol) === "loop_once").length, 6);
+  assert.equal(log.dispatchedArgs.filter((entry) =>
+    log.symbolNames.get(entry.methodSymbol) === "recover").length, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].phase, "event");
+  assert.equal(errors[0].source, "lib/self_loop.rb:13");
+  assert.equal(errors[0].event, "loop");
+  assert.equal(errors[0].callback, "loop_once");
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueEntries, 0);
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueBytes, 0);
+
+  log.onDispatch = null;
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "recovery", payload: { ok: true },
+  }) + "\n");
+  element._dispatchAction("increment");
+  assert.equal(log.dispatchedArgs.filter((entry) =>
+    log.symbolNames.get(entry.methodSymbol) === "recover").length, 2);
+  assert.equal(errors.length, 1);
+  element.remove();
+  await flushLifecycle();
+
+  const cycleA = {
+    ...COMPONENT,
+    tag_name: "cycle-a",
+    class_name: "CycleA",
+    chi_file: "cycle-a.chi",
+    source: { file: "lib/cycle_a.rb", line: 2 },
+    methods: { initialize: 5, increment: 9, from_b: 13 },
+  };
+  const cycleB = {
+    ...COMPONENT,
+    tag_name: "cycle-b",
+    class_name: "CycleB",
+    chi_file: "cycle-b.chi",
+    source: { file: "lib/cycle_b.rb", line: 2 },
+    methods: { initialize: 5, increment: 9, from_a: 13 },
+  };
+  const cycleSetup = await setup([cycleA, cycleB], {
+    manifest: { ...manifest([cycleA, cycleB]), capacity_profile: profile },
+    runtimeCapacityProfile: profile,
+  });
+  ["from_a", "from_b"].forEach((method) => {
+    cycleSetup.log.methods.add(method);
+    cycleSetup.log.requiredArgs.set(method, 1);
+  });
+  const cycleErrors = [];
+  document.addEventListener("mochi:error", (event) => cycleErrors.push(event.detail));
+  const a = document.createElement("cycle-a");
+  const b = document.createElement("cycle-b");
+  document.body.append(a, b);
+  await Promise.all([a._mochiReady, b._mochiReady]);
+  cycleSetup.module.queueEmit([
+    { __host: "event_subscribe", event: "a", callback: "from_b", instance: String(a._mochiInstance) },
+    { __host: "event_subscribe", event: "b", callback: "from_a", instance: String(b._mochiInstance) },
+  ].map(JSON.stringify).join("\n") + "\n");
+  a._dispatchAction("increment");
+  cycleSetup.log.onDispatch = (name) => {
+    if (name === "from_b") cycleSetup.module.queueEmit('{"__host":"event_publish","event":"b","payload":{}}\n');
+    if (name === "from_a") cycleSetup.module.queueEmit('{"__host":"event_publish","event":"a","payload":{}}\n');
+  };
+  cycleSetup.module.queueEmit('{"__host":"event_publish","event":"a","payload":{}}\n');
+  a._dispatchAction("increment");
+  assert.equal(cycleSetup.log.dispatchedArgs.filter((entry) =>
+    ["from_a", "from_b"].includes(cycleSetup.log.symbolNames.get(entry.methodSymbol))).length, 6);
+  assert.equal(cycleErrors.length, 1);
+  assert.equal(cycleErrors[0].callback, "from_b");
+  assert.match(cycleErrors[0].source, /^lib\/cycle_[ab]\.rb:13$/);
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueEntries, 0);
+  a.remove();
+  b.remove();
+  await flushLifecycle();
+});
+
+test("global event payload byte capacity rejects atomically and reports Ruby source", async () => {
+  const component = {
+    ...COMPONENT,
+    source: { file: "lib/bytes.rb", line: 2 },
+    methods: { initialize: 5, increment: 9, receive: 13 },
+  };
+  const profile = {
+    ...manifest([component]).capacity_profile,
+    capacities: { ...TEST_HOST_CAPACITIES, host_event_queue_bytes: 96 },
+  };
+  const { module, log } = await setup([component], {
+    manifest: { ...manifest([component]), capacity_profile: profile },
+    runtimeCapacityProfile: profile,
+  });
+  log.methods.add("receive");
+  log.requiredArgs.set("receive", 1);
+  const errors = [];
+  document.addEventListener("mochi:error", (event) => errors.push(event.detail));
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  module.queueEmit(JSON.stringify({
+    __host: "event_subscribe", event: "large", callback: "receive", instance: element._mochiInstance,
+  }) + "\n");
+  element._dispatchAction("increment");
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "large", payload: { value: "x".repeat(64) },
+  }) + "\n");
+  element._dispatchAction("increment");
+  assert.equal(log.dispatchedArgs.filter((entry) =>
+    log.symbolNames.get(entry.methodSymbol) === "receive").length, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].source, "lib/bytes.rb:9");
+  assert.equal(errors[0].event, "large");
+  assert.equal(global.MochiLoader.debugStats().globalEventQueueEntries, 0);
+  element.remove();
+  await flushLifecycle();
 });
 
 test("drains JSON fetch requests after mount and delivers parsed responses", async () => {
@@ -5826,4 +6074,46 @@ test("a host result for a disposed component is dropped", async () => {
   resolvePing({ late: true });
   await flushLifecycle();
   assert.equal(log.deliveredHostResults.length, 0);
+});
+
+test("failed fetch callback drops commands before another entry", async () => {
+  const { module, log } = await setup([COMPONENT], {
+    fetch: async () => ({ status: 200, ok: true, headers: { get: () => "text/plain" }, text: async () => "ok" }),
+  });
+  log.failFetchDelivery = true;
+  log.errorText = "scratch objects exhausted (requested 1, used 128 of 128)";
+  log.onFetchDelivery = () => {
+    module.queueEmit('{"__host":"storage_set","key":"failed-fetch","value":"bad"}\n');
+    module.queueFetch('{"id":2,"instance":"1","url":"/must-not-run","callback":"on_logs"}\n');
+  };
+  module.queueFetch('{"id":1,"instance":"1","url":"/first","callback":"on_logs"}\n');
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await flushLifecycle();
+  assert.match(element.mochiError.message, /scratch objects exhausted/);
+  assert.equal(module._mochi_emit_outbox_len(), 0);
+  assert.equal(module._mochi_fetch_outbox_len(), 0);
+  element._dispatchAction({ action: "increment" });
+  assert.equal(localStorage.getItem("failed-fetch"), null);
+  assert.equal(log.deliveredFetches.length, 1);
+});
+
+test("failed capability callback drops its host batch", async () => {
+  const { module } = await setup([PROBE_COMPONENT], {
+    manifest: probeManifest(),
+    hostModuleFactory: async () => ({ name: "probe", version: 1, async: { ping: async () => ({ ok: true }) } }),
+  });
+  module._mochi_deliver_host_result = () => {
+    module.queueEmit('{"__host":"storage_set","key":"failed-capability","value":"bad"}\n');
+    return -1;
+  };
+  module.queueEmit(probeLine(1, []));
+  const element = document.createElement("probe-panel");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  await flushLifecycle();
+  assert.match(element.mochiError.message, /host capability callback failed/);
+  assert.equal(module._mochi_emit_outbox_len(), 0);
+  assert.equal(localStorage.getItem("failed-capability"), null);
 });

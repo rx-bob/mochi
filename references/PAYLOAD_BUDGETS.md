@@ -76,6 +76,14 @@ cleanup. The VM adds `storage_subscribe` and the `_mochi_remove_storage` export.
 The optional `MochiStore` Ruby battery is emitted only when an application
 mentions it, so neither payload fixture loads it.
 
+Explicit global Ruby events use the core loader and VM bridge because they
+share the existing `Mochi.emit` host path. The loader owns FIFO ordering,
+subscriber snapshots, queue limits, and disposal; no optional Ruby helper
+package is added to an unused application's load. This is unavoidable core
+cost for preventing accidental broadcast and unbounded callback recursion.
+The existing raw and gzip ceilings still apply to the core runtime and must
+include this loader/bridge code after the payload audit can rebuild the fixture.
+
 The fetch lifecycle work adds 3,616 raw bytes and 730 gzip bytes to the
 previous routing/storage baseline. This measured growth is in `mochi-loader.js`:
 request cancellation, latest-query-wins handling, mount-safe response delivery,

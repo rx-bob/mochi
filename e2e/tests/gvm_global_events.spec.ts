@@ -96,6 +96,97 @@ class UnregisteredListener
 end
 `);
 
+  fs.writeFileSync(path.join(lib, "EventLoop.rb"), `
+class EventLoop
+  @tag_name = "event-loop"
+  @calls
+  @recoveries
+
+  def initialize
+    @calls = 0
+    @recoveries = 0
+  end
+
+  def mounted
+    Mochi.subscribe("loop", :repeat_loop)
+    Mochi.subscribe("recovery", :recover)
+  end
+
+  def html
+    %Q{<button class="loop" onclick="{start_loop}">Loop</button><button class="recovery" onclick="{start_recovery}">Recover</button><p class="calls">{@calls}</p><p class="recoveries">{@recoveries}</p>}
+  end
+
+  def start_loop
+    Mochi.emit("loop", step: 0)
+  end
+
+  def repeat_loop(payload)
+    @calls = @calls + 1
+    Mochi.emit("loop", step: @calls)
+  end
+
+  def start_recovery
+    Mochi.emit("recovery", ok: true)
+  end
+
+  def recover(payload)
+    @recoveries = @recoveries + 1
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(lib, "CycleA.rb"), `
+class CycleA
+  @tag_name = "cycle-a"
+  @calls
+
+  def initialize
+    @calls = 0
+  end
+
+  def mounted
+    Mochi.subscribe("cycle_a", :receive_a)
+  end
+
+  def html
+    %Q{<button onclick="{begin_cycle}">Start cycle</button><p class="calls">{@calls}</p>}
+  end
+
+  def begin_cycle
+    Mochi.emit("cycle_a", step: 0)
+  end
+
+  def receive_a(payload)
+    @calls = @calls + 1
+    Mochi.emit("cycle_b", step: @calls)
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(lib, "CycleB.rb"), `
+class CycleB
+  @tag_name = "cycle-b"
+  @calls
+
+  def initialize
+    @calls = 0
+  end
+
+  def mounted
+    Mochi.subscribe("cycle_b", :receive_b)
+  end
+
+  def html
+    %Q{<p class="calls">{@calls}</p>}
+  end
+
+  def receive_b(payload)
+    @calls = @calls + 1
+    Mochi.emit("cycle_a", step: @calls)
+  end
+end
+`);
+
   fs.writeFileSync(path.join(projectDir, "index.html"), `
 <!doctype html>
 <html><head><meta charset="utf-8"><script src="mochi-loader.js"></script></head>
@@ -104,8 +195,17 @@ end
   <event-subscriber id="first"></event-subscriber>
   <event-subscriber id="second"></event-subscriber>
   <unregistered-listener id="unregistered"></unregistered-listener>
+  <event-loop id="loop"></event-loop>
 </body></html>
 `);
+}
+
+async function waitForInitialComponents(page: any): Promise<void> {
+  await page.evaluate(async () => {
+    const tags = "event-publisher,event-subscriber,unregistered-listener,event-loop";
+    const elements = Array.from(document.querySelectorAll(tags)) as any[];
+    await Promise.all(elements.map((element) => element._mochiReady));
+  });
 }
 
 function startBundleServer(): Promise<void> {
@@ -158,12 +258,29 @@ test("Ruby global events reach explicit live subscribers with exact payload valu
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${baseURL}/index.html`);
+  await waitForInitialComponents(page);
 
   const publisher = page.locator("#publisher");
   const first = page.locator("#first");
   const second = page.locator("#second");
   const unregistered = page.locator("#unregistered");
+  await page.evaluate(() => {
+    (window as any).__outboxes = [];
+    const element = document.querySelector("#publisher") as any;
+    const module = element._mochiModule;
+    const clear = module._mochi_emit_outbox_clear.bind(module);
+    module._mochi_emit_outbox_clear = () => {
+      const offset = module._mochi_emit_outbox_offset();
+      const length = module._mochi_emit_outbox_len();
+      (window as any).__outboxes.push(new TextDecoder().decode(module.HEAPU8.subarray(offset, offset + length)));
+      return clear();
+    };
+  });
   await publisher.locator("button").click();
+  console.log("DEBUG emit", await page.evaluate(() => ({
+    outboxes: (window as any).__outboxes,
+    stats: (window as any).MochiLoader.debugStats(),
+  })));
   await expect(publisher.locator(".publishes")).toHaveText("1");
   await expect(first.locator(".deliveries")).toHaveText("1");
   await expect(second.locator(".deliveries")).toHaveText("1");
@@ -184,4 +301,137 @@ test("Ruby global events reach explicit live subscribers with exact payload valu
   await expect(first.locator(".deliveries")).toHaveText("1");
   await expect(unregistered.locator(".calls")).toHaveText("0");
   expect(errors).toEqual([]);
+});
+
+test("Ruby event loops stop at profile capacity and later events recover", async ({ page }) => {
+  setupConsoleLogging(page);
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await page.goto(`${baseURL}/index.html`);
+  await waitForInitialComponents(page);
+
+  const capacities = await page.evaluate(async () => {
+    const manifest = await (await fetch("mochi-manifest.json")).json();
+    return {
+      entries: manifest.capacity_profile.capacities.host_event_queue_entries,
+      bytes: manifest.capacity_profile.capacities.host_event_queue_bytes,
+      helperPackages: Object.keys(manifest.packages).filter((name) => /global[-_]?events/i.test(name)),
+    };
+  });
+  expect(capacities.entries).toBeGreaterThan(0);
+  expect(capacities.bytes).toBeGreaterThan(0);
+  expect(capacities.helperPackages).toEqual([]);
+
+  const loop = page.locator("#loop");
+  await loop.locator("button.loop").click();
+  await expect(loop.locator(".calls")).toHaveText(String(capacities.entries));
+  const errors = await page.evaluate(() => (window as any).__mochiErrors);
+  expect(errors).toHaveLength(1);
+  expect(errors[0].phase).toBe("event");
+  expect(errors[0].event).toBe("loop");
+  expect(errors[0].callback).toBe("repeat_loop");
+  expect(errors[0].publisher).toBeTruthy();
+  expect(errors[0].subscriber).toBe(errors[0].publisher);
+  expect(errors[0].source).toMatch(/EventLoop\.rb:/);
+
+  await loop.locator("button.recovery").click();
+  await expect(loop.locator(".recoveries")).toHaveText("1");
+  expect(await page.evaluate(() => (window as any).__mochiErrors)).toHaveLength(1);
+});
+
+test("two Ruby components stop an A-to-B-to-A event cycle at the profile bound", async ({ page }) => {
+  setupConsoleLogging(page);
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await page.goto(`${baseURL}/index.html`);
+  await waitForInitialComponents(page);
+  const capacities = await page.evaluate(async () => {
+    const manifest = await (await fetch("mochi-manifest.json")).json();
+    return manifest.capacity_profile.capacities.host_event_queue_entries;
+  });
+  await page.evaluate(() => {
+    const a = document.createElement("cycle-a");
+    const b = document.createElement("cycle-b");
+    a.id = "cycle-a-instance";
+    b.id = "cycle-b-instance";
+    document.body.append(a, b);
+  });
+  const a = page.locator("#cycle-a-instance");
+  const b = page.locator("#cycle-b-instance");
+  await Promise.all([
+    a.evaluate((element: any) => element._mochiReady),
+    b.evaluate((element: any) => element._mochiReady),
+  ]);
+  await a.locator("button").click();
+
+  await expect(a.locator(".calls")).toHaveText(String(Math.ceil(capacities / 2)));
+  await expect(b.locator(".calls")).toHaveText(String(Math.floor(capacities / 2)));
+  const errors = await page.evaluate(() => (window as any).__mochiErrors);
+  expect(errors).toHaveLength(1);
+  expect(errors[0].phase).toBe("event");
+  expect(["cycle_a", "cycle_b"]).toContain(errors[0].event);
+  expect(["receive_a", "receive_b"]).toContain(errors[0].callback);
+  expect(errors[0].source).toMatch(/Cycle[AB]\.rb:\d+/);
+  const stats = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+  expect(stats.globalEventQueueEntries).toBe(0);
+  expect(stats.globalEventQueueBytes).toBe(0);
+
+  await page.evaluate(() => {
+    document.querySelector("#cycle-a-instance")?.remove();
+    document.querySelector("#cycle-b-instance")?.remove();
+  });
+  await expect.poll(async () => (await page.evaluate(() => (window as any).MochiLoader.debugStats())).globalEventSubscribers)
+    .toBe(2);
+});
+
+test("unmounted and remounted components release and renew event subscriptions", async ({ page }) => {
+  setupConsoleLogging(page);
+  await page.goto(`${baseURL}/index.html`);
+  await waitForInitialComponents(page);
+  const stats = () => page.evaluate(() => (window as any).MochiLoader.debugStats());
+  await expect.poll(async () => (await stats()).globalEventSubscribers).toBe(4);
+
+  await page.evaluate(() => document.querySelector("#second")?.remove());
+  await expect.poll(async () => (await stats()).globalEventSubscribers).toBe(3);
+  await page.evaluate(() => {
+    const replacement = document.createElement("event-subscriber");
+    replacement.id = "second-replacement";
+    document.body.appendChild(replacement);
+  });
+  await expect.poll(async () => (await stats()).globalEventSubscribers).toBe(4);
+
+  await page.locator("#publisher button").click();
+  await expect(page.locator("#first .deliveries")).toHaveText("1");
+  await expect(page.locator("#second-replacement .deliveries")).toHaveText("1");
+  await page.evaluate(() => {
+    document.querySelector("#first")?.remove();
+    document.querySelector("#second-replacement")?.remove();
+  });
+  await expect.poll(async () => (await stats()).globalEventSubscribers).toBe(2);
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    await page.evaluate((index) => {
+      const first = document.createElement("event-subscriber");
+      const second = document.createElement("event-subscriber");
+      first.id = `cycle-${index}-first`;
+      second.id = `cycle-${index}-second`;
+      document.body.append(first, second);
+    }, cycle);
+    await expect.poll(async () => (await stats()).globalEventSubscribers).toBe(4);
+    await page.evaluate((index) => {
+      document.querySelector(`#cycle-${index}-first`)?.remove();
+      document.querySelector(`#cycle-${index}-second`)?.remove();
+    }, cycle);
+    await expect.poll(async () => (await stats()).globalEventSubscribers).toBe(2);
+  }
+  const finalStats = await stats();
+  expect(finalStats.globalEventQueueEntries).toBe(0);
+  expect(finalStats.globalEventQueueBytes).toBe(0);
 });

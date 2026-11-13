@@ -15,6 +15,10 @@
       envelope_bytes: "host_fetch_envelope_bytes"
     }
   };
+  var GLOBAL_EVENT_QUEUE_CAPACITIES = [
+    "host_event_queue_entries",
+    "host_event_queue_bytes"
+  ];
 
   // Custom element reactions for a same-task DOM move run before queued
   // microtasks, so deferring disposal one microtask distinguishes a renderer
@@ -50,6 +54,12 @@
     routeSubscribers: new Set(),
     storageSubscribers: new Map(),
     globalEventSubscribers: new Map(),
+    globalEventQueue: [],
+    globalEventQueueBytes: 0,
+    globalEventQueueDraining: false,
+    activeGlobalEventDelivery: null,
+    activeActionContext: null,
+    reportingGlobalEventOverflow: false,
     nextMountToken: 0,
     actionRouterInstalled: false,
     actionSupportCache: new Map(),
@@ -493,6 +503,28 @@
     return String(instance) + "\u0000" + String(mountToken) + "\u0000" + callback;
   }
 
+  function purgeGlobalEventDeliveries(instance, mountToken) {
+    var owner = String(instance);
+    state.globalEventQueue = state.globalEventQueue.filter(function (delivery) {
+      var remove = delivery.record.instance === owner &&
+        (mountToken === undefined || delivery.record.mountToken === mountToken);
+      if (remove) state.globalEventQueueBytes -= delivery.bytes;
+      return !remove;
+    });
+    if (state.globalEventQueueBytes < 0) state.globalEventQueueBytes = 0;
+  }
+
+  function purgeGlobalEventSubscription(eventName, subscriptionKey) {
+    state.globalEventQueue = state.globalEventQueue.filter(function (delivery) {
+      var key = globalEventSubscriptionKey(
+        delivery.record.instance, delivery.record.mountToken, delivery.record.callback);
+      var remove = delivery.eventName === eventName && key === subscriptionKey;
+      if (remove) state.globalEventQueueBytes -= delivery.bytes;
+      return !remove;
+    });
+    if (state.globalEventQueueBytes < 0) state.globalEventQueueBytes = 0;
+  }
+
   function removeGlobalEventSubscriptions(instance, mountToken) {
     var owner = String(instance);
     state.globalEventSubscribers.forEach(function (subscribers, eventName) {
@@ -504,6 +536,7 @@
       });
       if (subscribers.size === 0) state.globalEventSubscribers.delete(eventName);
     });
+    purgeGlobalEventDeliveries(owner, mountToken);
   }
 
   function registerGlobalEventSubscriber(entry, module) {
@@ -528,6 +561,7 @@
       state.globalEventSubscribers.set(eventName, subscribers);
     }
     var key = globalEventSubscriptionKey(instance, element._mochiMountToken, callback);
+    if (subscribers.has(key)) return;
     subscribers.set(key, {
       instance: instance,
       mountToken: element._mochiMountToken,
@@ -547,19 +581,110 @@
         String(element._mochiInstance) !== instance) return;
     var subscribers = state.globalEventSubscribers.get(eventName);
     if (!subscribers) return;
-    subscribers.delete(globalEventSubscriptionKey(instance, element._mochiMountToken, callback));
+    var key = globalEventSubscriptionKey(instance, element._mochiMountToken, callback);
+    subscribers.delete(key);
+    purgeGlobalEventSubscription(eventName, key);
     if (subscribers.size === 0) state.globalEventSubscribers.delete(eventName);
   }
 
-  function publishGlobalEvent(entry) {
+  function globalEventQueueLimits() {
+    var capacities = state.manifest && state.manifest.capacity_profile &&
+      state.manifest.capacity_profile.capacities;
+    return {
+      entries: capacities ? capacities.host_event_queue_entries : 0,
+      bytes: capacities ? capacities.host_event_queue_bytes : 0,
+    };
+  }
+
+  function clearGlobalEventQueue() {
+    state.globalEventQueue.length = 0;
+    state.globalEventQueueBytes = 0;
+  }
+
+  function clearGlobalEventChain(chainId) {
+    if (chainId === undefined || chainId === null) {
+      clearGlobalEventQueue();
+      return;
+    }
+    state.globalEventQueue = state.globalEventQueue.filter(function (delivery) {
+      var remove = delivery.chainId === chainId;
+      if (remove) state.globalEventQueueBytes -= delivery.bytes;
+      return !remove;
+    });
+    if (state.globalEventQueueBytes < 0) state.globalEventQueueBytes = 0;
+  }
+
+  function globalEventErrorContext(delivery, eventName) {
+    var record = delivery && delivery.record;
+    var element = record ? state.elements.get(record.instance) : null;
+    var origin = delivery && delivery.origin;
+    if ((!element || element._mochiUnmounted) && origin && origin.element) {
+      element = origin.element;
+    }
+    var method = record && record.callback;
+    if (origin && origin.element && !origin.element._mochiUnmounted) {
+      element = origin.element;
+      method = origin.method || method;
+    }
+    return {
+      element: element,
+      method: method || "event",
+      details: {
+        event: eventName || delivery && delivery.eventName || "",
+        subscriber: record ? record.instance : "",
+        callback: record ? record.callback : "",
+        publisher: delivery && delivery.publisher || "",
+      },
+    };
+  }
+
+  function failGlobalEventQueue(module, eventName, delivery, reason, chainId) {
+    clearGlobalEventChain(chainId === undefined && delivery ? delivery.chainId : chainId);
+    if (state.reportingGlobalEventOverflow) return;
+    state.reportingGlobalEventOverflow = true;
+    try {
+      var context = globalEventErrorContext(delivery, eventName);
+      var error = new Error("mochi-loader: global event delivery " + reason +
+        " for '" + (eventName || "unknown") + "'");
+      error.mochiContext = context.details;
+      reportError(context.element, "event", context.method, error, module);
+    } finally {
+      state.reportingGlobalEventOverflow = false;
+    }
+  }
+
+  function enqueueGlobalEvent(entry, module) {
     var eventName = typeof entry.event === "string" ? entry.event : "";
     if (!eventName) return;
+    if (state.reportingGlobalEventOverflow) return;
     var subscribers = state.globalEventSubscribers.get(eventName);
     if (!subscribers) return;
+    var origin = state.activeGlobalEventDelivery || state.activeActionContext;
+    var chainId = state.activeGlobalEventDelivery
+      ? state.activeGlobalEventDelivery.chainId
+      : {};
     var hasPayload = Object.prototype.hasOwnProperty.call(entry, "payload");
-    Array.from(subscribers.entries()).forEach(function (pair) {
-      var key = pair[0];
-      var record = pair[1];
+    var payload = hasPayload ? entry.payload : null;
+    var encodedPayload;
+    try {
+      encodedPayload = JSON.stringify(payload);
+    } catch (_) {
+      failGlobalEventQueue(module, eventName, null, "payload serialization failed", chainId);
+      return;
+    }
+    if (encodedPayload === undefined) encodedPayload = "null";
+    var bytes = encode(eventName + encodedPayload).length + 64;
+    var limits = globalEventQueueLimits();
+    var publisher = entry.instance === undefined || entry.instance === null
+      ? ""
+      : String(entry.instance);
+    // Snapshot synchronously at publication time. Delivery is deferred until
+    // the whole VM outbox has been queued, preserving sibling publish order.
+    var deliveries = [];
+    var failedDelivery = null;
+    var capacityExceeded = false;
+    subscribers.forEach(function (record, key) {
+      if (capacityExceeded) return;
       if (subscribers.get(key) !== record) return;
       var element = state.elements.get(record.instance);
       if (!element || element._mochiDisconnected || element._mochiUnmounted ||
@@ -569,13 +694,96 @@
         subscribers.delete(key);
         return;
       }
-      element._dispatchAction({
-        action: record.callback,
-        payload: hasPayload ? entry.payload : null,
+      var delivery = {
+        eventName: eventName,
+        record: record,
+        payload: payload,
         hasPayload: hasPayload,
-      });
+        publisher: publisher,
+        origin: origin,
+        chainId: chainId,
+        bytes: bytes,
+      };
+      failedDelivery = delivery;
+      if (!Number.isSafeInteger(limits.entries) || limits.entries <= 0 ||
+          !Number.isSafeInteger(limits.bytes) || limits.bytes <= 0 ||
+          state.globalEventQueue.length + deliveries.length + 1 > limits.entries ||
+          state.globalEventQueueBytes + (deliveries.length + 1) * bytes > limits.bytes) {
+        capacityExceeded = true;
+        return;
+      }
+      deliveries.push(delivery);
     });
     if (subscribers.size === 0) state.globalEventSubscribers.delete(eventName);
+    if (capacityExceeded) {
+      failGlobalEventQueue(module, eventName, failedDelivery,
+        "queue capacity exhausted", chainId);
+      return;
+    }
+    if (deliveries.length === 0) return;
+    deliveries.forEach(function (delivery) {
+      state.globalEventQueue.push(delivery);
+      state.globalEventQueueBytes += delivery.bytes;
+    });
+  }
+
+  function queuedGlobalEventIsLive(delivery) {
+    var subscribers = state.globalEventSubscribers.get(delivery.eventName);
+    var key = globalEventSubscriptionKey(
+      delivery.record.instance, delivery.record.mountToken, delivery.record.callback);
+    if (!subscribers || subscribers.get(key) !== delivery.record) return false;
+    var element = state.elements.get(delivery.record.instance);
+    return Boolean(element && !element._mochiDisconnected && !element._mochiUnmounted &&
+      element._mochiMountState === "mounted" &&
+      element._mochiMountToken === delivery.record.mountToken &&
+      String(element._mochiInstance) === delivery.record.instance);
+  }
+
+  function drainGlobalEventQueue(module) {
+    if (state.globalEventQueueDraining || !state.globalEventQueue.length) return;
+    state.globalEventQueueDraining = true;
+    var limits = globalEventQueueLimits();
+    var deliveriesByChain = new Map();
+    try {
+      while (state.globalEventQueue.length > 0) {
+        var nextDelivery = state.globalEventQueue[0];
+        var chainDeliveries = deliveriesByChain.get(nextDelivery.chainId) || 0;
+        if (chainDeliveries >= limits.entries) {
+          failGlobalEventQueue(module, nextDelivery.eventName,
+            nextDelivery, "limit exhausted", nextDelivery.chainId);
+          continue;
+        }
+        var delivery = state.globalEventQueue.shift();
+        state.globalEventQueueBytes -= delivery.bytes;
+        if (state.globalEventQueueBytes < 0) state.globalEventQueueBytes = 0;
+        if (!queuedGlobalEventIsLive(delivery)) continue;
+        var element = state.elements.get(delivery.record.instance);
+        var previousDelivery = state.activeGlobalEventDelivery;
+        state.activeGlobalEventDelivery = {
+          element: element,
+          method: delivery.record.callback,
+          eventName: delivery.eventName,
+          chainId: delivery.chainId,
+          publisher: delivery.publisher,
+          subscriber: delivery.record.instance,
+          callback: delivery.record.callback,
+        };
+        deliveriesByChain.set(delivery.chainId, chainDeliveries + 1);
+        try {
+          element._dispatchAction({
+            action: delivery.record.callback,
+            payload: delivery.payload,
+            hasPayload: delivery.hasPayload,
+          });
+        } finally {
+          state.activeGlobalEventDelivery = previousDelivery;
+        }
+      }
+    } finally {
+      state.activeGlobalEventDelivery = null;
+      state.globalEventQueueDraining = false;
+      if (state.globalEventQueue.length === 0) state.globalEventQueueBytes = 0;
+    }
   }
 
   function handleStorageEvent(event) {
@@ -817,6 +1025,7 @@
         drainFetches(module);
       }
     } catch (error) {
+      discardHostOutboxes(module);
       reportError(element, "fetch", request && request.callback, error, module);
     }
   }
@@ -927,6 +1136,7 @@
         drainFetches(module);
       }
     } catch (error) {
+      discardHostOutboxes(module);
       reportError(element, "capability", request && request.callback, error, module);
     }
   }
@@ -1124,7 +1334,7 @@
       return;
     }
     if (hostKind === "event_publish") {
-      publishGlobalEvent(entry);
+      enqueueGlobalEvent(entry, module);
       return;
     }
     if (hostKind === "set_route" || hostKind === "replace_route") {
@@ -1511,6 +1721,10 @@
       return;
     }
     var length = module._mochi_emit_outbox_len();
+    if (length < 0) {
+      discardHostOutboxes(module);
+      throw new Error("mochi-loader: host command batch failed: " + lastError(module));
+    }
     if (length <= 0) return;
     var offset = module._mochi_emit_outbox_offset();
     var text = offset ? decode(module.HEAPU8.subarray(offset, offset + length)) : "";
@@ -1521,14 +1735,24 @@
       var entry = parseEmitLine(line);
       if (!entry) return;
       if (typeof entry.__host === "string") {
+        if (entry.__host === "event_publish") {
+          enqueueGlobalEvent(entry, module);
+          return;
+        }
+        // Finish preceding global publications before applying the next host
+        // command, so route/storage/focus commands keep their established
+        // position relative to Ruby publications.
+        drainGlobalEventQueue(module);
         handleHostCommand(module, entry);
         return;
       }
       if (typeof entry.__child_event === "string") {
+        drainGlobalEventQueue(module);
         deliverChildEvent(module, entry);
         return;
       }
     });
+    drainGlobalEventQueue(module);
   }
 
   function withUtf8(module, text, callback) {
@@ -4462,12 +4686,12 @@
             }
           }
         } catch (error) {
+          discardHostOutboxes(module);
           reportError(this, "unmount", "unmounted", error, module);
         }
 
-        // Host drains run even when the hook failed. Consuming the fetch outbox
-        // while the instance is still marked unmounted prevents a later mount
-        // from inheriting the old handle's requests.
+        // Failed hooks discard their batch above. Successful hooks may deliver
+        // cleanup commands while the owner is still marked unmounted.
         try {
           drainEmits(module);
         } catch (error) {
@@ -4616,10 +4840,12 @@
         if (!module || instance === null || instance === undefined) return;
         if (state.elements.get(String(instance)) !== this) return;
 
+        var previousActionContext = state.activeActionContext;
         try {
           if (!actionSupported(module, this, action)) return;
 
           var symbol = intern(module, action);
+          state.activeActionContext = { element: this, method: action };
           var hasPayload = false;
           if (detail && typeof detail === "object") {
             hasPayload = detail.hasPayload !== undefined
@@ -4641,7 +4867,9 @@
             drainEmits(module);
             drainFetches(module);
           }
+          state.activeActionContext = previousActionContext;
         } catch (error) {
+          state.activeActionContext = previousActionContext;
           discardHostOutboxes(module);
           reportError(this, "action", action, error, module);
         }
@@ -4680,6 +4908,12 @@
           throw new Error("mochi-loader: capacity profile is missing positive " + capacityName);
         }
       });
+    });
+    GLOBAL_EVENT_QUEUE_CAPACITIES.forEach(function (capacityName) {
+      var value = profile.capacities[capacityName];
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error("mochi-loader: capacity profile is missing positive " + capacityName);
+      }
     });
     manifest.components.forEach(function (entry, index) {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -4820,6 +5054,8 @@
       storageSubscriptionKeys: storageSubscriptionKeys,
       globalEventSubscribers: globalEventSubscriberCount,
       globalEventSubscriptionKeys: globalEventSubscriptionKeys,
+      globalEventQueueEntries: state.globalEventQueue.length,
+      globalEventQueueBytes: state.globalEventQueueBytes,
       unmountedInstances: state.unmountedInstances.size,
       stateObjects: module && typeof module._mochi_state_object_count === "function"
         ? Number(module._mochi_state_object_count()) : -1,

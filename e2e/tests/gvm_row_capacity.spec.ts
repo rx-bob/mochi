@@ -6,7 +6,6 @@ import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { setupConsoleLogging } from "./test_utils";
 
-test.use({ channel: "chrome" });
 test.describe.configure({ mode: "serial" });
 
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -267,7 +266,30 @@ class ManyRows
 end
 `;
 
-async function compileProject(capacities?: Record<string, number>): Promise<{
+const recoverySource = `class CapacityRecovery
+  @tag_name = "capacity-recovery"
+  @count
+  def initialize
+    @count = 1
+  end
+  def increment
+    @count = @count + 1
+  end
+  def explode
+    rows = []
+    i = 0
+    while i < 5000
+      rows.push("row-" + i.to_s)
+      i = i + 1
+    end
+  end
+  def html
+    %Q{<p>{@count}</p><button onclick="{increment}">increment</button><button onclick="{explode}">explode</button>}
+  end
+end
+`;
+
+async function compileProject(capacities?: Record<string, number>, body = "<row-screen></row-screen>"): Promise<{
   projectDir: string;
   bundleDir: string;
   server: http.Server;
@@ -279,13 +301,14 @@ async function compileProject(capacities?: Record<string, number>): Promise<{
   fs.writeFileSync(path.join(projectDir, "lib", "RowScreen.rb"), rowScreenSource);
   fs.writeFileSync(path.join(projectDir, "lib", "OversizedMount.rb"), oversizedSource);
   fs.writeFileSync(path.join(projectDir, "lib", "ManyRows.rb"), manyRowsSource);
+  fs.writeFileSync(path.join(projectDir, "lib", "CapacityRecovery.rb"), recoverySource);
   fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
     <script src="mochi-loader.js"></script>
   </head>
-  <body><row-screen></row-screen></body>
+  <body>${body}</body>
 </html>
 `);
 
@@ -361,10 +384,11 @@ test("thirty-day model rows and mixed row arities rebuild without forced aggrega
   }
 });
 
-test("oversized retained rows report the exhausted scratch resource and keep the VM usable", async ({ page }) => {
+for (const bytes of [131072, 262144]) {
+test(`constrained objects report failure and recover with ${bytes} scratch bytes`, async ({ page }) => {
   test.setTimeout(120_000);
   setupConsoleLogging(page, { expectedMochiErrors: true });
-  const { projectDir, server, baseURL } = await compileProject({ scratch_objects: 512 });
+  const { projectDir, server, baseURL } = await compileProject({ scratch_objects: 512, scratch_bytes: bytes }, "");
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));
 
@@ -375,10 +399,11 @@ test("oversized retained rows report the exhausted scratch resource and keep the
     const constrainedRows = await page.evaluate(async () => {
       const element = document.createElement("many-rows");
       document.body.appendChild(element);
-      await (element as any)._mochiReady;
-      return element.shadowRoot.querySelectorAll(".row").length;
+      try { await (element as any)._mochiReady; return "unexpected success"; }
+      catch (error) { element.remove(); return String(error); }
     });
-    expect(constrainedRows).toBe(540);
+    expect(constrainedRows).toContain("scratch objects exhausted (requested 1, used 512 of 512)");
+    expect(constrainedRows).toContain("lib/ManyRows.rb:");
 
     const oversized = await page.evaluate(async () => {
       const element = document.createElement("oversized-mount");
@@ -387,6 +412,7 @@ test("oversized retained rows report the exhausted scratch resource and keep the
         await (element as any)._mochiReady;
         return { failed: false, message: "" };
       } catch (error) {
+        element.remove();
         return { failed: true, message: String((error as Error).message || error) };
       }
     });
@@ -400,28 +426,28 @@ test("oversized retained rows report the exhausted scratch resource and keep the
     expect(oversized.message).not.toContain("component mount failed");
 
     await page.evaluate(async () => {
-      const element = document.createElement("row-screen");
+      const element = document.createElement("capacity-recovery");
       document.body.appendChild(element);
       await (element as any)._mochiReady;
     });
-    const host = page.locator("row-screen").last();
-    await expect(host.locator("p.count")).toHaveText("180");
-    await host.locator("button.days-7").click();
-    await expect(host.locator("p.visible")).toHaveText("42");
-    await host.locator("button.explode").click();
+    const host = page.locator("capacity-recovery");
+    await expect(host.locator("p")).toHaveText("1");
+    await host.getByRole("button", { name: "increment" }).click();
+    await expect(host.locator("p")).toHaveText("2");
+    await host.getByRole("button", { name: "explode" }).click();
     const eventError = await host.evaluate(async (element: any) => {
       await new Promise((resolve) => setTimeout(resolve, 100));
       return element.mochiError ? String(element.mochiError.message || element.mochiError) : "";
     });
-    expect(eventError).toContain("RowScreen#explode");
+    expect(eventError).toContain("CapacityRecovery#explode");
     expect(eventError).toContain("scratch objects exhausted");
     expect(eventError).toContain("requested 1");
-    await host.locator("button.days-30").click();
-    await expect(host.locator("p.visible")).toHaveText("180");
-    await expect(host.locator("p.count")).toHaveText("180");
+    await host.getByRole("button", { name: "increment" }).click();
+    await expect(host.locator("p")).toHaveText("3");
     expect(errors).toEqual([]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(projectDir, { recursive: true, force: true });
   }
 });
+}

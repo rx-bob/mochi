@@ -102,20 +102,21 @@ class CapacityArtifactBuilder
       source << "// Generated for capacity profile " << @config.fingerprint << ".\n"
       source << "namespace vm;\n\n"
       goose_names = {
-        "scratch_bytes"      => "SCRATCH_CAPACITY_BYTES",
-        "scratch_objects"    => "SCRATCH_CAPACITY_OBJECTS",
-        "scratch_ivars"      => "SCRATCH_CAPACITY_IVARS",
-        "scratch_slots"      => "SCRATCH_CAPACITY_SLOTS",
-        "state_classes"      => "MAX_STATE_CLASSES",
-        "state_objects"      => "MAX_STATE_OBJECTS",
-        "state_ivars"        => "MAX_STATE_IVARS",
-        "state_slots"        => "MAX_STATE_SLOTS",
-        "state_bytes"        => "MAX_STATE_BYTES",
-        "state_components"   => "MAX_STATE_COMPONENTS",
-        "promotion_depth"    => "MAX_PROMOTION_DEPTH",
-        "bindings"           => "MAX_BINDINGS",
-        "abi_call_args"      => "ABI_MAX_CALL_ARGS",
-        "abi_bytecode_bytes" => "ABI_MAX_BYTECODE",
+        "scratch_bytes"            => "SCRATCH_CAPACITY_BYTES",
+        "scratch_objects"          => "SCRATCH_CAPACITY_OBJECTS",
+        "scratch_ivars"            => "SCRATCH_CAPACITY_IVARS",
+        "scratch_slots"            => "SCRATCH_CAPACITY_SLOTS",
+        "state_classes"            => "MAX_STATE_CLASSES",
+        "state_objects"            => "MAX_STATE_OBJECTS",
+        "state_ivars"              => "MAX_STATE_IVARS",
+        "state_slots"              => "MAX_STATE_SLOTS",
+        "state_bytes"              => "MAX_STATE_BYTES",
+        "state_components"         => "MAX_STATE_COMPONENTS",
+        "promotion_depth"          => "MAX_PROMOTION_DEPTH",
+        "bindings"                 => "MAX_BINDINGS",
+        "abi_call_args"            => "ABI_MAX_CALL_ARGS",
+        "abi_bytecode_bytes"       => "ABI_MAX_BYTECODE",
+        "host_emit_envelope_bytes" => "HOST_OUTBOX_CAPACITY",
       }
       goose_names.each do |field, name|
         source << "let " << name << " = " << @config[field].to_s << ";\n"
@@ -123,11 +124,11 @@ class CapacityArtifactBuilder
     end
     File.write(File.join(work, "src", "gvm", "capacity_config.goose"), config_module)
     host_macros = {
-      "host_patch_bytes" => "MOCHI_PATCH_CAPACITY",
+      "host_patch_bytes"          => "MOCHI_PATCH_CAPACITY",
       "host_fetch_envelope_bytes" => "MOCHI_FETCH_CAPACITY",
-      "host_emit_envelope_bytes" => "MOCHI_EMIT_CAPACITY",
-      "host_event_args_bytes" => "MOCHI_EVENT_ARGS_CAPACITY",
-      "host_command_bytes" => "MOCHI_HOST_CAPACITY",
+      "host_emit_envelope_bytes"  => "MOCHI_EMIT_CAPACITY",
+      "host_event_args_bytes"     => "MOCHI_EVENT_ARGS_CAPACITY",
+      "host_command_bytes"        => "MOCHI_HOST_CAPACITY",
     }
     profile_header = String.build do |header|
       header << "#ifndef MOCHI_CAPACITY_PROFILE_H\n#define MOCHI_CAPACITY_PROFILE_H\n"
