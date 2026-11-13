@@ -33,16 +33,7 @@ class InspectorRoot
     last_page = @matched_count == 0 ? 0 : (@matched_count - 1) / 12
     @page = last_page if @page > last_page
     @page = 0 if @page < 0
-    # E1.S2 replaces this bounded scalar-index traversal with Array#slice.
-    # Keep the baseline independent of the slicing defect under investigation.
-    visible = []
-    index = @page * 12
-    limit = index + 12
-    while index < matches.length && index < limit
-      visible << matches[index]
-      index += 1
-    end
-    @visible_records = visible
+    @visible_records = matches.slice(@page * 12, 12)
   end
 
   def filter(event)

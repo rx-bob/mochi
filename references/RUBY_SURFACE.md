@@ -50,6 +50,52 @@ Rounding is implemented as small VM numeric operations. It does not load the
 number-formatting adapter or add a Ruby package dependency. The Float results
 are binary64 and should not be used as exact-money values.
 
+## Array indexing and slicing
+
+`array[index]` and `array.slice(index)` return one element, or `nil` outside
+the array. `array[start, length]`, `array.[](start, length)`, and
+`array.slice(start, length)` return a fresh shallow array. Negative indices
+count back from the end. Slicing never changes the receiver; nested objects
+retain their identity, so mutating a shared nested object affects both arrays.
+
+For `a = [1, 2, 3, 4]`, both two-argument forms follow this Ruby oracle:
+
+| Arguments | Result |
+| --- | --- |
+| `1, 2` | `[2, 3]` |
+| `-2, 9` | `[3, 4]` |
+| `-4, 2` | `[1, 2]` |
+| `-5, 2` | `nil` |
+| `0, -1` | `nil` |
+| `1, 0` | `[]` |
+| `4, 2` or `4, 0` | `[]` |
+| `5, 0` | `nil` |
+| `0, 9223372036854775807` | `[1, 2, 3, 4]` |
+| `-9223372036854775808, 2` | `nil` |
+
+An empty receiver returns `[]` at start zero and `nil` beyond it. Scalar
+access at the end returns `nil`, unlike a two-argument slice at the end.
+Both methods require one or two Integer arguments in the VM's signed 64-bit
+range. Unsupported argument types produce `type mismatch`; wrong arity
+produces `wrong number of arguments`, with the authored method/source location.
+Float or `to_int` coercion, Range arguments, and `slice!` are outside this
+contract.
+
+These calls work on scratch and persistent arrays in initialization, helpers,
+event handlers, and template getters. A successful slice uses one scratch
+object and one slot per returned element, including a fresh object for `[]`.
+The linked storage is traversed once to the start and then through the returned
+elements: time is O(start + returned count), allocation O(returned count).
+Resource bounds are checked before allocation. Exhaustion identifies scratch
+objects or slots and the requested/used/capacity counts; it does not return a
+truncated successful slice. A later valid VM entry can slice again.
+
+Slicing is an essential VM collection operation with no optional package or
+host adapter. E1.S2 adds 2,007 raw / 887 gzip bytes to the core WASM; see
+[payload budgets](PAYLOAD_BUDGETS.md). Array `to_s`/direct array text rendering
+remains a separate unsupported surface; use explicit element formatting such
+as `join` for the supported values in these fixtures.
+
 ## Array aggregation
 
 `Array#sum`, `Array#min`, and `Array#max` are loaded as optional Ruby bytecode

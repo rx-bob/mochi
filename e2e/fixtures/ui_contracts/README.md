@@ -4,6 +4,12 @@ This is one Mochi project: Ruby components in `lib/`, authored browser scenarios
 
 E1.S1 supplies the inspector: 48 structured records, 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. The editable graph and nested form are introduced by E3.S1 and E2.S1. Their current workflow targets run the relevant feedback evidence; they do not claim those future fixtures are implemented.
 
+E1.S2 pages with ordinary `Array#slice`. The inspector target also runs
+`probes/02-array-contexts/test/array_slice_test.rb`: native Ruby boundary
+oracles, initialization/helper/handler/template execution, invalid arguments,
+and bounded exhaustion followed by a successful smaller slice. Source and
+capacity diagnostics are checked by the framework suite on each engine.
+
 From the Mochi repository root:
 
 ```sh

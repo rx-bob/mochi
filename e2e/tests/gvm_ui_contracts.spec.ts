@@ -52,6 +52,56 @@ function probeTarget(name: string): string {
   return "@ui-inspector";
 }
 
+test("Ruby array slice contracts across contexts and failure recovery @ui-inspector", async ({ browserName }) => {
+  const output = runRubyProject(path.join(fixture, "probes/02-array-contexts"), browserName);
+  expect(output).toContain(`PASS [${browserName}] array slices match Ruby`);
+  expect(output).toContain(`PASS [${browserName}] invalid array arguments`);
+  expect(output).toContain(`PASS [${browserName}] slice exhaustion`);
+});
+
+test("array errors retain authored methods, source lines, and capacity details @ui-inspector", async ({ page }, testInfo) => {
+  const source = path.join(fixture, "probes/02-array-contexts");
+  const lines = fs.readFileSync(path.join(source, "lib/ProbeRoot.rb"), "utf8").split("\n");
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(source, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, source, bundle);
+    await page.goto(baseURL);
+    const root = page.locator("probe-root");
+    await expect(root.locator(".initial")).toHaveText("2,3");
+    await root.locator(".prepare-big").click();
+    await expect(root.locator(".big-count")).toHaveText("5000");
+    for (const [selector, method, message] of [
+      [".no-args", "no_args", "wrong number of arguments"],
+      [".extra-args", "extra_args", "wrong number of arguments"],
+      [".bad-start", "bad_start", "type mismatch"],
+      [".bad-length", "bad_length", "type mismatch"],
+      [".bad-scalar", "bad_scalar", "type mismatch"],
+      [".exhaust", "exhaust_slice", "scratch slots exhausted"],
+    ]) {
+      await root.locator(selector).click();
+      const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message).toContain(message);
+      expect(errors[0].method).toBe(method);
+      expect(errors[0].source).toBe(`lib/ProbeRoot.rb:${lines.indexOf(`  def ${method}`) + 1}`);
+      if (method === "exhaust_slice") {
+        expect(errors[0].message).toMatch(/requested 5000, used \d+ of 4096/);
+        await expect(root.locator(".last")).toHaveText("unchanged");
+      }
+      await settleConsole();
+      for (const diagnostic of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) {
+        expect(diagnostic).toContain(message);
+      }
+    }
+    await root.locator(".small").click();
+    await expect(root.locator(".last")).toHaveText("4998,4999");
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<probe-root></probe-root>");
+});
+
 // These are evidence assertions, not acceptance claims for the owning stories.
 // A repaired defect must replace its observed-failure assertion with the Ruby
 // oracle in UI_FIXTURE_CONTRACTS.md; never skip the reproducer.
@@ -64,7 +114,6 @@ const compileFailures: Record<string, { message: string; owner: string }> = {
   "12-missing-css": { message: 'CSS import "missing.css"', owner: "intentional missing-file error; E7.S2" },
 };
 const mountFailures: Record<string, { message: string; owner: string }> = {
-  "02-slice": { message: "ProbeRoot#slice: unknown method", owner: "E1.S2" },
   "03-constant": { message: "ProbeRoot#initialize: bad opcode", owner: "E1.S3" },
   "09-json": { message: "ProbeRoot#initialize: unknown class", owner: "E6.S1" },
   "09-time": { message: "ProbeRoot#initialize: unknown class", owner: "E6.S2" },
@@ -74,7 +123,8 @@ const mountFailures: Record<string, { message: string; owner: string }> = {
 const textProbes: Record<string, { selector: string; text: string; count?: number; owner: string }> = {
   "01-each-in-if": { selector: "div", text: "Alpha", owner: "E2.S1" },
   "01-nested-each": { selector: "section p", text: "Alpha", owner: "E2.S1" },
-  "02-brackets": { selector: "output", text: "2", owner: "E1.S2; Ruby oracle is [2, 3]" },
+  "02-brackets": { selector: ".items", text: "2:2,3", owner: "E1.S2" },
+  "02-slice": { selector: ".items", text: "2:2,3", owner: "E1.S2" },
   "03-singleton": { selector: "output", text: "1794571200000", owner: "E1.S3" },
   "04-structured-records": { selector: "output", text: "480", owner: "E4.S1–E4.S3" },
   "04-concatenation": { selector: "output", text: "24370", owner: "E4.S1–E4.S3" },

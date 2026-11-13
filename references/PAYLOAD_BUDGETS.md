@@ -57,15 +57,29 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 489,545 | 157,958 | 3 |
-| Minimal initial | 493,223 | 159,664 | 7 |
-| Feature initial | 494,035 | 159,849 | 7 |
+| Core runtime | 491,552 | 158,845 | 3 |
+| Minimal initial | 495,230 | 160,551 | 7 |
+| Feature initial | 496,042 | 160,736 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 508,271 | 164,450 | 11 |
-| Network initial | 498,358 | 161,162 | 8 |
-| Network total | 498,358 | 161,162 | 8 |
+| Feature total | 510,278 | 165,337 | 11 |
+| Network initial | 500,365 | 162,049 | 8 |
+| Network total | 500,365 | 162,049 | 8 |
+
+### Array indexing and slicing cost
+
+UI-contract story E1.S2 adds **2,007 raw / 887 gzip bytes** to WASM, from
+209,548 / 94,347 to 211,555 / 95,234. The shared checked dispatch handles
+single-index and two-argument calls consistently; bounded shallow copying
+reports precise capacity failures without publishing truncated results.
+Array indexing/slicing belongs to essential Ruby VM semantics and works in
+all component execution contexts, so this cost enters every app's core.
+No package, adapter, source-sized buffer, or capacity increase is added.
+The loader, JS glue, entry components, and later feature downloads are
+unchanged. The budgets increase by exactly the measured delta, with no
+additional headroom. The table above includes this change.
 
 ### Pointer, drag, and file capability cost
+
 
 E8.S1–E9.S4 add 26,108 raw / 6,005 gzip bytes to the core runtime compared
 with the previous enforced baseline. The measured change is 7,385 / 2,733
@@ -181,11 +195,11 @@ Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 209,548 | 94,347 |
+| `mochi-gvm.wasm` | 211,555 | 95,234 |
 | `mochi-gvm.js` | 63,170 | 17,609 |
 | `mochi-loader.js` | 216,827 | 46,002 |
 
-The current VM build is 3,966 raw / 1,532 gzip bytes above the previous
+The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block
 dispatch and string comparison needed by `Array#sum`, `min`, and `max`, along
 with the concurrent event-delivery work in the checkout, so that combined
@@ -203,10 +217,11 @@ Minimal initial (current measured artifacts):
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-The resulting complete core is 489,545 / 157,958 raw / gzip bytes. Minimal
+The pre-slicing complete core was 489,545 / 157,958 raw / gzip bytes. Minimal
 initial is 493,223 / 159,664; formatting feature initial is 494,035 / 159,849;
 formatting feature total is 508,271 / 164,450; and network initial/total is
-498,358 / 161,162. These current measurements are enforced by the JSON budget.
+498,358 / 161,162. The E1.S2 increase documented above is included in the
+current JSON budget.
 
 Feature initial adds only manifest metadata:
 

@@ -82,9 +82,9 @@ test("Ruby runner consumes a matching error then permits later valid interaction
 
 test("Ruby runner matches a rejected mount and consumes all diagnostic channels", async ({ browser, browserName }, testInfo) => {
   const scenario = recordCase(testInfo, [
-    'expect_error "ProbeRoot#slice: unknown method"', 'mount "probe-root"', 'unmount',
+    'expect_error "ProbeRoot#missing_mount_method: unknown method"', 'mount "probe-root"', 'unmount',
   ]);
-  await withCompiledProject(path.join(fixture, "probes/02-slice"), async baseURL => {
+  await withCompiledProject(path.join(fixture, "probes/runner-mount-error"), async baseURL => {
     expect(await runCase(browser, browserName, baseURL, scenario)).toBe(true);
   }, "");
 });
