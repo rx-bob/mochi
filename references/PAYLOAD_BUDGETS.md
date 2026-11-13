@@ -65,6 +65,34 @@ WASM from the current shared worktree:
 | Network initial | 505,915 | 163,531 | 8 |
 | Network total | 505,915 | 163,531 | 8 |
 
+### Graph history and pointer fixture cost
+
+UI-contract story E3.S3 adds **zero core runtime bytes** and changes no payload
+baseline. Graph history and editing are component Ruby code. The existing
+pointer adapter and its Ruby package load on demand when the graph mounts;
+inspector-only rendering requests neither the adapter nor graph code. Browser
+checks observe one pointer-adapter request across repeated graph mounts.
+Capture-owner resolution in the Ruby test driver is test-only and ships no
+browser application bytes. Runtime capacities remain unchanged.
+
+Using the existing payload accounting with gzip level 9 / mtime 1 on a staged
+shared UI project, the inspector entry is **509,550 raw / 164,547 gzip bytes**.
+Replacing only the graph source with its E3.S2 version from commit
+`b8f6123ebf55751b72138760864696186bc8a00b` under the same compiler gives **509,114 / 164,426 bytes**: the **436 raw / 121 gzip byte**
+initial increase is dependency/capability manifest metadata, not eagerly loaded
+graph code. The graph's later download is **28,970 raw / 7,747 gzip bytes**,
+up from **13,695 / 3,590** for E3.S2. Its current files are:
+
+| Graph-only file | Raw bytes | Gzip bytes |
+| --- | ---: | ---: |
+| Graph bytecode | 8,752 | 3,448 |
+| Graph descriptor | 14,444 | 2,516 |
+| Pointer Ruby package | 325 | 209 |
+| Existing pointer adapter | 5,449 | 1,574 |
+
+These are fixture measurements, not new framework ceilings. The unchanged
+minimal/feature/network budget fixtures continue to enforce the core boundary.
+
 ### Native event identity cost
 
 UI-contract story E3.S2 adds **203 raw / 49 gzip bytes** to the loader,

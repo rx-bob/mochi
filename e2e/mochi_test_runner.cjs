@@ -230,8 +230,34 @@ async function runCase(browser, browserName, baseUrl, testCase) {
         window.__mochiTestPointer = {
           id: event.pointerId,
           target: path.length > 0 ? path[0] : event.target,
+          path,
+          captureTarget: null,
         };
       }, true);
+      document.addEventListener("gotpointercapture", event => {
+        const pointer = window.__mochiTestPointer;
+        if (pointer && pointer.id === event.pointerId) {
+          pointer.captureTarget = event.composedPath()[0];
+        }
+      }, true);
+      // A handler may capture an ancestor or another named ref. Pending capture
+      // is observable before gotpointercapture; retain detached candidates too.
+      window.__mochiTestCaptureTarget = () => {
+        const pointer = window.__mochiTestPointer;
+        if (!pointer) return null;
+        const captured = node => node && typeof node.hasPointerCapture === "function" && node.hasPointerCapture(pointer.id);
+        for (const node of [pointer.captureTarget, pointer.target, ...pointer.path]) {
+          if (captured(node)) return node;
+        }
+        const roots = [document];
+        while (roots.length) {
+          for (const node of roots.pop().querySelectorAll("*")) {
+            if (captured(node)) return node;
+            if (node.shadowRoot) roots.push(node.shadowRoot);
+          }
+        }
+        return null;
+      };
       document.addEventListener("lostpointercapture", (event) => {
         window.__mochiTestLostCaptures.push(event.pointerId);
       }, true);
@@ -315,10 +341,11 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             if (!activePointer) throw new Error(`${origin}: pointer_cancel requires pointer_press`);
             await page.evaluate(({ id, x, y }) => {
               const pointer = window.__mochiTestPointer;
-              if (!pointer || pointer.id !== id || !pointer.target || !pointer.target.isConnected) {
+              const target = window.__mochiTestCaptureTarget() || (pointer && pointer.target);
+              if (!pointer || pointer.id !== id || !target || !target.isConnected) {
                 throw new Error("test pointer target is no longer connected");
               }
-              pointer.target.dispatchEvent(new PointerEvent("pointercancel", {
+              target.dispatchEvent(new PointerEvent("pointercancel", {
                 bubbles: true, composed: true, pointerId: id, pointerType: "mouse",
                 isPrimary: true, buttons: 0, clientX: x, clientY: y,
               }));
@@ -330,12 +357,11 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             if (!activePointer) throw new Error(`${origin}: pointer_lose_capture requires pointer_press`);
             await page.evaluate((id) => {
               const pointer = window.__mochiTestPointer;
-              if (!pointer || pointer.id !== id || !pointer.target ||
-                  typeof pointer.target.releasePointerCapture !== "function" ||
-                  !pointer.target.hasPointerCapture(id)) {
+              const target = window.__mochiTestCaptureTarget();
+              if (!pointer || pointer.id !== id || !target) {
                 throw new Error("test pointer has no live capture to release");
               }
-              pointer.target.releasePointerCapture(id);
+              target.releasePointerCapture(id);
             }, activePointer.id);
             await waitForPointerIdle(page);
             const pointerId = activePointer.id;
@@ -346,9 +372,7 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             if (!observed) throw new Error(`${origin}: browser did not deliver lostpointercapture`);
           } else {
             const captured = await page.evaluate(() => {
-              const pointer = window.__mochiTestPointer;
-              return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
-                pointer.target.hasPointerCapture(pointer.id));
+              return !!window.__mochiTestCaptureTarget();
             });
             if (captured) throw new Error(`${origin}: pointer capture remained active`);
           }
@@ -478,9 +502,7 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             if (activePointer) {
               await waitForPointerIdle(page);
               const captured = await page.evaluate(() => {
-                const pointer = window.__mochiTestPointer;
-                return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
-                  pointer.target.hasPointerCapture(pointer.id));
+                return !!window.__mochiTestCaptureTarget();
               });
               if (captured) throw new Error(`${origin}: unmount left pointer capture active`);
               await page.mouse.up();

@@ -35,6 +35,14 @@ recreation without raw markup. This does not add SVG custom-element
 composition, slots, or automatic deep mutation observation. Replace root
 state to publish nested model changes.
 
+The graph also demonstrates fixture-owned undo/redo using ordinary `map`,
+fresh hashes, and `slice`: only the current graph is copied into a new snapshot,
+and the two history arrays retain at most 40 snapshots combined. Existing
+snapshots are reused immutably; restoring one creates a fresh working model.
+Node deletion removes incident edges, and future IDs replay deterministically.
+Pointer cancellation restores the pre-gesture model without committing history.
+This is application Ruby code, not a framework state-store or history API.
+
 ## Native event identity
 
 Native handlers receive plain hashes. `event["dataset"]` retains target data;

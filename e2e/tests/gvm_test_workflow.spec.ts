@@ -177,3 +177,16 @@ for (const failure of ["compile", "assertion"] as const) {
     expect(fs.existsSync(path.join(project, "bundle"))).toBe(false);
   });
 }
+
+test("Ruby capture assertion observes the bound ancestor before gotpointercapture", async ({ browser, browserName }, testInfo) => {
+  const scenario = recordCase(testInfo, [
+    'mount "editable-graph-root"',
+    'pointer_press "[data-node=\'b\'] circle"',
+    'assert_pointer_capture_released',
+  ]);
+  const observed = await diagnosticBrowser(browser, "none");
+  await withCompiledProject(fixture, async baseURL => {
+    await expect(runCase(observed.driver, browserName, baseURL, scenario)).rejects.toThrow("pointer capture remained active");
+    expect(observed.closed()).toBe(true);
+  }, "");
+});

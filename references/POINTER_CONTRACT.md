@@ -80,3 +80,26 @@ end
 ```
 
 Button handles remain keyboard focusable: Arrow keys move the example, and Escape cancels its active gesture. Set `touch-action: none` on the gesture surface when the application owns touch panning for that interaction. Browser or tab focus loss can cancel a gesture or lose capture; handle the lifecycle event the browser reports. Pointer capture preserves delivery while the pointer remains in the browser viewport; browsers cannot report movement after input leaves the browser or operating-system window.
+
+## Keyed SVG graph example
+
+[EditableGraphRoot](../e2e/fixtures/ui_contracts/lib/EditableGraphRoot.rb) captures
+the bound keyed `<g>` with `MochiPointer.capture(event["pointer_id"])`. The
+original target may be a circle or text descendant; no dynamic ref is needed.
+A stable SVG ancestor handles move/up/cancel/lost-capture events. Coordinates
+use the starting node position plus client deltas in this fixed, unscaled
+viewport. Measurement and zoom need their own coordinate conversion.
+
+The example keeps one rollback snapshot during a gesture, publishes model
+replacements while moving, and commits one history entry on a changed release.
+It applies the final pointer-up coordinates before deciding whether to commit.
+Cancellation and lost capture restore the snapshot and preserve redo. Clearing
+the active pointer ID before release prevents a following lost-capture event
+from committing twice. Competing model edits or branch removal cancel first.
+
+The loader releases owned capture before invoking `unmounted`; that hook only
+clears Ruby gesture state and must not release the same capture again. The
+[graph Ruby scenarios](../e2e/fixtures/ui_contracts/test/editable_graph_test.rb)
+exercise capture outside the canvas, cancel, native capture loss, branch
+removal, and unmount. Runner loss/release assertions resolve actual capture
+ownership, including pending capture on an ancestor before `gotpointercapture`.

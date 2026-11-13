@@ -54,7 +54,6 @@ stable edge IDs. Pan exercises a compound transform. Closing/reopening and
 fresh component mounts verify current geometry, marker references, and branch
 lifetime. Ruby scenarios cover initially open/closed branches; framework checks
 observe geometry synchronously before insertion and count actual path writes.
-Pointer input and bounded history arrive in later graph stories.
 
 E3.S2 selects graph nodes and inspector table rows through
 `event["current_target_dataset"]`. Native node surfaces, nested labels, row
@@ -65,12 +64,34 @@ The Ruby `click` operation also activates SVG elements through a bubbling click
 event when the element has no native `.click()` method; framework tests separately
 exercise native browser hit testing. No application JavaScript is required.
 
+E3.S3 adds deterministic node add/remove, captured dragging, and undo/redo.
+History keeps at most **40 snapshots combined** across its two stacks; current
+state and a temporary active-drag rollback snapshot are separate. Snapshots
+copy the node/edge arrays and hashes, selection, ID counter, and edge ordering.
+A new committed edit clears redo. Removing a node removes its incident edges.
+Pan and open/closed viewport state remain outside model history.
+
+Drag starts on a keyed SVG group and captures that group even when the press
+hits its circle or text. Movement can continue outside the graph; release
+commits once. Cancel, capture loss, and closing the branch restore the starting
+model without changing history. No-op drags add no entry. Unmount releases
+capture and clears transient gesture state. The fixed viewport currently maps
+one CSS pixel to one graph unit; viewport measurement and zoom remain E5 work.
+The existing pointer capability loads only when the graph mounts.
+
+`editable_graph_test.rb` performs 45 edits, checks all 40 undo and redo steps,
+branches after undo, and exercises node/edge restoration, cancellation, loss,
+branch removal, and unmount. Browser tests compare complete rendered snapshots
+and inspect capture ownership, queue cleanup, and lazy adapter requests. The
+Ruby runner resolves the actual capture owner instead of assuming it is the
+original pointerdown descendant.
+
 From the Mochi repository root:
 
 ```sh
 task framework:ui            # all UI scenarios, evidence, and runner regressions
 task framework:ui:inspector  # inspector Ruby scenarios and related evidence
-task framework:ui:graph      # graph Ruby scenarios, insertion/identity checks, SVG/wheel evidence
+task framework:ui:graph      # graph geometry, identity, history, pointer lifecycle, SVG/wheel evidence
 task framework:ui:form       # nested form, lifecycle, contexts, and remaining form evidence
 ```
 

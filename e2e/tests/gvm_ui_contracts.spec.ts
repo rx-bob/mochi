@@ -723,3 +723,180 @@ test("graph and inspector select bound identities from surfaces and descendants 
     expect(pageErrors).toEqual([]);
   }, "<editable-graph-root></editable-graph-root><inspector-root></inspector-root>");
 });
+
+test("graph history restores complete rendered snapshots across the forty-entry boundary @ui-graph", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(fixture, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, fixture, bundle);
+    await page.goto(baseURL);
+    const root = page.locator("editable-graph-root");
+    await expect(root.locator(".node")).toHaveCount(4);
+    const readGraph = () => root.evaluate(host => {
+      const shadow = host.shadowRoot!;
+      return {
+        nodes: [...shadow.querySelectorAll(".node")].map(node => ({
+          id: node.getAttribute("data-node"), transform: node.getAttribute("transform"),
+          label: node.querySelector("text")!.textContent, radius: node.querySelector("circle")!.getAttribute("r"),
+          namespace: node.namespaceURI,
+        })),
+        edges: [...shadow.querySelectorAll(".edge")].map(node => ({
+          id: node.getAttribute("data-edge"), path: node.getAttribute("d"), marker: node.getAttribute("marker-end"),
+          namespace: node.namespaceURI,
+        })),
+        selected: shadow.querySelector(".selected-id")!.textContent,
+      };
+    });
+    const states = [await readGraph()];
+    for (let edit = 1; edit <= 45; edit++) {
+      await root.locator(".move").click();
+      states.push(await readGraph());
+      await expect(root.locator(".undo-count")).toHaveText(String(Math.min(edit, 40)));
+    }
+    for (let step = 1; step <= 40; step++) {
+      await root.locator(".undo").click();
+      expect(await readGraph()).toEqual(states[45 - step]);
+      await expect(root.locator(".redo-count")).toHaveText(String(step));
+      await expect(root.locator(".undo-count")).toHaveText(String(40 - step));
+    }
+    await root.locator(".undo").click();
+    expect(await readGraph()).toEqual(states[5]);
+    for (let step = 1; step <= 40; step++) {
+      await root.locator(".redo").click();
+      expect(await readGraph()).toEqual(states[5 + step]);
+      await expect(root.locator(".undo-count")).toHaveText(String(step));
+      await expect(root.locator(".redo-count")).toHaveText(String(40 - step));
+    }
+    await root.locator(".undo").click();
+    await root.locator(".add-node").click();
+    await expect(root.locator(".redo-count")).toHaveText("0");
+    const branched = await readGraph();
+    await root.locator(".redo").click();
+    expect(await readGraph()).toEqual(branched);
+    await root.locator(".undo").click();
+    expect(await readGraph()).toEqual(states[44]);
+    await root.locator(".redo").click();
+    expect(await readGraph()).toEqual(branched);
+    const mixed = [branched];
+    for (const action of [".reorder", ".remove", ".restore", ".remove-node", ".add-node"]) {
+      await root.locator(action).click();
+      mixed.push(await readGraph());
+    }
+    for (let index = mixed.length - 2; index >= 0; index--) {
+      await root.locator(".undo").click();
+      expect(await readGraph()).toEqual(mixed[index]);
+    }
+    for (let index = 1; index < mixed.length; index++) {
+      await root.locator(".redo").click();
+      expect(await readGraph()).toEqual(mixed[index]);
+    }
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, "<editable-graph-root></editable-graph-root>");
+});
+
+test("graph pointer ownership is lazy and releases on cancellation branch removal and disposal @ui-graph", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const requests: string[] = [];
+  page.on("request", request => requests.push(new URL(request.url()).pathname));
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await withCompiledProject(fixture, async (baseURL, bundle) => {
+    await attachArtifacts(testInfo, fixture, bundle);
+    await page.goto(baseURL);
+    await expect(page.locator("inspector-root .record")).toHaveCount(12);
+    expect(requests.filter(url => url.endsWith("/mochi-pointer.js"))).toEqual([]);
+    expect(requests.some(url => /\/components\/editable-graph-root\.(json|chi)$/.test(url))).toBe(false);
+    const pointerFiles: string[] = await page.evaluate(() => {
+      const manifest = (window as any).MochiLoader.manifest;
+      return manifest.capabilities.pointer.packages.map((id: string) => manifest.packages[id].file);
+    });
+    for (const file of pointerFiles) expect(requests.some(url => url.endsWith("/" + file))).toBe(false);
+    const baseline = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+    await page.evaluate(() => {
+      // The registrar itself is lazy when the inspector uses no capabilities.
+      let registrar: any;
+      Object.defineProperty(window, "MochiHostAdapter", {
+        configurable: true,
+        get: () => registrar,
+        set(value) {
+          const register = value.register;
+          value.register = function (adapter: any) {
+            if (adapter.name === "pointer") (window as any).__graphPointer = adapter;
+            return register.call(this, adapter);
+          };
+          registrar = value;
+        },
+      });
+      document.addEventListener("pointerdown", event => { (window as any).__graphPointerId = event.pointerId; }, true);
+    });
+    const count = () => page.evaluate(() => (window as any).__graphPointer.debugCaptureCount());
+    for (let mount = 0; mount < 3; mount++) {
+      await page.evaluate(async () => {
+        const host: any = document.createElement("editable-graph-root");
+        host.style.display = "block";
+        document.body.appendChild(host);
+        await host._mochiReady;
+      });
+      const root = page.locator("editable-graph-root");
+      for (const terminal of ["cancel", "lost_capture", "closed"]) {
+        const circle = root.locator('[data-node="b"] circle');
+        await circle.scrollIntoViewIfNeeded();
+        const point = await circle.evaluate(node => {
+          const rect = node.getBoundingClientRect();
+          return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+        });
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        await expect(root.locator(".drag-state")).toHaveText("dragging");
+        expect(await count()).toBe(1);
+        expect(await root.locator('[data-node="b"]').evaluate(node => node.hasPointerCapture((window as any).__graphPointerId))).toBe(true);
+        await page.mouse.move(point.x + 40, point.y + 20, { steps: 5 });
+        await expect(root.locator('[data-node="b"]')).toHaveAttribute("transform", "translate(220 70)");
+        if (terminal === "closed") {
+          await root.locator(".toggle").dispatchEvent("click");
+        } else {
+          await root.locator('[data-node="b"]').evaluate((node, terminal) => {
+            const pointerId = (window as any).__graphPointerId;
+            if (terminal === "cancel") node.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, composed: true, pointerId }));
+            else node.releasePointerCapture(pointerId);
+          }, terminal);
+          // Native loss of capture is delivered on the next pointer input.
+          if (terminal === "lost_capture") await page.mouse.move(point.x + 41, point.y + 20);
+        }
+        await expect(root.locator(".drag-state")).toHaveText("idle");
+        await expect(root.locator(".terminal")).toHaveText(terminal);
+        await expect(root.locator(".undo-count")).toHaveText("0");
+        await page.mouse.up();
+        expect(await count()).toBe(0);
+        if (terminal === "closed") await root.locator(".toggle").click();
+        await expect(root.locator('[data-node="b"]')).toHaveAttribute("transform", "translate(180 50)");
+      }
+      const circle = root.locator('[data-node="b"] circle');
+      await circle.scrollIntoViewIfNeeded();
+      const point = await circle.evaluate(node => {
+        const rect = node.getBoundingClientRect();
+        return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+      });
+      await page.mouse.move(point.x, point.y);
+      await page.mouse.down();
+      await expect(root.locator(".drag-state")).toHaveText("dragging");
+      expect(await count()).toBe(1);
+      await root.evaluate(host => host.remove());
+      await expect.poll(count).toBe(0);
+      await page.mouse.up();
+      const stats = await page.evaluate(() => (window as any).MochiLoader.debugStats());
+      expect(stats.pendingPointerMoves).toBe(0);
+      expect(stats.components).toBe(baseline.components);
+      expect(stats.bindings).toBe(baseline.bindings);
+    }
+    expect(requests.filter(url => url.endsWith("/mochi-pointer.js"))).toHaveLength(1);
+    for (const file of pointerFiles) expect(requests.filter(url => url.endsWith("/" + file))).toHaveLength(1);
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+    await settleConsole();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  }, '<inspector-root style="display:block"></inspector-root>');
+});

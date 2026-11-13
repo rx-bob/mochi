@@ -647,4 +647,88 @@ Loader SHA-256:
 WASM SHA-256 remains
 `c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
 Per-probe artifact identities remain attached to browser reports.
-Next story: E3.S3 — graph editing and bounded history across repeated changes.
+At E3.S2 completion, E3.S3 was next (delivered below).
+
+## E3.S3 — Graph editing, bounded history, and pointer lifetime
+
+`EditableGraphRoot` now adds/removes nodes, removes incident edges with a node,
+and replays edits through ordinary Ruby snapshot history. Each snapshot copies
+node/edge arrays and hashes plus selection, next-ID counter, and edge ordering.
+Current model state is separate. Undo and redo retain **at most 40 snapshots
+combined**; committing an edit trims the oldest history and clears redo. Undo
+and redo transfer one current snapshot between stacks and restore a fresh
+working model. Existing snapshots are never mutated or deep-copied as a whole
+history. Root array replacement drives rendering without an epoch variable.
+Pan and branch visibility are viewport state outside model history.
+
+A keyed SVG group captures pointer input even when its circle/text receives
+the press. The stable SVG ancestor handles movement and terminal events. The
+fixture uses start-position plus client-coordinate deltas in its fixed 400×220
+viewport; measurement/zoom remain E5. A gesture holds one temporary rollback
+snapshot. Pointer-up applies the final delta and commits once if geometry
+changed. Cancel/lost-capture restore the model without committing or clearing
+redo. Return-to-origin and stationary gestures add no history. Model/history
+actions and branch removal cancel first. The loader releases capture before
+`unmounted`; the hook only clears Ruby gesture state.
+
+The Ruby runner now observes actual capture ownership rather than assuming
+that pointerdown's original descendant owns capture. It records capture events,
+checks pending capture among retained path nodes, and can resolve a named-ref
+owner in open shadow roots. Loss/cancel/release/unmount assertions use that
+owner. A negative workflow test proves an active ancestor capture is detected
+before the first movement, preventing false passing release assertions.
+
+Ruby scenarios perform **45 edits**, check all **40 undo steps** back to edit 5,
+then all **40 redo steps** back to edit 45 with exact node coordinates/radii,
+labels, and connected paths. They cover new edits after undo, deterministic IDs,
+node/edge restoration, cancellation with a pending redo branch, completed new
+drags clearing redo, drag outside the canvas, repeated cancellation/loss, branch
+removal, and unmount. Browser checks compare complete rendered snapshots and
+mixed reorder/remove/restore/add history. A separate ownership audit repeats
+mount/cancel/loss/branch removal/disposal and verifies zero captures, queued
+pointer moves, or extra component/binding registrations after cleanup.
+
+The graph uses the existing optional pointer capability. Inspector-only
+rendering fetches neither graph descriptor/bytecode nor the pointer package or
+adapter. First graph mount loads them; repeated mounts request each pointer
+resource once. Production compiler, loader, VM, adapters, and capacities are
+unchanged. Test-driver changes are embedded tooling only. Detailed graph and
+initial-entry costs are recorded in [payload budgets](PAYLOAD_BUDGETS.md).
+
+Verification on 2026-11-13:
+
+- `task specs`: **552 examples passed**, no failures/errors/pending.
+- `task runtime:test`: **201 tests passed**, no skips.
+- Final `task framework:e2e`: **363 checks passed** across Chromium, Firefox,
+  WebKit: 303 main framework/UI checks (including 207 UI/workflow checks)
+  plus 60 asset/install/evolved-feature checks. An earlier browser audit put
+  its mixed-edit sequence before an older-state assertion; correcting that
+  test order preserved all exact state comparisons. An initial ownership
+  probe assumed an already installed adapter registrar; it now observes the
+  registrar's lazy creation without changing production behavior.
+- `task gvm:test`: **215 cases / 20,943 assertions passed**, including the
+  existing slicing regressions. No VM change was needed.
+- Payload gate (`ruby scripts/payload_check.rb`): passed with **zero core
+  growth**, unchanged capacities, and unchanged budget files. Core remains
+  **497,102 raw / 160,327 gzip bytes**. Staged shared-fixture comparison against
+  E3.S2 graph source shows **436 raw / 121 gzip bytes** of additional initial
+  manifest metadata; every other initial file is byte-identical. The graph's
+  four later files total **28,970 raw / 7,747 gzip bytes**, including the existing
+  pointer package/adapter. They are not fetched for inspector-only rendering.
+- `task compile-time:test` passed. `task compile-time:framework`: all
+  **15 builds passed**, **128.3–213.7 ms**, below the unchanged 1,000 ms limit.
+  This run followed other compiler uses and does not establish a repair for
+  the historical first-launch outlier.
+- Ruby/JavaScript syntax, documentation links, and whitespace checks passed.
+  Read-only context and implementation review found no remaining issues.
+  No commits were made; no production compiler/loader/VM/adapter or external
+  application source changed.
+
+Compiler SHA-256 (including the updated test runner):
+`e7898da4d8d95a0498929faa1c7972182378bbafd34a7739b51495b059ad01c0`.
+Loader SHA-256 remains
+`61cfe17dae6135d2caff66082fc90ede6f848a68d70b3029ec6269d7a103ac94`.
+WASM SHA-256 remains
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+Per-probe artifact identities remain attached to browser reports.
+Next story: E4.S1 — explicit computed values and root-state invalidation.
