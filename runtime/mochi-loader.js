@@ -49,6 +49,7 @@
     unmountedInstances: new Set(),
     routeSubscribers: new Set(),
     storageSubscribers: new Map(),
+    globalEventSubscribers: new Map(),
     nextMountToken: 0,
     actionRouterInstalled: false,
     actionSupportCache: new Map(),
@@ -488,6 +489,95 @@
     });
   }
 
+  function globalEventSubscriptionKey(instance, mountToken, callback) {
+    return String(instance) + "\u0000" + String(mountToken) + "\u0000" + callback;
+  }
+
+  function removeGlobalEventSubscriptions(instance, mountToken) {
+    var owner = String(instance);
+    state.globalEventSubscribers.forEach(function (subscribers, eventName) {
+      subscribers.forEach(function (record, key) {
+        if (record.instance === owner &&
+            (mountToken === undefined || record.mountToken === mountToken)) {
+          subscribers.delete(key);
+        }
+      });
+      if (subscribers.size === 0) state.globalEventSubscribers.delete(eventName);
+    });
+  }
+
+  function registerGlobalEventSubscriber(entry, module) {
+    var eventName = typeof entry.event === "string" ? entry.event : "";
+    var callback = typeof entry.callback === "string" ? entry.callback : "";
+    var instance = entry.instance === undefined || entry.instance === null
+      ? ""
+      : String(entry.instance);
+    if (!eventName || eventName.length > 128 || !callback || callback.length > 128 || !instance) return;
+    var element = state.elements.get(instance);
+    if (!element || element._mochiDisconnected || element._mochiUnmounted ||
+        element._mochiMountState !== "mounted" || String(element._mochiInstance) !== instance ||
+        state.unmountedInstances.has(instance)) return;
+    if (!hasMethod(module, element._mochiInstance, callback)) {
+      reportError(element, "event", callback,
+        new Error("mochi-loader: event subscriber method '" + callback + "' is not defined"), module);
+      return;
+    }
+    var subscribers = state.globalEventSubscribers.get(eventName);
+    if (!subscribers) {
+      subscribers = new Map();
+      state.globalEventSubscribers.set(eventName, subscribers);
+    }
+    var key = globalEventSubscriptionKey(instance, element._mochiMountToken, callback);
+    subscribers.set(key, {
+      instance: instance,
+      mountToken: element._mochiMountToken,
+      callback: callback,
+    });
+  }
+
+  function unregisterGlobalEventSubscriber(entry) {
+    var eventName = typeof entry.event === "string" ? entry.event : "";
+    var callback = typeof entry.callback === "string" ? entry.callback : "";
+    var instance = entry.instance === undefined || entry.instance === null
+      ? ""
+      : String(entry.instance);
+    if (!eventName || !callback || !instance) return;
+    var element = state.elements.get(instance);
+    if (!element || element._mochiDisconnected || element._mochiUnmounted ||
+        String(element._mochiInstance) !== instance) return;
+    var subscribers = state.globalEventSubscribers.get(eventName);
+    if (!subscribers) return;
+    subscribers.delete(globalEventSubscriptionKey(instance, element._mochiMountToken, callback));
+    if (subscribers.size === 0) state.globalEventSubscribers.delete(eventName);
+  }
+
+  function publishGlobalEvent(entry) {
+    var eventName = typeof entry.event === "string" ? entry.event : "";
+    if (!eventName) return;
+    var subscribers = state.globalEventSubscribers.get(eventName);
+    if (!subscribers) return;
+    var hasPayload = Object.prototype.hasOwnProperty.call(entry, "payload");
+    Array.from(subscribers.entries()).forEach(function (pair) {
+      var key = pair[0];
+      var record = pair[1];
+      if (subscribers.get(key) !== record) return;
+      var element = state.elements.get(record.instance);
+      if (!element || element._mochiDisconnected || element._mochiUnmounted ||
+          element._mochiMountState !== "mounted" ||
+          element._mochiMountToken !== record.mountToken ||
+          String(element._mochiInstance) !== record.instance) {
+        subscribers.delete(key);
+        return;
+      }
+      element._dispatchAction({
+        action: record.callback,
+        payload: hasPayload ? entry.payload : null,
+        hasPayload: hasPayload,
+      });
+    });
+    if (subscribers.size === 0) state.globalEventSubscribers.delete(eventName);
+  }
+
   function handleStorageEvent(event) {
     if (!event) return;
     var module = state.activeModule;
@@ -538,15 +628,6 @@
   function ensureActionRouter() {
     if (state.actionRouterInstalled || !global.document) return;
     state.actionRouterInstalled = true;
-
-    global.document.addEventListener("mochi:action", function (event) {
-      var detail = event && event.detail;
-      if (!detail || !detail.action) return;
-
-      state.elements.forEach(function (element) {
-        element._dispatchAction(detail);
-      });
-    });
 
     if (typeof global.addEventListener === "function") {
       global.addEventListener("popstate", function () {
@@ -1034,6 +1115,18 @@
         subscriber, callback);
       return;
     }
+    if (hostKind === "event_subscribe") {
+      registerGlobalEventSubscriber(entry, module);
+      return;
+    }
+    if (hostKind === "event_unsubscribe") {
+      unregisterGlobalEventSubscriber(entry);
+      return;
+    }
+    if (hostKind === "event_publish") {
+      publishGlobalEvent(entry);
+      return;
+    }
     if (hostKind === "set_route" || hostKind === "replace_route") {
       var path = typeof entry.path === "string" ? entry.path : "/";
       var replace = hostKind === "replace_route";
@@ -1435,16 +1528,6 @@
         deliverChildEvent(module, entry);
         return;
       }
-      if (!entry.action || !global.document) return;
-      global.document.dispatchEvent(new global.CustomEvent("mochi:action", {
-        detail: {
-          action: entry.action,
-          target: entry.target === undefined ? null : entry.target,
-          payload: entry.payload,
-          hasPayload: Object.prototype.hasOwnProperty.call(entry, "payload") &&
-            entry.payload !== null && entry.payload !== undefined
-        }
-      }));
     });
   }
 
@@ -4365,6 +4448,7 @@
         });
         if (state.elements.get(key) === this) state.elements.delete(key);
         state.routeSubscribers.delete(key);
+        removeGlobalEventSubscriptions(key, mountToken);
         state.storageSubscribers.forEach(function (subscribers, storageKey) {
           subscribers.delete(key);
           if (subscribers.size === 0) state.storageSubscribers.delete(storageKey);
@@ -4712,6 +4796,12 @@
       storageSubscriptionKeys += 1;
       storageSubscriberCount += subscribers.size;
     });
+    var globalEventSubscriberCount = 0;
+    var globalEventSubscriptionKeys = 0;
+    state.globalEventSubscribers.forEach(function (subscribers) {
+      globalEventSubscriptionKeys += 1;
+      globalEventSubscriberCount += subscribers.size;
+    });
     return {
       capacityProfile: module && typeof module._mochi_capacity_profile === "function" &&
         typeof module.UTF8ToString === "function"
@@ -4728,6 +4818,8 @@
       routeSubscribers: state.routeSubscribers.size,
       storageSubscribers: storageSubscriberCount,
       storageSubscriptionKeys: storageSubscriptionKeys,
+      globalEventSubscribers: globalEventSubscriberCount,
+      globalEventSubscriptionKeys: globalEventSubscriptionKeys,
       unmountedInstances: state.unmountedInstances.size,
       stateObjects: module && typeof module._mochi_state_object_count === "function"
         ? Number(module._mochi_state_object_count()) : -1,

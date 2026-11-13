@@ -1477,7 +1477,7 @@ test("capacity errors include the compiled profile and failed outboxes are disca
   document.body.appendChild(element);
   await element._mochiReady;
 
-  module.queueEmit('{"action":"should-not-run"}\n');
+  module.queueEmit('{"__host":"event_publish","event":"should-not-run"}\n');
   log.errorText = "MyCounter#increment: scratch objects exhausted (requested 1, used 2048 of 2048)";
   log.failDispatch.add("increment");
   element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
@@ -1493,7 +1493,7 @@ test("capacity errors include the compiled profile and failed outboxes are disca
 
 test("a capacity-rejected VM mount discards its pending host commands", async () => {
   const { module, log } = await setup([COMPONENT]);
-  module.queueEmit('{"action":"must-not-run"}\n');
+  module.queueEmit('{"__host":"event_publish","event":"must-not-run"}\n');
   log.errorText = "MyCounter#initialize: state objects exhausted (requested 1, used 32768 of 32768)";
   log.failMount = true;
   const element = document.createElement("my-counter");
@@ -1526,7 +1526,7 @@ test("disconnect dispatches unmounted and stops routing actions", async () => {
   assert.equal(log.dispatched.length, dispatchedBefore);
 });
 
-test("unmounted drains emitted actions after unregistering the removed component", async () => {
+test("unmount removes owned subscribers before draining queued global events", async () => {
   const { module, log } = await setup([COMPONENT]);
   log.methods.add("unmounted");
 
@@ -1536,14 +1536,23 @@ test("unmounted drains emitted actions after unregistering the removed component
   document.body.appendChild(second);
   await Promise.all([first._mochiReady, second._mochiReady]);
 
-  module.queueEmit("increment");
+  module.queueEmit([
+    { __host: "event_subscribe", event: "updated", callback: "increment", instance: first._mochiInstance },
+    { __host: "event_subscribe", event: "updated", callback: "increment", instance: second._mochiInstance },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  first._dispatchAction("reset");
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "updated", payload: { count: 1 },
+  }) + "\n");
   first.remove();
   await flushLifecycle();
 
   const incrementSymbol = log.symbols.get("increment");
   assert.ok(incrementSymbol);
-  const incrementDispatches = log.dispatched.filter((entry) => entry.methodSymbol === incrementSymbol);
-  assert.deepEqual(incrementDispatches, [{ instance: "2", methodSymbol: incrementSymbol }]);
+  assert.deepEqual(
+    log.dispatched.filter((entry) => entry.methodSymbol === incrementSymbol),
+    [{ instance: "2", methodSymbol: incrementSymbol }]
+  );
 });
 
 test("disconnect without an unmounted method does not dispatch or error", async () => {
@@ -1802,10 +1811,11 @@ test("disconnect disposes VM registrations once and clears binding caches", asyn
   );
 });
 
-test("unmount releases the owner's timer and route and storage subscriptions", async () => {
+test("unmount releases the owner's timer, route, storage, and global event subscriptions", async () => {
   const { loader, module, log } = await setup([COMPONENT]);
   log.methods.add("on_route");
   log.methods.add("on_theme");
+  log.methods.add("on_event");
   log.requiredArgs.set("on_route", 1);
   log.requiredArgs.set("on_theme", 1);
 
@@ -1817,6 +1827,7 @@ test("unmount releases the owner's timer and route and storage subscriptions", a
     { __host: "timer", id: 731, kind: "every", ms: 60000, instance, callback: "increment" },
     { __host: "route_subscribe", instance },
     { __host: "storage_subscribe", key: "owned-theme", instance, callback: "on_theme" },
+    { __host: "event_subscribe", event: "owned-event", instance, callback: "on_event" },
   ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   element._dispatchAction({ action: "increment" });
 
@@ -1824,6 +1835,7 @@ test("unmount releases the owner's timer and route and storage subscriptions", a
   assert.equal(loader.debugStats().routeSubscribers, 1);
   assert.equal(loader.debugStats().storageSubscribers, 1);
   assert.equal(loader.debugStats().storageSubscriptionKeys, 1);
+  assert.equal(loader.debugStats().globalEventSubscribers, 1);
 
   element.remove();
   await flushLifecycle();
@@ -1831,6 +1843,7 @@ test("unmount releases the owner's timer and route and storage subscriptions", a
   assert.equal(loader.debugStats().routeSubscribers, 0);
   assert.equal(loader.debugStats().storageSubscribers, 0);
   assert.equal(loader.debugStats().storageSubscriptionKeys, 0);
+  assert.equal(loader.debugStats().globalEventSubscribers, 0);
   assert.equal(loader.debugStats().unmountedInstances, 0);
 });
 
@@ -2555,83 +2568,64 @@ test("a reconnect during the class download keeps one pending mount", async () =
   assert.equal(log.dispatched.filter((entry) => entry.methodSymbol === log.symbols.get("mounted")).length, 1);
 });
 
-test("one document action listener serves every mounted component and caches method support", async () => {
-  const { dom, log } = await setup([COMPONENT]);
-  let actionListeners = 0;
-  const document = dom.window.document;
-  const addEventListener = document.addEventListener.bind(document);
-  document.addEventListener = function (type, listener, options) {
-    if (type === "mochi:action") actionListeners += 1;
-    return addEventListener(type, listener, options);
-  };
-
-  const elements = [];
-  for (let index = 0; index < 17; index += 1) {
-    const element = document.createElement("my-counter");
-    document.body.appendChild(element);
-    elements.push(element);
-  }
-  await Promise.all(elements.map((element) => element._mochiReady));
-
-  assert.equal(actionListeners, 1);
-
-  const dispatchedBefore = log.dispatched.length;
-  document.dispatchEvent(new global.CustomEvent("mochi:action", { detail: { action: "increment" } }));
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const incrementSymbol = log.symbols.get("increment");
-  assert.ok(incrementSymbol);
-  assert.equal(
-    log.dispatched.slice(dispatchedBefore).filter((entry) => entry.methodSymbol === incrementSymbol).length,
-    17
-  );
-  assert.equal(log.hasMethodCalls.filter((name) => name === "increment").length, 1);
-
-  document.dispatchEvent(new global.CustomEvent("mochi:action", { detail: { action: "increment" } }));
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(
-    log.dispatched.slice(dispatchedBefore).filter((entry) => entry.methodSymbol === incrementSymbol).length,
-    34
-  );
-  assert.equal(log.hasMethodCalls.filter((name) => name === "increment").length, 1);
-  assert.equal(actionListeners, 1);
-});
-
-test("action payloads reach one-argument handlers and target tags filter sibling components", async () => {
+test("global events reach only registered instances and unsubscribe removes one receiver", async () => {
   const { module, log } = await setup([COMPONENT, LOGS_COMPONENT]);
-  log.methods.add("select_trace");
-  log.requiredArgs.set("select_trace", 1);
+  log.methods.add("open_profile");
+  log.requiredArgs.set("open_profile", 1);
 
   const counter = document.createElement("my-counter");
-  const firstLogs = document.createElement("my-logs");
-  const secondLogs = document.createElement("my-logs");
+  const first = document.createElement("my-logs");
+  const second = document.createElement("my-logs");
+  const unregistered = document.createElement("my-counter");
   document.body.appendChild(counter);
-  document.body.appendChild(firstLogs);
-  document.body.appendChild(secondLogs);
-  await Promise.all([counter._mochiReady, firstLogs._mochiReady, secondLogs._mochiReady]);
+  document.body.append(first, second, unregistered);
+  await Promise.all([counter._mochiReady, first._mochiReady, second._mochiReady, unregistered._mochiReady]);
 
+  const subscribe = (instance) => JSON.stringify({
+    __host: "event_subscribe",
+    event: "open_profile",
+    callback: "open_profile",
+    instance,
+  });
+  module.queueEmit([subscribe(first._mochiInstance), subscribe(first._mochiInstance),
+    subscribe(second._mochiInstance)].join("\n") + "\n");
+  counter._dispatchAction("increment");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const loader = global.MochiLoader;
+  assert.equal(loader.debugStats().globalEventSubscribers, 2);
   module.queueEmit(JSON.stringify({
-    action: "select_trace",
-    target: "my-logs",
-    payload: { id: "tr_9f2a" }
+    __host: "event_publish",
+    event: "open_profile",
+    payload: { id: "tr_9f2a", active: false, empty: null },
   }) + "\n");
   counter._dispatchAction("increment");
   await new Promise((resolve) => setImmediate(resolve));
 
-  const selectSymbol = log.symbols.get("select_trace");
-  assert.ok(selectSymbol);
-  assert.deepEqual(
-    log.dispatchedArgs.filter((entry) => entry.methodSymbol === selectSymbol),
-    [
-      { instance: "2", methodSymbol: selectSymbol, args: [{ id: "tr_9f2a" }] },
-      { instance: "3", methodSymbol: selectSymbol, args: [{ id: "tr_9f2a" }] }
-    ]
-  );
-  assert.equal(
-    log.dispatched.filter((entry) => entry.methodSymbol === selectSymbol).length,
-    0
-  );
+  const callbackSymbol = log.symbols.get("open_profile");
+  assert.deepEqual(log.dispatchedArgs.filter((entry) => entry.methodSymbol === callbackSymbol), [
+    { instance: String(first._mochiInstance), methodSymbol: callbackSymbol, args: [{ id: "tr_9f2a", active: false, empty: null }] },
+    { instance: String(second._mochiInstance), methodSymbol: callbackSymbol, args: [{ id: "tr_9f2a", active: false, empty: null }] },
+  ]);
+
+  module.queueEmit(JSON.stringify({
+    __host: "event_unsubscribe",
+    event: "open_profile",
+    callback: "open_profile",
+    instance: first._mochiInstance,
+  }) + "\n");
+  counter._dispatchAction("increment");
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "open_profile", payload: { id: "next" },
+  }) + "\n");
+  counter._dispatchAction("increment");
+
+  assert.equal(log.dispatchedArgs.filter((entry) => entry.methodSymbol === callbackSymbol).length, 3);
+  assert.equal(loader.debugStats().globalEventSubscribers, 1);
+  unregistered.remove();
+  second.remove();
+  await flushLifecycle();
+  assert.equal(loader.debugStats().globalEventSubscribers, 0);
 });
 
 test("child events route to their exact parent instance with typed payloads", async () => {
@@ -2804,7 +2798,7 @@ test("a stale child event cannot reach a replacement instance", async () => {
   );
 });
 
-test("unfiltered JSON emits reach every listener and zero-argument handlers ignore payloads", async () => {
+test("published events do not reach matching methods without subscriptions", async () => {
   const { module, log } = await setup([COMPONENT, LOGS_COMPONENT]);
   log.methods.add("show_home");
 
@@ -2813,31 +2807,21 @@ test("unfiltered JSON emits reach every listener and zero-argument handlers igno
   document.body.appendChild(counter);
   document.body.appendChild(logs);
   await Promise.all([counter._mochiReady, logs._mochiReady]);
+  const dispatchedBefore = log.dispatched.length;
 
   module.queueEmit(JSON.stringify({
-    action: "show_home",
-    target: null,
+    __host: "event_publish",
+    event: "show_home",
     payload: { ignored: true }
   }) + "\n");
   counter._dispatchAction("increment");
   await new Promise((resolve) => setImmediate(resolve));
 
-  const homeSymbol = log.symbols.get("show_home");
-  assert.ok(homeSymbol);
-  assert.deepEqual(
-    log.dispatched.filter((entry) => entry.methodSymbol === homeSymbol),
-    [
-      { instance: "1", methodSymbol: homeSymbol },
-      { instance: "2", methodSymbol: homeSymbol }
-    ]
-  );
-  assert.equal(
-    log.dispatchedArgs.filter((entry) => entry.methodSymbol === homeSymbol).length,
-    0
-  );
+  assert.equal(log.dispatched.length, dispatchedBefore + 1);
+  assert.equal(log.hasMethodCalls.includes("show_home"), false);
 });
 
-test("plain action lines and null payloads remain backwards compatible", async () => {
+test("global event subscribers receive explicit null payload as null argument", async () => {
   const { module, log } = await setup([COMPONENT]);
   log.methods.add("select_trace");
   log.requiredArgs.set("select_trace", 1);
@@ -2846,17 +2830,14 @@ test("plain action lines and null payloads remain backwards compatible", async (
   document.body.appendChild(element);
   await element._mochiReady;
 
-  module.queueEmit("reset\n");
+  module.queueEmit(JSON.stringify({
+    __host: "event_subscribe", event: "select_trace", callback: "select_trace", instance: "1",
+  }) + "\n");
   element._dispatchAction("increment");
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const resetSymbol = log.symbols.get("reset");
-  assert.ok(resetSymbol);
-  assert.deepEqual(log.dispatched.at(-1), { instance: "1", methodSymbol: resetSymbol });
-
-  module.queueEmit(JSON.stringify({ action: "select_trace", target: null, payload: null }) + "\n");
+  module.queueEmit(JSON.stringify({
+    __host: "event_publish", event: "select_trace", payload: null,
+  }) + "\n");
   element._dispatchAction("increment");
-  await new Promise((resolve) => setImmediate(resolve));
 
   const selectSymbol = log.symbols.get("select_trace");
   assert.deepEqual(

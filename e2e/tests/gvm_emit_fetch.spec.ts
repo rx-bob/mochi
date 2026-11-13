@@ -66,6 +66,12 @@ class EmitListener
     }
   end
 
+  def mounted
+    Mochi.subscribe("ping", :ping)
+    Mochi.subscribe("select", :select)
+    Mochi.subscribe("targeted", :targeted)
+  end
+
   def ping
     @hits = @hits + 1
   end
@@ -295,7 +301,7 @@ test.afterAll(async () => {
   if (projectDir) fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
-test("Mochi.emit delivers plain and Hash payloads and filters target tags", async ({ page }) => {
+test("Mochi.emit reaches explicitly subscribed components only", async ({ page }) => {
   setupConsoleLogging(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

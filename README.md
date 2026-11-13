@@ -732,10 +732,29 @@ replacement. Payload contract failures are reported as `mochi:error` with
 `phase: "event"`, `event`, `payloadKey`, and the `event` declaration's source
 location; the parent handler does not run.
 
-`Mochi.emit(action, payload)` remains the explicit application-wide broadcast.
-It sends a `mochi:action` to every mounted component implementing `action`;
-pass `target:` to limit it to components with that tag. Use it for genuinely
-app-wide notifications, not for ordinary parent/child communication.
+Global Ruby events require explicit subscriptions. A component registers an
+event name and receiver method, then publishes the event with a Hash payload:
+
+```ruby
+def mounted
+  Mochi.subscribe("profile_opened", :receive_profile)
+end
+
+def open_profile
+  Mochi.emit("profile_opened", id: "tr_1", active: false)
+end
+
+def stop_listening
+  Mochi.unsubscribe("profile_opened", :receive_profile)
+end
+```
+
+Duplicate registration for the same component, event, and receiver is
+idempotent. The loader also removes subscriptions when their component is
+disposed. A method receives nothing just because its name matches a published
+event; it runs only when registered. `Mochi.emit` no longer broadcasts
+`mochi:action` DOM events or supports `target:` filtering. See
+[API migrations](references/API_MIGRATIONS.md#global-events) for migration.
 
 ### Component lifecycle
 
