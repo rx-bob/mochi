@@ -111,11 +111,29 @@
     });
   }
 
+  function reconcileOwner(owner, mountToken, root) {
+    Array.from(captures.entries()).forEach(function (entry) {
+      var pointerId = entry[0];
+      var record = entry[1];
+      if (record.owner !== owner || record.mountToken !== mountToken) return;
+      if (record.target.isConnected && root && root.contains(record.target)) return;
+      try {
+        if (record.captured && record.target.hasPointerCapture(pointerId)) {
+          record.target.releasePointerCapture(pointerId);
+        }
+      } catch (_) {
+        // Removed targets may already have lost browser capture.
+      }
+      forget(pointerId, record);
+    });
+  }
+
   var host = {
     name: "pointer",
     version: 1,
     sync: { capture: capture, release: release },
     disposeOwner: disposeOwner,
+    reconcileOwner: reconcileOwner,
     debugCaptureCount: function () { return captures.size; },
   };
   if (global.MochiHostAdapter && typeof global.MochiHostAdapter.register === "function") {

@@ -514,6 +514,7 @@ async function setup(components, options) {
   global.addEventListener = dom.window.addEventListener.bind(dom.window);
   global.removeEventListener = dom.window.removeEventListener.bind(dom.window);
   global.HTMLElement = dom.window.HTMLElement;
+  global.MutationObserver = dom.window.MutationObserver;
   global.customElements = dom.window.customElements;
   global.Event = dom.window.Event;
   global.MouseEvent = dom.window.MouseEvent;
@@ -1369,6 +1370,7 @@ test("pointer capture commands run with an owned target during the matching even
   };
   const calls = [];
   const disposed = [];
+  const reconciled = [];
   let requests = 0;
   const adapter = {
     name: "pointer",
@@ -1378,6 +1380,7 @@ test("pointer capture commands run with an owned target during the matching even
       release(...args) { calls.push(["release", ...args]); return true; },
     },
     disposeOwner(...args) { disposed.push(args); },
+    reconcileOwner(...args) { reconciled.push(args); },
   };
   const { dom, module, log } = await setup([component], {
     manifest: base,
@@ -1426,11 +1429,87 @@ test("pointer capture commands run with an owned target during the matching even
   assert.equal(payload.buttons, 1);
   assert.equal(payload.current_target_ref, "handle");
 
+  target.remove();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0][0], String(element._mochiInstance));
+  assert.equal(reconciled[0][1], element._mochiMountToken);
+  assert.equal(reconciled[0][2], element.shadowRoot);
+
   const ownerKey = String(element._mochiInstance);
   const mountToken = element._mochiMountToken;
   element.remove();
   await flushLifecycle();
   assert.deepEqual(disposed, [[ownerKey, mountToken]]);
+});
+
+test("pointer moves coalesce per pointer and flush before terminal events", async () => {
+  const component = {
+    tag_name: "pointer-queue-panel",
+    class_name: "PointerQueuePanel",
+    chi_file: "pointer-queue-panel.chi",
+    html_template:
+      '<div class="surface" data-mochi-pointermove="move" ' +
+      'data-mochi-args-pointermove=\'[{"kind":"event"}]\' ' +
+      'data-mochi-pointerup="finish" data-mochi-args-pointerup=\'[{"kind":"event"}]\' ' +
+      'data-mochi-pointercancel="finish" data-mochi-args-pointercancel=\'[{"kind":"event"}]\' ' +
+      'data-mochi-lostpointercapture="finish" ' +
+      'data-mochi-args-lostpointercapture=\'[{"kind":"event"}]\'></div>',
+    css: "",
+    bindings: [],
+    events: [
+      { path: [0], event: "pointermove", method_sym: "move", args: [] },
+      { path: [0], event: "pointerup", method_sym: "finish", args: [] },
+      { path: [0], event: "pointercancel", method_sym: "finish", args: [] },
+      { path: [0], event: "lostpointercapture", method_sym: "finish", args: [] },
+    ],
+  };
+  const { dom, loader, log } = await setup([component]);
+  log.methods.add("move");
+  log.methods.add("finish");
+  const element = dom.window.document.createElement("pointer-queue-panel");
+  dom.window.document.body.appendChild(element);
+  await element._mochiReady;
+  const target = element.shadowRoot.querySelector(".surface");
+  const dispatch = (type, pointerId, clientX, buttons) => {
+    const event = new dom.window.Event(type, { bubbles: true, composed: true });
+    Object.defineProperties(event, {
+      pointerId: { value: pointerId },
+      pointerType: { value: "mouse" },
+      isPrimary: { value: pointerId === 4 },
+      clientX: { value: clientX },
+      clientY: { value: clientX + 1 },
+      buttons: { value: buttons },
+    });
+    target.dispatchEvent(event);
+  };
+
+  for (let index = 0; index < 25; index += 1) dispatch("pointermove", 4, index, 1);
+  for (let index = 0; index < 5; index += 1) dispatch("pointermove", 9, 100 + index, 1);
+  assert.equal(loader.debugStats().pendingPointerMoves, 2);
+  dispatch("pointercancel", 4, 24, 0);
+  dispatch("pointerup", 9, 104, 0);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  const calls = log.dispatchedArgs.map((entry) => ({
+    method: log.symbolNames.get(entry.methodSym || entry.methodSymbol),
+    payload: entry.args[0],
+  }));
+  assert.deepEqual(calls.map((call) => call.method), ["move", "finish", "move", "finish"]);
+  assert.deepEqual(calls.map((call) => call.payload.pointer_id), [4, 4, 9, 9]);
+  assert.equal(calls[0].payload.client_x, 24);
+  assert.equal(calls[1].payload.pointer_reason, "cancel");
+  assert.equal(calls[3].payload.pointer_reason, "up");
+  assert.equal(loader.debugStats().pendingPointerMoves, 0);
+
+  const priorCalls = log.dispatchedArgs.length;
+  dispatch("pointermove", 12, 300, 1);
+  assert.equal(loader.debugStats().pendingPointerMoves, 1);
+  element.remove();
+  await flushLifecycle();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(loader.debugStats().pendingPointerMoves, 0);
+  assert.equal(log.dispatchedArgs.length, priorCalls);
 });
 
 test("shared style resources use one adopted sheet before the local override", async () => {
@@ -5440,6 +5519,7 @@ test("zero-argument handlers receive the normalized event when Ruby requires one
     pointer_type: "",
     is_primary: false,
     buttons: 0,
+    pointer_reason: "",
     target_id: "",
     target_ref: "",
     target_tag: "input",
@@ -5791,6 +5871,7 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
       pointer_type: "",
       is_primary: false,
       buttons: 0,
+      pointer_reason: "",
       target_id: "",
       target_ref: "",
       target_tag: "input",

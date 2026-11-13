@@ -21,6 +21,30 @@ module Mochi
         record("fill", { "selector" => selector.to_s, "value" => value.to_s })
       end
 
+      def pointer_press(selector)
+        record("pointer_press", { "selector" => selector.to_s })
+      end
+
+      def pointer_move_by(x, y, steps: 1)
+        record("pointer_move_by", { "x" => Integer(x), "y" => Integer(y), "steps" => Integer(steps) })
+      end
+
+      def pointer_release
+        record("pointer_release")
+      end
+
+      def pointer_cancel
+        record("pointer_cancel")
+      end
+
+      def pointer_lose_capture
+        record("pointer_lose_capture")
+      end
+
+      def assert_pointer_capture_released
+        record("assert_pointer_capture_released")
+      end
+
       def wait_for_settled
         record("wait")
       end

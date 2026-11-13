@@ -1,5 +1,13 @@
 import { test, expect } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { withFrameworkProject } from "./framework_helpers";
+
+const repoRoot = path.resolve(__dirname, "..", "..");
+const compiler = path.join(repoRoot, "compiler", "mochi");
+const fixture = path.join(__dirname, "..", "fixtures", "framework_contracts");
 
 test("Ruby pointer capture continues a drag outside its shadow root and releases explicitly", async ({ page }) => {
   const errors: string[] = [];
@@ -38,4 +46,26 @@ test("Ruby pointer capture continues a drag outside its shadow root and releases
   }, "<pointer-contracts-root></pointer-contracts-root>");
 
   expect(errors).toEqual([]);
+});
+
+test("Ruby-authored pointer lifecycle tests run through mochi test", async ({ browserName }) => {
+  test.setTimeout(240_000);
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi pointer tests "));
+  try {
+    fs.cpSync(fixture, project, { recursive: true });
+    fs.writeFileSync(path.join(project, "index.html"),
+      "<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>");
+    let output = "";
+    try {
+      output = execFileSync(compiler,
+        ["test", "-i", project, `--browsers=${browserName}`],
+        { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+    } catch (error: any) {
+      throw new Error([error.stderr, error.stdout, error.message].filter(Boolean).join("\n"));
+    }
+    expect(output).toContain("pointer drag coalesces moves and releases at latest position");
+    expect(output).toContain("cancel, lost capture, and unmount clear gesture ownership");
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
 });

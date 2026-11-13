@@ -78,3 +78,28 @@ test("lost pointer capture removes ownership after the deferred Ruby dispatch wi
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(adapter.debugCaptureCount(), 0);
 });
+
+test("removing a captured target from its owner releases capture and target references", () => {
+  const element = target();
+  const root = { contains: (candidate) => candidate === element };
+  adapter.sync.capture(element, 21, "owner", 8, { pointerId: 21, buttons: 1 });
+  adapter.reconcileOwner("owner", 8, root);
+  assert.equal(adapter.debugCaptureCount(), 1);
+
+  adapter.reconcileOwner("owner", 8, { contains: () => false });
+  assert.equal(element.hasPointerCapture(21), false);
+  assert.equal(adapter.debugCaptureCount(), 0);
+});
+
+test("repeated capture, cancel, and disposal cycles leave no listeners or records", () => {
+  for (let index = 0; index < 32; index += 1) {
+    const element = target();
+    const pointerId = 100 + index;
+    adapter.sync.capture(element, pointerId, "cycle-owner", index,
+      { pointerId, buttons: 1 });
+    adapter.disposeOwner("cycle-owner", index);
+    assert.equal(element.hasPointerCapture(pointerId), false);
+    assert.equal((element.listeners.get("lostpointercapture") || []).length, 0);
+    assert.equal(adapter.debugCaptureCount(), 0);
+  }
+});

@@ -61,6 +61,7 @@
     activeGlobalEventDelivery: null,
     activeActionContext: null,
     activePointerDispatch: null,
+    pointerMoves: new Map(),
     reportingGlobalEventOverflow: false,
     nextMountToken: 0,
     actionRouterInstalled: false,
@@ -1286,6 +1287,78 @@
     return target;
   }
 
+  function pointerMoveKey(element, pointerId) {
+    return String(element._mochiMountToken) + ":" + String(pointerId);
+  }
+
+  function flushPointerMove(element, pointerId) {
+    var key = pointerMoveKey(element, pointerId);
+    var pending = state.pointerMoves.get(key);
+    if (!pending) return;
+    state.pointerMoves.delete(key);
+    if (pending.frame !== null) {
+      if (pending.frameKind === "animation" && typeof global.cancelAnimationFrame === "function") {
+        global.cancelAnimationFrame(pending.frame);
+      } else {
+        global.clearTimeout(pending.frame);
+      }
+    }
+    if (!element._mochiUnmounted && pending.mountToken === element._mochiMountToken &&
+        pending.target && pending.target.isConnected) {
+      element._dispatch(pending.target, pending.event, true);
+    }
+  }
+
+  function queuePointerMove(element, target, event) {
+    var key = pointerMoveKey(element, event.pointerId);
+    var pending = state.pointerMoves.get(key);
+    if (pending) {
+      pending.target = target;
+      pending.event = event;
+      return;
+    }
+    pending = {
+      element: element,
+      target: target,
+      event: event,
+      mountToken: element._mochiMountToken,
+      frame: null,
+      frameKind: "timeout",
+    };
+    state.pointerMoves.set(key, pending);
+    var flush = function () {
+      flushPointerMove(element, event.pointerId);
+    };
+    if (typeof global.requestAnimationFrame === "function") {
+      pending.frameKind = "animation";
+      pending.frame = global.requestAnimationFrame(flush);
+    } else {
+      pending.frame = global.setTimeout(flush, 16);
+    }
+  }
+
+  function discardPointerMoves(element, liveRoot) {
+    Array.from(state.pointerMoves.values()).forEach(function (pending) {
+      if (pending.element !== element) return;
+      if (liveRoot && liveRoot.contains(pending.target)) return;
+      state.pointerMoves.delete(pointerMoveKey(element, pending.event.pointerId));
+      if (pending.frame === null) return;
+      if (pending.frameKind === "animation" && typeof global.cancelAnimationFrame === "function") {
+        global.cancelAnimationFrame(pending.frame);
+      } else {
+        global.clearTimeout(pending.frame);
+      }
+    });
+  }
+
+  function pointerReason(event) {
+    if (!event) return "";
+    if (event.type === "pointerup") return "up";
+    if (event.type === "pointercancel") return "cancel";
+    if (event.type === "lostpointercapture") return "lost_capture";
+    return "";
+  }
+
   function handlePointerCommand(module, entry, operation) {
     var ownerKey = typeof entry.instance === "string" ? entry.instance : "";
     var element = state.elements.get(ownerKey);
@@ -2218,6 +2291,9 @@
     if (spec.disposeOwner !== undefined && typeof spec.disposeOwner !== "function") {
       throw new Error("adapter " + url + " has an invalid owner disposal hook");
     }
+    if (spec.reconcileOwner !== undefined && typeof spec.reconcileOwner !== "function") {
+      throw new Error("adapter " + url + " has an invalid owner reconciliation hook");
+    }
 
     var operations = capabilityOperations(capability);
     var declared = Object.keys(operations).sort();
@@ -2276,6 +2352,7 @@
       sync: spec.sync,
       async: spec.async,
       disposeOwner: spec.disposeOwner,
+      reconcileOwner: spec.reconcileOwner,
       limits: limits
     });
     hosts[name] = installedSpec;
@@ -3246,6 +3323,7 @@
       pointer_type: event && typeof event.pointerType === "string" ? event.pointerType : "",
       is_primary: !!(event && event.isPrimary),
       buttons: event && typeof event.buttons === "number" ? event.buttons : 0,
+      pointer_reason: pointerReason(event),
       target_id: source && source.id ? source.id : "",
       target_ref: targetInfo ? targetInfo.ref : "",
       target_tag: targetInfo ? targetInfo.tag : "",
@@ -4722,6 +4800,10 @@
           this._mochiAttrObserver.disconnect();
           this._mochiAttrObserver = null;
         }
+        if (this._mochiPointerObserver) {
+          this._mochiPointerObserver.disconnect();
+          this._mochiPointerObserver = null;
+        }
         this._mochiModule = null;
         this._mochiInstance = null;
         this._mochiAttributeValues = null;
@@ -4747,9 +4829,14 @@
           this._mochiAttrObserver.disconnect();
           this._mochiAttrObserver = null;
         }
+        if (this._mochiPointerObserver) {
+          this._mochiPointerObserver.disconnect();
+          this._mochiPointerObserver = null;
+        }
 
         var key = String(instance);
         state.unmountedInstances.add(key);
+        discardPointerMoves(this);
         cancelOwnerFetches(key);
         cancelOwnerPointerCaptures(key, mountToken);
         state.timers.forEach(function (record, timerId) {
@@ -4828,9 +4915,29 @@
             if (target) element._dispatch(target, event);
           });
         });
+        var component = this._mochiComponent || {};
+        if (Array.isArray(component.capabilities) && component.capabilities.indexOf("pointer") !== -1 &&
+            typeof global.MutationObserver === "function") {
+          if (this._mochiPointerObserver) this._mochiPointerObserver.disconnect();
+          this._mochiPointerObserver = new global.MutationObserver(function () {
+            discardPointerMoves(element, element.shadowRoot);
+            var adapter = state.hostAdapters.get("pointer");
+            if (!adapter || typeof adapter.reconcileOwner !== "function" ||
+                element._mochiUnmounted || element._mochiInstance === null ||
+                element._mochiInstance === undefined) return;
+            try {
+              adapter.reconcileOwner(
+                String(element._mochiInstance), element._mochiMountToken, element.shadowRoot
+              );
+            } catch (error) {
+              reportError(element, "pointer", "reconcile", error, element._mochiModule);
+            }
+          });
+          this._mochiPointerObserver.observe(root, { childList: true, subtree: true });
+        }
       }
 
-      _dispatch(target, event) {
+      _dispatch(target, event, fromPointerMoveQueue) {
         var element = this;
         var method = target.getAttribute("data-mochi-" + event.type);
         if (!method) return;
@@ -4847,6 +4954,17 @@
         }
         state.lastEventTarget = event.target;
         if (!this._mochiReady) return;
+
+        if (event && typeof event.pointerId === "number") {
+          if (event.type === "pointermove" && !fromPointerMoveQueue) {
+            queuePointerMove(this, target, event);
+            return;
+          }
+          if (event.type === "pointerup" || event.type === "pointercancel" ||
+              event.type === "lostpointercapture") {
+            flushPointerMove(this, event.pointerId);
+          }
+        }
 
         var payload = eventPayload(target, event);
         var eachContexts = findEachContexts(target, this.shadowRoot);
@@ -5157,6 +5275,7 @@
       pendingFetches: state.pendingFetches.length,
       activeFetches: state.activeFetches.size,
       pendingHostRequests: state.pendingHostRequests.size,
+      pendingPointerMoves: state.pointerMoves.size,
       routeSubscribers: state.routeSubscribers.size,
       storageSubscribers: storageSubscriberCount,
       storageSubscriptionKeys: storageSubscriptionKeys,

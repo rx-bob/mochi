@@ -39,20 +39,39 @@ function sourceLabel(step) {
   return `${step.source}:${step.line}`;
 }
 
+async function waitForPointerIdle(page) {
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  await page.waitForFunction(() => {
+    const stats = window.MochiLoader.debugStats();
+    return stats.pendingPointerMoves === 0;
+  }, null, { timeout: 5000 });
+}
+
 async function runCase(browser, browserName, baseUrl, testCase) {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => {
     window.__mochiTestErrors = [];
+    window.__mochiTestPointer = null;
     document.addEventListener("mochi:error", (event) => {
       window.__mochiTestErrors.push(event.detail || { message: "Mochi runtime error" });
     });
+    document.addEventListener("pointerdown", (event) => {
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      window.__mochiTestPointer = {
+        id: event.pointerId,
+        target: path.length > 0 ? path[0] : event.target,
+      };
+    }, true);
   });
 
   let host = null;
   let detachedHost = null;
   let expectedError = null;
+  let activePointer = null;
   try {
     await page.goto(`${baseUrl}/`);
     await page.waitForFunction(() => window.MochiLoader && window.MochiLoader.manifest);
@@ -79,6 +98,77 @@ async function runCase(browser, browserName, baseUrl, testCase) {
           const element = document.querySelector(tag);
           await element._mochiReady;
         }, host);
+      } else if (["pointer_press", "pointer_move_by", "pointer_release", "pointer_cancel",
+        "pointer_lose_capture", "assert_pointer_capture_released"].includes(step.operation)) {
+        if (!host && step.operation !== "assert_pointer_capture_released") {
+          throw new Error(`${origin}: mount a component before using ${step.operation}`);
+        }
+        if (step.operation === "pointer_press") {
+          if (activePointer) throw new Error(`${origin}: release or cancel the current test pointer first`);
+          const target = page.locator(host).locator(step.selector);
+          const box = await target.boundingBox();
+          if (!box) throw new Error(`${origin}: selector '${step.selector}' matched no visible element`);
+          const x = Math.round(box.x + box.width / 2);
+          const y = Math.round(box.y + box.height / 2);
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          const pointer = await page.evaluate(() => window.__mochiTestPointer);
+          if (!pointer) throw new Error(`${origin}: browser did not report pointerdown`);
+          activePointer = { id: pointer.id, x, y };
+          await waitForPointerIdle(page);
+        } else if (step.operation === "pointer_move_by") {
+          if (!activePointer) throw new Error(`${origin}: pointer_move_by requires pointer_press`);
+          const steps = Number(step.steps);
+          if (!Number.isInteger(steps) || steps < 1 || steps > 256) {
+            throw new Error(`${origin}: pointer_move_by steps must be between 1 and 256`);
+          }
+          activePointer.x += Number(step.x);
+          activePointer.y += Number(step.y);
+          await page.mouse.move(activePointer.x, activePointer.y, { steps });
+          await waitForPointerIdle(page);
+        } else if (step.operation === "pointer_release") {
+          if (!activePointer) throw new Error(`${origin}: pointer_release requires pointer_press`);
+          await page.mouse.up();
+          activePointer = null;
+          await waitForPointerIdle(page);
+        } else if (step.operation === "pointer_cancel") {
+          if (!activePointer) throw new Error(`${origin}: pointer_cancel requires pointer_press`);
+          await page.evaluate(({ id, x, y }) => {
+            const pointer = window.__mochiTestPointer;
+            if (!pointer || pointer.id !== id || !pointer.target || !pointer.target.isConnected) {
+              throw new Error("test pointer target is no longer connected");
+            }
+            pointer.target.dispatchEvent(new PointerEvent("pointercancel", {
+              bubbles: true, composed: true, pointerId: id, pointerType: "mouse",
+              isPrimary: true, buttons: 0, clientX: x, clientY: y,
+            }));
+          }, activePointer);
+          await page.mouse.up();
+          activePointer = null;
+          await waitForPointerIdle(page);
+        } else if (step.operation === "pointer_lose_capture") {
+          if (!activePointer) throw new Error(`${origin}: pointer_lose_capture requires pointer_press`);
+          await page.evaluate((id) => {
+            const pointer = window.__mochiTestPointer;
+            if (!pointer || pointer.id !== id || !pointer.target ||
+                typeof pointer.target.releasePointerCapture !== "function" ||
+                !pointer.target.hasPointerCapture(id)) {
+              throw new Error("test pointer has no live capture to release");
+            }
+            pointer.target.releasePointerCapture(id);
+          }, activePointer.id);
+          await waitForPointerIdle(page);
+          await page.mouse.up();
+          activePointer = null;
+          await waitForPointerIdle(page);
+        } else {
+          const captured = await page.evaluate(() => {
+            const pointer = window.__mochiTestPointer;
+            return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
+              pointer.target.hasPointerCapture(pointer.id));
+          });
+          if (captured) throw new Error(`${origin}: pointer capture remained active`);
+        }
       } else if (["click", "fill", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
         if (!host) throw new Error(`${origin}: mount a component before using ${step.operation}`);
         const result = await page.evaluate(({ tag, step }) => {
@@ -138,7 +228,7 @@ async function runCase(browser, browserName, baseUrl, testCase) {
         await page.waitForFunction(() => {
           const stats = window.MochiLoader.debugStats();
           return stats.pendingFetches === 0 && stats.activeFetches === 0 &&
-            stats.pendingHostRequests === 0;
+            stats.pendingHostRequests === 0 && stats.pendingPointerMoves === 0;
         }, null, { timeout: 5000 });
         await page.evaluate(() => new Promise((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -161,6 +251,17 @@ async function runCase(browser, browserName, baseUrl, testCase) {
         if (step.operation === "unmount") {
           detachedHost = host;
           host = null;
+          if (activePointer) {
+            await waitForPointerIdle(page);
+            const captured = await page.evaluate(() => {
+              const pointer = window.__mochiTestPointer;
+              return !!(pointer && pointer.target && pointer.target.hasPointerCapture &&
+                pointer.target.hasPointerCapture(pointer.id));
+            });
+            if (captured) throw new Error(`${origin}: unmount left pointer capture active`);
+            await page.mouse.up();
+            activePointer = null;
+          }
         }
         else {
           host = step.tag || detachedHost;
