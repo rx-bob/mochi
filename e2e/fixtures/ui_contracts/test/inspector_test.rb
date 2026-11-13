@@ -1,0 +1,41 @@
+Mochi::Test.test("inspector mounts 48 structured records with 12 stable first-page IDs") do
+  mount "inspector-root"
+  assert_text ".total", "48"
+  assert_text ".matched", "48"
+  assert_text ".visible-count", "12"
+  assert_text ".page", "1"
+  12.times do |index|
+    id = index + 1
+    assert_attribute ".record:nth-child(#{id})", "data-id", "record-#{id}"
+    assert_text ".record:nth-child(#{id}) .message", "Record #{id} processed"
+    assert_text ".record:nth-child(#{id}) .severity", id % 3 == 0 ? "warning" : "info"
+  end
+  click "[data-id='record-3'] button"
+  assert_text ".selected-id", "record-3"
+  assert_text ".selected-detail", "worker-3:3"
+end
+
+Mochi::Test.test("inspector pages, filters literally, and retains selection by ID") do
+  mount "inspector-root"
+  click ".next"
+  assert_text ".page", "2"
+  assert_attribute ".record:first-child", "data-id", "record-13"
+  click "[data-id='record-13'] button"
+  click ".next"
+  click ".next"
+  click ".next"
+  assert_text ".page", "4"
+  assert_attribute ".record:last-child", "data-id", "record-48"
+  fill ".filter", "Record 1"
+  assert_text ".page", "1"
+  assert_text ".matched", "11"
+  assert_text ".selected-id", "record-13"
+  assert_text ".selected-detail", "worker-1:13"
+  fill ".filter", ".*"
+  assert_text ".matched", "0"
+  assert_text ".visible-count", "0"
+  click ".previous"
+  assert_text ".page", "1"
+  fill ".filter", ""
+  assert_text ".visible-count", "12"
+end
