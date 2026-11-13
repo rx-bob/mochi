@@ -153,7 +153,9 @@ end
 `);
     const passing = runMochiTest();
     expect(passing.status, passing.stderr).toBe(0);
-    expect(passing.stdout).toContain("PASS parent value reaches child");
+    for (const browser of ["chromium", "firefox", "webkit"]) {
+      expect(passing.stdout).toContain(`PASS [${browser}] parent value reaches child`);
+    }
 
     writeTest(`
 Mochi::Test.test("wrong output assertion") do
@@ -2796,7 +2798,7 @@ end
   const numericManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(numericManifest.schema_version).toBe(2);
+  expect(numericManifest.schema_version).toBe(3);
   expect(numericManifest.prelude).toBeUndefined();
   expect(numericManifest.format_host).toBeUndefined();
   expect(
@@ -3179,7 +3181,7 @@ end
   const moneyManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(moneyManifest.schema_version).toBe(2);
+  expect(moneyManifest.schema_version).toBe(3);
   expect(moneyManifest.prelude).toBeUndefined();
   expect(moneyManifest.format_host).toBeUndefined();
   expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(false);
@@ -3489,7 +3491,7 @@ end
   const formatManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(formatManifest.schema_version).toBe(2);
+  expect(formatManifest.schema_version).toBe(3);
   expect(formatManifest.prelude).toBeUndefined();
   expect(formatManifest.format_host).toBe("mochi-format.js");
   expect(formatManifest.capabilities.formatting).toMatchObject({
@@ -3520,7 +3522,7 @@ end
     await expect(host.locator("p.compact")).toHaveText("1.2M");
     await expect(host.locator("p.percent")).toHaveText("42%");
     await expect(host.locator("p.date-short")).toHaveText("Oct 11");
-    await expect(host.locator("p.date-zone")).toHaveText("Nov 10, 2026, 8:30 AM");
+    await expect(host.locator("p.date-zone")).toHaveText(/Nov 10, 2026(?:,| at) 8:30 AM/);
     await expect(host.locator("p.exact")).toHaveText("9,223,372,036,854,775,807");
     await expect(host.locator("p.money")).toHaveText("$0.61");
     await expect(host.locator("p.fractional-money")).toHaveText("$0.57");
@@ -3780,7 +3782,7 @@ end
   });
 
   const manifest = readManifest(bundleDir);
-  expect(manifest.schema_version).toBe(2);
+  expect(manifest.schema_version).toBe(3);
   expect(manifest.components.map((component: any) => component.tag_name).sort())
     .toEqual(["costs-screen", "home-screen"]);
   const homeDescriptor = readComponentDescriptor(bundleDir, manifest, "home-screen");
@@ -3904,7 +3906,7 @@ end
   const helperManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(helperManifest.schema_version).toBe(2);
+  expect(helperManifest.schema_version).toBe(3);
   expect(helperManifest.format_host).toBe("mochi-format.js");
   expect(helperManifest.capabilities.formatting.host).toBe("mochi-format.js");
   const helperDescriptor = readComponentDescriptor(bundleDir, helperManifest, "helper-format-panel");

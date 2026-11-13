@@ -3111,6 +3111,12 @@
   }
 
   function installBindingTarget(element, root, binding, context) {
+    if (binding.kind === "expr") {
+      // Event argument expressions have values in the VM bridge but no DOM
+      // target. Keep their descriptor so dispatch can resolve the cached value.
+      element.bindingData[binding.id] = binding;
+      return null;
+    }
     var path = binding.path || [];
     var node = resolveTarget(root, path);
     var description = bindingContext(element, binding, context);
@@ -5104,6 +5110,9 @@
         var fileInputEvent = event && event.type === "change" && target &&
           String(target.type || "").toLowerCase() === "file" && hasFilesCapability;
         var fileDropEvent = event && event.type === "drop" && hasFilesCapability;
+        if (fileDropEvent && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
         var mountedNow = this._mochiModule && this._mochiInstance !== null &&
           this._mochiInstance !== undefined && this._mochiMountState === "mounted"
           ? { module: this._mochiModule, instance: this._mochiInstance, mountToken: mountToken }

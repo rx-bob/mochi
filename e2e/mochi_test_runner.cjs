@@ -29,7 +29,7 @@ function locate(root, selector) {
 }
 
 function sourceLabel(step) {
-  return `${step.source}:${step.line}`;
+  return `${step.ruby_file}:${step.line}`;
 }
 
 function syntheticFiles(step) {
@@ -48,7 +48,7 @@ function syntheticFiles(step) {
     let bytes;
     let defaultName;
     if (hasPath) {
-      const filePath = path.resolve(path.dirname(step.source), spec.path);
+      const filePath = path.resolve(path.dirname(step.ruby_file), spec.path);
       let stat;
       try {
         stat = fs.statSync(filePath);
@@ -169,6 +169,7 @@ async function runCase(browser, browserName, baseUrl, testCase) {
   await page.addInitScript(() => {
     window.__mochiTestErrors = [];
     window.__mochiTestPointer = null;
+    window.__mochiTestLostCaptures = [];
     document.addEventListener("mochi:error", (event) => {
       window.__mochiTestErrors.push(event.detail || { message: "Mochi runtime error" });
     });
@@ -178,6 +179,9 @@ async function runCase(browser, browserName, baseUrl, testCase) {
         id: event.pointerId,
         target: path.length > 0 ? path[0] : event.target,
       };
+    }, true);
+    document.addEventListener("lostpointercapture", (event) => {
+      window.__mochiTestLostCaptures.push(event.pointerId);
     }, true);
   });
 
@@ -271,9 +275,12 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             pointer.target.releasePointerCapture(id);
           }, activePointer.id);
           await waitForPointerIdle(page);
+          const pointerId = activePointer.id;
           await page.mouse.up();
           activePointer = null;
           await waitForPointerIdle(page);
+          const observed = await page.evaluate((id) => window.__mochiTestLostCaptures.includes(id), pointerId);
+          if (!observed) throw new Error(`${origin}: browser did not deliver lostpointercapture`);
         } else {
           const captured = await page.evaluate(() => {
             const pointer = window.__mochiTestPointer;

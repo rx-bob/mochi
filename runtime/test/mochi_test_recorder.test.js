@@ -42,7 +42,7 @@ test("Ruby recorder serializes file, drop, drag, and state actions with Ruby loc
     assert.deepEqual(steps[0].files[0].bytes, [0, 255]);
     assert.equal(steps[1].files[0].path, "fixtures/sample.txt");
     steps.forEach((step, index) => {
-      assert.equal(step.source, source);
+      assert.equal(step.ruby_file, source);
       assert.equal(step.line, index + 2);
     });
   });

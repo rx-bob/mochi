@@ -28,8 +28,8 @@ test("Ruby transfers typed values and external text during native drag event win
       operations: { set_data: "sync", set_text: "sync", accept: "sync" },
       limits: { payload_bytes: 1024 },
     });
-    expect(Object.keys(manifest.packages)).toContain("capability:drag");
-    expect(manifest.capabilities.files).toBeUndefined();
+    expect(manifest.capabilities.drag.packages).toContain("ruby:lib/mochi_builtin_drag.rb");
+    expect(manifest.capabilities.files.packages).toContain("ruby:lib/mochi_builtin_files.rb");
 
     const root = page.locator("drag-target");
     const source = page.locator("drag-source");
@@ -82,8 +82,9 @@ test("file inputs and controlled file drops stream bounded bytes from mount-owne
         chunk_bytes: 8192, whole_read_bytes: 48000, envelope_bytes: 65536,
       },
     });
-    expect(manifest.capabilities.drag).toBeUndefined();
+    expect(manifest.capabilities.drag.packages).toContain("ruby:lib/mochi_builtin_drag.rb");
 
+    await expect(page.locator("file-contract .input-files")).toHaveText("");
     const input = page.locator("file-contract .file-input");
     const streamBytes = Buffer.from(Array.from({ length: 65537 }, (_, index) => index % 256));
     let checksum = 0;
@@ -94,12 +95,12 @@ test("file inputs and controlled file drops stream bounded bytes from mount-owne
       { name: "large.bin", mimeType: "application/octet-stream", buffer: streamBytes },
     ]);
     const inputText = await page.locator("file-contract .input-files").textContent();
-    expect(inputText).toContain("empty.bin:0::");
+    expect(inputText).toMatch(/empty\.bin:0:(?:application\/octet-stream)?:/);
     expect(inputText).toContain("notes.txt:5:text/plain:");
     expect(inputText).toContain("large.bin:65537:application/octet-stream:");
     await expect(page.locator("file-contract .stream-result")).toHaveText(`eof:65537:${checksum}`);
     const inputHandles = [...(inputText || "").matchAll(/mochi-file-\d+/g)].map((match) => match[0]);
-    expect(new Set(inputHandles).size).toBe(2);
+    expect(new Set(inputHandles).size).toBe(3);
 
     await page.locator("file-contract .file-drop").evaluate((target) => {
       const transfer = new DataTransfer();
@@ -120,7 +121,7 @@ test("file inputs and controlled file drops stream bounded bytes from mount-owne
 
 test("Ruby-authored file, drop, and structured drag tests run through mochi test", async ({ browserName }) => {
   test.setTimeout(240_000);
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi file tests "));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-file-tests-"));
   try {
     fs.cpSync(fixture, project, { recursive: true });
     fs.writeFileSync(path.join(project, "index.html"),

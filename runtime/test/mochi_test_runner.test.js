@@ -15,7 +15,7 @@ test("browser runner resolves Ruby test file paths and preserves inline bytes", 
   fs.writeFileSync(fixture, Buffer.from([0, 128, 255]));
   try {
     const files = syntheticFiles({
-      source,
+      ruby_file: source,
       line: 7,
       files: [
         { path: "sample.bin", type: "application/octet-stream" },
@@ -34,7 +34,7 @@ test("browser runner reports invalid test paths at the calling Ruby line", () =>
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-runner-bad-file-"));
   try {
     assert.throws(
-      () => syntheticFiles({ source: path.join(root, "files_test.rb"), line: 19, files: [{ path: "missing.bin" }] }),
+      () => syntheticFiles({ ruby_file: path.join(root, "files_test.rb"), line: 19, files: [{ path: "missing.bin" }] }),
       /files_test\.rb:19: cannot read test file 'missing\.bin'/,
     );
   } finally {

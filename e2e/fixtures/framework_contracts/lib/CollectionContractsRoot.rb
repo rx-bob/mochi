@@ -29,6 +29,8 @@ class CollectionContractsRoot
       <span class="sum">{@initial_sum}</span>
       <span class="minimum">{binding_minimum}</span>
       <span class="maximum">{binding_maximum}</span>
+      <span class="empty-minimum">{[].min}</span>
+      <span class="empty-maximum">{[].max}</span>
       <span class="helper-sum">{CollectionHelper.transformed_sum(@values)}</span>
       <span class="helper-min">{CollectionHelper.reverse_min(@values)}</span>
       <span class="event-value">{@event_value}</span>

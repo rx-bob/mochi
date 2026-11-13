@@ -86,6 +86,27 @@ RUBY
     end
   end
 
+  it "records page component roots while retaining descriptors for dynamic components" do
+    root = File.join(Dir.tempdir, "mochi_package_page_roots_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      File.write(File.join(root, "index.html"), "<entry-root></entry-root>")
+      entry = dependency_component(root, "entry-root", "EntryRoot", "class EntryRoot\nend\n", "<root-child></root-child>")
+      child = dependency_component(root, "root-child", "RootChild", "class RootChild\nend\n")
+      unrelated = dependency_component(root, "unrelated-root", "UnrelatedRoot", "class UnrelatedRoot\nend\n")
+
+      graph = dependency_graph(root, [entry, child, unrelated])
+
+      graph.entry_packages.should eq(["component:entry-root"])
+      graph.component_order.map { |component| component.manifest.tag_name }.to_set
+        .should eq(Set{"entry-root", "root-child", "unrelated-root"})
+      graph.package("component:unrelated-root").should_not be_nil
+      graph.order.should contain("component:unrelated-root")
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "keeps conditional child components out of the eager dependency set" do
     root = File.join(Dir.tempdir, "mochi_package_lazy_children_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

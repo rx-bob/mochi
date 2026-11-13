@@ -6,7 +6,6 @@ import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { setupConsoleLogging } from "./test_utils";
 
-test.use({ channel: "chrome" });
 test.describe.configure({ mode: "serial" });
 
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -67,7 +66,7 @@ function assertBundleOutput(): void {
   expect(manifest.wasm_file).toBe("mochi-gvm.wasm");
   expect(manifest.js_file).toBe("mochi-gvm.js");
   expect(manifest.loader_file).toBe("mochi-loader.js");
-  expect(manifest.schema_version).toBe(2);
+  expect(manifest.schema_version).toBe(3);
   expect(manifest.format_host).toBeUndefined();
   expect(manifest.capabilities).toBeUndefined();
   expect(Object.keys(manifest.packages)).not.toContain("capability:formatting");

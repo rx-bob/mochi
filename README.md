@@ -1031,8 +1031,9 @@ scripts/install_dev.rb --prefix PATH` from the checkout offers the same install
 operation.
 
 Resource lookup order is explicit environment override, installed resource
-record, then known paths in the compiler's development checkout and its
-`../mochi-gvm` checkout. The compiler supports `MOCHI_COMPILER`, `MRBC`,
+record, then known paths in the Mochi checkout (including its built
+`build_wasm/mruby` compiler), followed by the sibling `../mochi-gvm` checkout.
+The compiler supports `MOCHI_COMPILER`, `MRBC`,
 `MOCHI_GVM_DIR`, `MOCHI_GVM_WASM`, `MOCHI_GVM_JS`, `MOCHI_LOADER`,
 `MOCHI_FORMAT_HOST`, `MOCHI_HOST_ADAPTER_MOCHI_FETCH_JS`, and
 `MOCHI_E2E_NODE_MODULES`. A bad explicit path stops

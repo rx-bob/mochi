@@ -144,7 +144,7 @@ module Mochi
         location = caller_locations(2, 1).first
         @steps << attributes.merge(
           "operation" => operation,
-          "source" => location ? location.path : "<ruby test>",
+          "ruby_file" => location ? location.path : "<ruby test>",
           "line" => location ? location.lineno : 1
         )
       end

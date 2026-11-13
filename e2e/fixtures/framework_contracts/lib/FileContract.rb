@@ -30,12 +30,10 @@ class FileContract
 
   def consume_files(files)
     return if files.length == 0
-    index = 0
-    while index < files.length - 1
-      MochiFiles.release(files[index]["handle"])
-      index += 1
+    file = files[(files.length - 1)]
+    files.each do |candidate|
+      MochiFiles.release(candidate["handle"]) if candidate["handle"] != file["handle"]
     end
-    file = files[files.length - 1]
     @active_handle = file["handle"]
     @reader = MochiFiles.open(@active_handle)
     @byte_count = 0

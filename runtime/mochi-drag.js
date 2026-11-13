@@ -6,6 +6,7 @@
   var INTERNAL_TYPE = "application/vnd.mochi.value+json";
   var MAX_DEPTH = 32;
   var MAX_ITEMS = 4096;
+  var acceptedEffect = "none";
 
   function fail(message) {
     throw new Error("drag: " + message);
@@ -54,6 +55,7 @@
     });
     if (bytes(envelope) > limits.payload_bytes) fail("payload exceeds configured byte limit");
     context.event.dataTransfer.setData(INTERNAL_TYPE, envelope);
+    acceptedEffect = "none";
     return true;
   }
 
@@ -63,6 +65,7 @@
     if (typeof value !== "string") fail("set_text expects a String");
     if (bytes(value) > limits.payload_bytes) fail("text exceeds configured byte limit");
     context.event.dataTransfer.setData("text/plain", value);
+    acceptedEffect = "none";
     return true;
   }
 
@@ -74,6 +77,7 @@
     if (types.indexOf(type) === -1) return false;
     context.event.preventDefault();
     context.event.dataTransfer.dropEffect = effect;
+    acceptedEffect = effect;
     return true;
   }
 
@@ -82,7 +86,8 @@
     var transfer = event.dataTransfer;
     var result = {
       drag_types: Array.prototype.slice.call(transfer.types || []).slice(0, 32),
-      drag_effect: typeof transfer.dropEffect === "string" ? transfer.dropEffect : "none",
+      drag_effect: typeof transfer.dropEffect === "string" && transfer.dropEffect !== "none"
+        ? transfer.dropEffect : acceptedEffect,
       drag_value: null,
       drag_text: "",
       drag_source: null
@@ -105,6 +110,7 @@
       result.drag_text = transfer.getData("text/plain");
       if (bytes(result.drag_text) > limits.payload_bytes) fail("received text exceeds configured byte limit");
     }
+    acceptedEffect = "none";
     return result;
   }
 

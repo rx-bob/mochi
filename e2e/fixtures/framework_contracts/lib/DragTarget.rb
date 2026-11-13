@@ -41,6 +41,7 @@ class DragTarget
         <output class="source">{@source_tag}</output>
       </section>
       <section class="text-zone" ondragover="{allow_text($event)}" ondrop="{receive($event)}">
+        Drop plain text here
         <output class="text-result">{@external_text}</output>
       </section>
     }

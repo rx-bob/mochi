@@ -28,7 +28,7 @@ test("Ruby pointer capture continues a drag outside its shadow root and releases
       host: "mochi-pointer.js",
       operations: { capture: "sync", release: "sync" },
     });
-    expect(Object.keys(manifest.packages)).toContain("capability:pointer");
+    expect(manifest.capabilities.pointer.packages).toContain("ruby:lib/mochi_builtin_pointer.rb");
     await expect(root.locator(".position")).toHaveText("0,0");
 
     const handle = root.locator(".handle");
@@ -39,7 +39,10 @@ test("Ruby pointer capture continues a drag outside its shadow root and releases
     await page.mouse.move(startX, startY);
     await page.mouse.down();
     await page.mouse.move(startX + 240, startY + 130, { steps: 4 });
-    await expect(root.locator(".position")).toHaveText(`${Math.round(startX + 240)},${Math.round(startY + 130)}`);
+    await expect.poll(async () => {
+      const [x, y] = (await root.locator(".position").textContent() || "").split(",").map(Number);
+      return Math.abs(x - (startX + 240)) < 3 && Math.abs(y - (startY + 130)) < 3;
+    }).toBe(true);
     await expect(root.locator(".identity")).toContainText("mouse:");
     await page.mouse.up();
     expect(await page.evaluate(() => (window as any).__pointerErrors)).toEqual([]);

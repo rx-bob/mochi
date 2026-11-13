@@ -30,8 +30,11 @@ class InstallationPaths
   end
 
   def mrbc : String?
+    defaults = [
+      File.join(@development_root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
+      File.join(@development_root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
+    ]
     root = gvm_root
-    defaults = [] of String
     if root
       defaults << File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
       defaults << File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc")
@@ -160,11 +163,17 @@ class InstallationPaths
 
   private def mrbc_defaults : Array(String)
     root = gvm_root
-    return [] of String unless root
-    [
-      File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
-      File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
+    defaults = [
+      File.join(@development_root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
+      File.join(@development_root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
     ]
+    if root
+      defaults.concat([
+        File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
+        File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
+      ])
+    end
+    defaults
   end
 
   private def validate_capacity_profile!(wasm_path : String) : Nil

@@ -117,7 +117,7 @@ class Compiler
         resources,
         false,
         [input_dir, project_dir].compact,
-        project_dir
+        asset_root || project_dir
       )
       compiler.validate_emitted_resources!
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }

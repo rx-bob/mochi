@@ -150,7 +150,9 @@ test("Array aggregators work through helpers, blocks, bindings, and events", asy
 
 test("Array sort_by and comparator sort preserve inputs and stay bounded", async ({ page }) => {
   const errors: string[] = [];
+  const requestedFiles: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => requestedFiles.push(new URL(request.url()).pathname));
   setupConsoleLogging(page, { expectedMochiErrors: true });
   await page.addInitScript(() => {
     (window as any).__sortErrors = [];
@@ -162,7 +164,10 @@ test("Array sort_by and comparator sort preserve inputs and stay bounded", async
   await withFrameworkProject(async (baseURL) => {
     await page.goto(`${baseURL}/index.html`);
     const manifest = await page.evaluate(async () => (await (await fetch("mochi-manifest.json")).json()));
-    expect(Object.keys(manifest.packages)).not.toContain("ruby:lib/mochi_builtin_collections.rb");
+    expect(manifest.entry_packages).toEqual(["component:sort-contracts-root"]);
+    expect(manifest.packages["component:sort-contracts-root"].dependencies || [])
+      .not.toContain("ruby:lib/mochi_builtin_collections.rb");
+    const collectionsFile = manifest.packages["ruby:lib/mochi_builtin_collections.rb"].file;
     const root = page.locator("sort-contracts-root");
     await expect(root.locator(".sorted")).toHaveText("first,second,third,last");
     await expect(root.locator(".original")).toHaveText("third,first,second,last");
@@ -175,6 +180,7 @@ test("Array sort_by and comparator sort preserve inputs and stay bounded", async
     const comparisons = Number(await root.locator(".comparison-calls").textContent());
     expect(comparisons).toBeGreaterThan(0);
     expect(comparisons).toBeLessThan(256);
+    expect(requestedFiles).not.toContain(`/${collectionsFile}`);
 
     await root.locator("button.invalid").click();
     const runtimeErrors = await page.evaluate(() => (window as any).__sortErrors);

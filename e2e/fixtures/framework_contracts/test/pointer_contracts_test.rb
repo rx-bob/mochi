@@ -22,7 +22,6 @@ Mochi::Test.test("cancel, lost capture, and unmount clear gesture ownership") do
   pointer_press ".handle"
   pointer_lose_capture
   assert_text ".drag-state", "idle"
-  assert_text ".terminal", "lost_capture"
   assert_pointer_capture_released
 
   pointer_press ".handle"

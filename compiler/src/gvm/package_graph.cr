@@ -201,7 +201,7 @@ module MochiPackaging
 
       graph = new(packages, [] of String, [] of String, [] of MochiComponent, {} of String => Capability)
       graph.resolve_dependencies(search_roots, project_root)
-      graph.resolve_entries_and_order
+      graph.resolve_entries_and_order(components, project_root)
       graph.resolve_capabilities
       graph.sync_components
       graph
@@ -506,9 +506,11 @@ module MochiPackaging
       rows.children.each { |child| collect_each_row_templates(child, texts) }
     end
 
-    def resolve_entries_and_order : Nil
-      @entry_packages = @packages.values.select(&.component?).map(&.id).sort
-      reachable = reachable_packages(@entry_packages)
+    def resolve_entries_and_order(components : Array(MochiComponent), project_root : String?) : Nil
+      roots = entry_components(components, project_root)
+      @entry_packages = roots.map { |component| self.class.component_package_id(component.manifest.tag_name) }.sort
+      component_packages = @packages.values.select(&.component?).map(&.id).sort
+      reachable = reachable_packages(component_packages)
       order = topological_order(reachable.to_a)
       @order = order.select { |id| reachable.includes?(id) }
       @component_order = @order.compact_map do |id|
@@ -516,6 +518,22 @@ module MochiPackaging
         node ? node.component : nil
       end
       validate_duplicate_exports(reachable)
+    end
+
+    private def entry_components(components : Array(MochiComponent), project_root : String?) : Array(MochiComponent)
+      return components unless project_root
+
+      html_paths = [File.join(project_root, "index.html")]
+      html_paths.concat(Dir.glob(Path[project_root, "public", "**", "*.{html,htm}"].to_s))
+      sources = html_paths.select { |path| File.file?(path) }.map { |path| File.read(path) }
+      return components if sources.empty?
+
+      roots = components.select do |component|
+        tag = component.manifest.tag_name
+        pattern = Regex.new("(?i)<\\s*#{Regex.escape(tag)}(?:[\\s/>])")
+        sources.any? { |source| pattern.matches?(source) }
+      end
+      roots.empty? ? components : roots
     end
 
     private def reachable_packages(entries : Array(String)) : Set(String)
@@ -587,7 +605,8 @@ module MochiPackaging
 
     def resolve_capabilities : Nil
       @capabilities = {} of String => Capability
-      reachable = reachable_packages(@entry_packages)
+      component_packages = @packages.values.select(&.component?).map(&.id)
+      reachable = reachable_packages(component_packages)
       CAPABILITY_DEFINITIONS.each do |definition|
         active_packages = @packages.values
           .select do |node|
@@ -631,7 +650,7 @@ module MochiPackaging
     end
 
     def sync_components : Nil
-      @component_order.each do |component|
+      @packages.values.compact_map(&.component).each do |component|
         node = @packages[self.class.component_package_id(component.manifest.tag_name)]?
         next unless node
 

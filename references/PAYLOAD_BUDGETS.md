@@ -57,13 +57,39 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 456,592 | 149,089 | 3 |
-| Minimal initial | 460,270 | 150,795 | 7 |
-| Feature initial | 461,107 | 150,983 | 7 |
+| Core runtime | 489,545 | 157,958 | 3 |
+| Minimal initial | 493,223 | 159,664 | 7 |
+| Feature initial | 494,035 | 159,849 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 475,343 | 155,584 | 11 |
-| Network initial | 465,405 | 152,293 | 8 |
-| Network total | 465,405 | 152,293 | 8 |
+| Feature total | 508,271 | 164,450 | 11 |
+| Network initial | 498,358 | 161,162 | 8 |
+| Network total | 498,358 | 161,162 | 8 |
+
+### Pointer, drag, and file capability cost
+
+E8.S1–E9.S4 add 26,108 raw / 6,005 gzip bytes to the core runtime compared
+with the previous enforced baseline. The measured change is 7,385 / 2,733
+bytes in `mochi-gvm.wasm` and 18,723 / 3,272 bytes in `mochi-loader.js`;
+`mochi-gvm.js` is unchanged. The loader cost covers native event dispatch,
+pointer-move coalescing and capture cleanup, drag-event command routing, file
+metadata capture, and mount-owned file cleanup. These operations coordinate
+the VM event bridge and component lifecycle, so their shared dispatch remains
+in the core loader. The pointer, drag, and files implementations and their Ruby
+packages are still optional capability artifacts and are absent from apps that
+do not request them.
+
+The native file contract also flushes pending synchronous host commands before
+queuing an asynchronous read. This preserves open/read ordering and adds 2,613
+raw / 1,257 gzip bytes to the rebuilt VM and loader artifacts. The complete
+core now measures 489,545 / 157,958 raw / gzip bytes, a 6.3% raw and 4.9%
+compressed increase over the prior 460,558 / 150,621 baseline. The new ceilings
+account for this measured browser-contract work; they do not add unmeasured
+headroom.
+
+Event argument expressions add a further 266 raw / 75 gzip bytes to the
+loader. They are evaluated by the VM and cached for dispatch, but have no DOM
+target; the loader retains their descriptor without trying to bind it to the
+event element.
 
 ### Intentional budget update
 
@@ -117,7 +143,7 @@ bytes to enforce its build-selected cache limit without a runtime default;
 its Ruby package and component artifacts are unchanged. Network now has its
 own exact raw/gzip gates instead of escaping byte accounting.
 
-The current baseline includes the opt-in routing contract and core storage
+The preceding baseline included the opt-in routing contract and core storage
 subscriptions. The loader owns one structured route state, push/replace history,
 explicit route subscribers, and stale-navigation guards. The VM adds
 `route_info`, `replace_route`, and `route_subscribe` builtins plus the
@@ -151,13 +177,13 @@ The route and storage contracts had previously added 7,031 raw bytes and 1,378
 gzip bytes over the pre-route/storage baseline. Both changes belong to the core
 runtime, not to either fixture's entry component or later feature load.
 
-Core runtime:
+Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 199,669 | 90,365 |
+| `mochi-gvm.wasm` | 209,548 | 94,347 |
 | `mochi-gvm.js` | 63,170 | 17,609 |
-| `mochi-loader.js` | 197,719 | 42,647 |
+| `mochi-loader.js` | 216,827 | 46,002 |
 
 The current VM build is 3,966 raw / 1,532 gzip bytes above the previous
 recorded core baseline. The shared update includes bounded aggregate block
@@ -168,7 +194,7 @@ in an optional package and are excluded from apps that do not call them; the
 core cost supplies one-pass block execution, checked numeric accumulation, and
 Ruby ordering for Strings without adding a general Enumerable runtime.
 
-Minimal initial:
+Minimal initial (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
@@ -177,10 +203,10 @@ Minimal initial:
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-The resulting complete core is 460,558 / 150,621 raw / gzip bytes. Minimal
-initial is 464,236 / 152,327; formatting feature initial is 465,073 / 152,515;
-formatting feature total is 479,309 / 157,116; and network initial/total is
-469,371 / 153,825. These current measurements are enforced by the JSON budget.
+The resulting complete core is 489,545 / 157,958 raw / gzip bytes. Minimal
+initial is 493,223 / 159,664; formatting feature initial is 494,035 / 159,849;
+formatting feature total is 508,271 / 164,450; and network initial/total is
+498,358 / 161,162. These current measurements are enforced by the JSON budget.
 
 Feature initial adds only manifest metadata:
 

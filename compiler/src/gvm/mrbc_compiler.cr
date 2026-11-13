@@ -187,7 +187,7 @@ class MrbcCompiler
       @capacity_artifacts = CapacityArtifactBuilder.new(gvm_root, @capacity_config).build
     end
     wasm_source = selected_wasm_source
-    validate_capacity_artifact!(wasm_source) if wasm_source
+    validate_capacity_artifact!(wasm_source) if wasm_source && File.file?(wasm_source)
     @wasm_path = copy_asset(wasm_source, output_dir, "mochi-gvm.wasm")
     @js_path = copy_asset(selected_js_source, output_dir, "mochi-gvm.js")
     @loader_path = copy_asset(resolved_loader_source, output_dir, "mochi-loader.js")
@@ -574,7 +574,7 @@ class MrbcCompiler
                           capability.packages.sort.each { |id| json.string(id) }
                         end
                       end
-                      unless capability.limit_keys.empty?
+                      if capability.host
                         json.field "limits" do
                           json.object do
                             capability.limit_keys.sort_by(&.first).each do |name, capacity_key|

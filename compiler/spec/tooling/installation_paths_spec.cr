@@ -1,3 +1,4 @@
+require "spec"
 require "file_utils"
 require "json"
 require "random"
@@ -5,6 +6,25 @@ require "digest/sha256"
 require "../../src/tooling/installation_paths"
 
 describe InstallationPaths do
+  it "finds checkout-local mrbc before sibling GVM and then falls back to GVM" do
+    root = File.join(Dir.tempdir, "mochi mrbc discovery #{Random.rand(1_000_000)}")
+    checkout = File.join(root, "mochi")
+    gvm_root = File.join(root, "mochi-gvm")
+    checkout_mrbc = File.join(checkout, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
+    gvm_mrbc = File.join(gvm_root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
+    [checkout_mrbc, gvm_mrbc].each do |path|
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "#!/bin/sh\nexit 0\n")
+      File.chmod(path, 0o755)
+    end
+
+    InstallationPaths.new({} of String => String, checkout).mrbc.should eq(checkout_mrbc)
+    File.delete(checkout_mrbc)
+    InstallationPaths.new({} of String => String, checkout).mrbc.should eq(gvm_mrbc)
+  ensure
+    FileUtils.rm_rf(root) if root
+  end
+
   it "resolves overrides before installed records and handles spaces" do
     root = File.join(Dir.tempdir, "mochi install paths #{Random.rand(1_000_000)}")
     FileUtils.mkdir_p(root)

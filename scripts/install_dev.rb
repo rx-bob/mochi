@@ -31,6 +31,8 @@ def runtime_files(checkout_root, gvm_root)
   }
   defaults = {
     "mrbc" => [
+      File.join(checkout_root, "build_wasm/mruby/src/build/mochi-v2-host/bin/mrbc"),
+      File.join(checkout_root, "build_wasm/mruby/src/build/host/bin/mrbc"),
       File.join(gvm_root, "build_wasm/mruby/src/build/mochi-v2-host/bin/mrbc"),
       File.join(gvm_root, "build_wasm/mruby/src/build/host/bin/mrbc"),
     ],
