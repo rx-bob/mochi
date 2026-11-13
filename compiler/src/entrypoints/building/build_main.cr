@@ -6,6 +6,7 @@ require "../../generated/app_router_rb"
 require "../../generated/store_rb"
 require "../../generated/money_rb"
 require "../../generated/format_rb"
+require "../../generated/collections_rb"
 require "../../tooling/installation_paths"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
@@ -93,6 +94,14 @@ class BuildMain
         MochiFormatRbFragment.get_ruby_code
       )
     end
+
+    # Array aggregation methods are optional Ruby bytecode. The package graph
+    # adds it only for syntactic Array method calls and propagates it through
+    # helper-package dependencies.
+    builder_man.register_generated_ruby_source(
+      "#{builder_man.pre_tp_dir}/lib/mochi_builtin_collections.rb",
+      MochiCollectionsRbFragment.get_ruby_code
+    )
 
     if prepare_typecheck_tree
       print_separator

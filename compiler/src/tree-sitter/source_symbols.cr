@@ -8,7 +8,8 @@ module TreeSitter
   # contents and comments.
   record SourceSymbols,
     exports : Array(String),
-    references : Array(String)
+    references : Array(String),
+    method_calls : Array(String)
 
   class SourceSymbolExtractor
     def self.extract(source : String) : SourceSymbols
@@ -18,11 +19,12 @@ module TreeSitter
 
       exports = Set(String).new
       references = Set(String).new
+      method_calls = Set(String).new
 
       collect_declaration_exports(root, exports)
-      collect(root, exports, references)
+      collect(root, exports, references, method_calls)
 
-      SourceSymbols.new(exports.to_a.sort, references.to_a.sort)
+      SourceSymbols.new(exports.to_a.sort, references.to_a.sort, method_calls.to_a.sort)
     end
 
     private def self.collect_declaration_exports(root : Node, exports : Set(String)) : Nil
@@ -33,7 +35,12 @@ module TreeSitter
       end
     end
 
-    private def self.collect(node : Node, exports : Set(String), references : Set(String)) : Nil
+    private def self.collect(
+      node : Node,
+      exports : Set(String),
+      references : Set(String),
+      method_calls : Set(String),
+    ) : Nil
       case node.type
       when "constant"
         add_constant(references, node.text)
@@ -49,10 +56,17 @@ module TreeSitter
             add_constant(exports, text.split("::").first)
           end
         end
+      when "call"
+        if node.child_by_field_name("receiver")
+          if method = node.child_by_field_name("method")
+            name = method.text
+            method_calls << name if name.in?("sum", "min", "max")
+          end
+        end
       end
 
       node.each_named_child do |child|
-        collect(child, exports, references)
+        collect(child, exports, references, method_calls)
       end
     end
 

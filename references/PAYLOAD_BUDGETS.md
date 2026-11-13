@@ -26,10 +26,12 @@ Fixtures:
   `Mochi.fetch`, making the network adapter part of its initial load.
 
 Every fixture is compiled twice in separate temporary roots. The script
-requires byte-identical file sets and SHA-256 hashes for both builds. A generic
-capability membership check compares each adapter's initial membership with
-the initial dependency closure of its declared Ruby packages, so unused
-adapters stay out of the initial load and used adapters are present.
+requires byte-identical file sets and SHA-256 hashes for both builds. Every
+fixture receives the same file-integrity and capability membership checks.
+Fixture expectations independently require no capabilities in minimal,
+formatting only in the later feature load, and network in the network entry
+closure. The audit checks both adapters and their declared Ruby packages.
+A negative check moves formatting into the entry closure and must fail.
 
 The compiler copies the current runtime artifacts:
 
@@ -50,15 +52,70 @@ initial dependency closure. This makes `components/format-badge.json`,
 
 ## Baselines
 
-Measured 2026-11-12 on the repository toolchain:
+Measured 2026-11-13 on the repository toolchain, after rebuilding compiler and
+WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 416,678 | 139,457 | 3 |
-| Minimal initial | 419,218 | 140,713 | 7 |
-| Feature initial | 420,025 | 140,898 | 7 |
-| Later feature load | 13,618 | 4,475 | 4 |
-| Feature total | 433,643 | 145,373 | 11 |
+| Core runtime | 456,592 | 149,089 | 3 |
+| Minimal initial | 460,270 | 150,795 | 7 |
+| Feature initial | 461,107 | 150,983 | 7 |
+| Later feature load | 14,236 | 4,601 | 4 |
+| Feature total | 475,343 | 155,584 | 11 |
+| Network initial | 465,405 | 152,293 | 8 |
+| Network total | 465,405 | 152,293 | 8 |
+
+### Intentional budget update
+
+The previous recorded core ceiling was 416,678 raw / 139,457 gzip bytes.
+The current core grows by 39,914 raw / 9,632 gzip bytes. This refresh includes
+the already implemented capacity, callback, global-event, and numeric contracts
+in the shared worktree; it is not all new E5.S3 code:
+
+| Core artifact | Previous raw / gzip | Current raw / gzip | Raw / gzip delta |
+| --- | ---: | ---: | ---: |
+| WASM | 186,160 / 85,371 | 195,703 / 88,833 | +9,543 / +3,462 |
+| JS glue | 62,944 / 17,568 | 63,170 / 17,609 | +226 / +41 |
+| Loader | 167,574 / 36,518 | 197,719 / 42,647 | +30,145 / +6,129 |
+
+The numeric rounding additions account for 145 raw / 78 gzip WASM bytes over
+the previously measured shared-worktree artifact. That increment handles
+binary64 half ties and subnormal negative-precision floor/ceil correctly, and
+distinguishes finite signed-64 conversion overflow from non-finite Float
+errors. The bounded operations stay in numeric VM dispatch; they add no
+optional package or formatting adapter.
+
+E4.S1 correctness refinements add 1,022 raw / 488 gzip bytes over the preceding
+455,570 / 148,601 core snapshot. WASM changes from 194,894 / 88,428 to
+195,703 / 88,833 (+809 / +405) for bounded, lossless event-payload validation
+and Ruby statement ordering across native publications and Goose subscription
+commands. The loader changes from 197,506 / 42,564 to 197,719 / 42,647
+(+213 / +83) to retain pending subscriptions until ready and renew reused VM
+instance ownership. These checks share the existing global-event bridge;
+no event helper package, adapter, or new buffer is loaded by unused apps.
+Entry metadata and later capability artifacts are unchanged.
+
+The VM now reports named capacity failures and rejects incomplete bridge
+output, publishes compiled profile identity, supports explicit global-event
+subscriptions, and includes bounded numeric rounding/precision operations.
+The glue exposes the corresponding bridge exports. The loader validates
+profile identity and adapter limits, drops failed callback outboxes, and owns
+explicit event subscriptions, bounded queues, reentrant delivery, and mount
+cleanup. Those shared bridge/lifetime rules belong in core. The optional
+formatting and network implementations still remain outside unused entry
+closures.
+
+The E5.S3 loader validation alone changed its then-current loader from
+196,635 → 197,506 raw bytes and 42,312 → 42,564 gzip bytes: +871 / +252.
+It rejects oversized tables, JSON envelope expansion (including metadata),
+and concurrent response reservations before an adapter becomes ready.
+
+The minimal manifest grows from 500 / 233 to 1,638 / 683 bytes for the normalized
+compiled capacity profile and fingerprint. Feature-only metadata adds a further
+837 / 188 bytes over minimal. The later formatting adapter grows by 618 / 126
+bytes to enforce its build-selected cache limit without a runtime default;
+its Ruby package and component artifacts are unchanged. Network now has its
+own exact raw/gzip gates instead of escaping byte accounting.
 
 The current baseline includes the opt-in routing contract and core storage
 subscriptions. The loader owns one structured route state, push/replace history,
@@ -81,8 +138,7 @@ share the existing `Mochi.emit` host path. The loader owns FIFO ordering,
 subscriber snapshots, queue limits, and disposal; no optional Ruby helper
 package is added to an unused application's load. This is unavoidable core
 cost for preventing accidental broadcast and unbounded callback recursion.
-The existing raw and gzip ceilings still apply to the core runtime and must
-include this loader/bridge code after the payload audit can rebuild the fixture.
+The refreshed raw and gzip ceilings include this loader/bridge code.
 
 The fetch lifecycle work adds 3,616 raw bytes and 730 gzip bytes to the
 previous routing/storage baseline. This measured growth is in `mochi-loader.js`:
@@ -99,39 +155,63 @@ Core runtime:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 186,160 | 85,371 |
-| `mochi-gvm.js` | 62,944 | 17,568 |
-| `mochi-loader.js` | 167,574 | 36,518 |
+| `mochi-gvm.wasm` | 199,669 | 90,365 |
+| `mochi-gvm.js` | 63,170 | 17,609 |
+| `mochi-loader.js` | 197,719 | 42,647 |
+
+The current VM build is 3,966 raw / 1,532 gzip bytes above the previous
+recorded core baseline. The shared update includes bounded aggregate block
+dispatch and string comparison needed by `Array#sum`, `min`, and `max`, along
+with the concurrent event-delivery work in the checkout, so that combined
+increment cannot be assigned to E6.S2 alone. The aggregate Ruby methods live
+in an optional package and are excluded from apps that do not call them; the
+core cost supplies one-pass block execution, checked numeric accumulation, and
+Ruby ordering for Strings without adding a general Enumerable runtime.
 
 Minimal initial:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
 | `index.html` | 170 | 132 |
-| `mochi-manifest.json` | 500 | 233 |
+| `mochi-manifest.json` | 1,638 | 683 |
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
+
+The resulting complete core is 460,558 / 150,621 raw / gzip bytes. Minimal
+initial is 464,236 / 152,327; formatting feature initial is 465,073 / 152,515;
+formatting feature total is 479,309 / 157,116; and network initial/total is
+469,371 / 153,825. These current measurements are enforced by the JSON budget.
 
 Feature initial adds only manifest metadata:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-manifest.json` | 1,307 | 418 |
+| `mochi-manifest.json` | 2,475 | 871 |
 
-The feature manifest is 807 raw bytes and 185 gzip bytes larger than the
+The feature manifest is 837 raw bytes and 188 gzip bytes larger than the
 minimal manifest. This is capability metadata, not the adapter implementation.
 
 Later feature load:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-format.js` | 10,578 | 3,022 |
+| `mochi-format.js` | 11,196 | 3,148 |
 | `components/format-badge.chi` | 284 | 235 |
 | `components/format-badge.json` | 662 | 359 |
 | `components/ruby-*.chi` | 2,094 | 859 |
 
 The exact Ruby package digest is checkout independent and is asserted by the
 manifest audit.
+
+Network initial adds these files to core:
+
+| File | Raw | Gzip |
+| --- | ---: | ---: |
+| `index.html` | 176 | 135 |
+| `mochi-manifest.json` | 1,960 | 764 |
+| `components/network-panel.chi` | 418 | 287 |
+| `components/network-panel.json` | 633 | 343 |
+| `mochi-fetch.js` | 5,626 | 1,675 |
 
 ## Ceilings
 
@@ -144,8 +224,8 @@ manifest audit.
   growth.
 - The script also rejects unexpected files, missing referenced files, duplicate
   package/resource files, and initial/later set overlap.
-- An exclusion self-check injects the real `mochi-format.js` and an orphan
-  stylesheet into a copied minimal bundle. The audit must reject both.
+- Exclusion self-checks inject the real formatting/network adapters and an
+  orphan stylesheet into copied minimal bundles. The audit must reject each.
 
 Update a budget only for an intentional artifact change. State whether the
 cost belongs to the core runtime, entry component, or later feature load.

@@ -77,6 +77,7 @@ module MochiPackaging
     getter line_offset : Int32
     getter exports : Array(String)
     getter references : Array(String)
+    getter method_calls : Array(String)
     getter component : MochiComponent?
     getter helper : HelperUnit?
     property dependencies : Array(String)
@@ -99,6 +100,7 @@ module MochiPackaging
       @dependencies : Array(String) = [] of String,
       @resources : Array(String) = [] of String,
       @capabilities : Array(String) = [] of String,
+      @method_calls : Array(String) = [] of String,
     )
     end
 
@@ -200,7 +202,8 @@ module MochiPackaging
         source.source,
         1,
         symbols.exports,
-        symbols.references
+        symbols.references,
+        method_calls: symbols.method_calls
       )
     end
 
@@ -217,7 +220,8 @@ module MochiPackaging
         1,
         symbols.exports,
         symbols.references,
-        helper: helper
+        helper: helper,
+        method_calls: symbols.method_calls
       )
     end
 
@@ -238,7 +242,8 @@ module MochiPackaging
         exports.uniq.sort,
         symbols.references,
         component: component,
-        resources: component.manifest.style_resource_ids.dup
+        resources: component.manifest.style_resource_ids.dup,
+        method_calls: symbols.method_calls
       )
     end
 
@@ -315,6 +320,10 @@ module MochiPackaging
         resolve_constants(node, export_index)
         if node.component?
           resolve_component_tags(node)
+        end
+        collections_id = self.class.ruby_package_id("lib/mochi_builtin_collections.rb")
+        if @packages.has_key?(collections_id) && node.method_calls.any? { |name| name.in?("sum", "min", "max") }
+          node.dependencies << collections_id unless node.id == collections_id
         end
         node.dependencies = node.dependencies.reject(&.==(node.id)).uniq.sort
       end

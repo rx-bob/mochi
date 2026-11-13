@@ -12,6 +12,12 @@ The loader freezes that limit map and passes it to adapter operations; adapters
 must reject missing limits instead of silently falling back to a larger
 runtime default. Configuration validation checks JSON/base64 expansion and
 concurrent reservations before a capability can be built.
+Bootstrap also checks declared adapters against that exact profile, rejects
+missing/unknown limits and unsupported table sizes, and verifies network JSON
+expansion plus concurrent response reservations before loading adapter code.
+The installed limit map is an immutable copy, including when multiple mounts
+share one adapter load. File/drag relationships remain compiler validation;
+their optional implementations own their eventual readers and event state.
 
 Global Ruby event delivery uses `host_event_queue_entries` as both its queued
 recipient limit and per-chain delivery limit for one synchronous drain.
@@ -95,3 +101,54 @@ The standalone WASM build reads profile metadata from the current generated
 header when writing its companion JSON. Metadata is no longer compiled into the
 build tool's cached native sidecar, which could otherwise reuse an older profile
 while emcc built the new one.
+
+## E5.S2 validation — 2026-11-13
+
+The focused browser suites pass all 42 checks across Chromium, Firefox, and
+WebKit. They compile Ruby fixtures against the real VM, including independent
+object, byte, slot, component, binding, patch, emit, fetch and host-command
+failures. Every rejected workload is followed by valid work, with rejected host
+requests absent from the network and storage. The 540-row default and both
+512-object profiles have the outcomes described above.
+
+The VM suite passes 184 tests (17,951 assertions), including scratch ivar and
+state reclamation, numerical overflow diagnostics, rejected bytecode loading,
+failed JSON/prop decoding and atomic rejection of a multi-binding patch batch.
+The runtime suite passes 145 tests; the capacity compiler specs pass three
+examples. All 29 source/test mirrors match. New modules and entry-lifecycle
+changes pass goosefmt. Existing file/function-size lint violations remain in
+`abi.goose`, `json_args.goose` and `signals.goose`.
+
+The existing standalone compile-time gate passes all 15 minimal-app cold, warm
+and edited builds below one second. The broader app gate requires a Cowboy
+checkout and was not used as story acceptance.
+
+Payload membership/determinism checks reach the byte-ceiling gate, which remains
+red: current core is 451,657 raw / 147,087 gzip bytes versus the recorded 416,678
+raw ceiling. A control using the retained earlier VM build and committed loader
+also exceeds that ceiling (450,579 raw / 146,798 gzip). The standalone WASM
+change is 191,441 → 192,505 raw bytes and 87,092 → 87,363 gzip bytes; its JS glue
+remains 63,170 raw / 17,609 gzip. The extra VM bytes enforce named capacity
+rejection, preserve the first failure and prevent partial output. No payload
+budget was increased to hide the existing full-checkout gap.
+
+## E5.S3 validation — 2026-11-13
+
+All 148 runtime tests pass, including missing/invalid bootstrap limits,
+immutable lowered limits shared by concurrent mounts, missing registration,
+and adapter retry. Four capacity compiler examples cover serialized metadata,
+JSON/base64 expansion and concurrent file/network reservations; 11 package
+graph examples cover optional membership and checkout-independent identities.
+
+The independent Ruby browser fixture passes Chromium, Firefox and WebKit.
+Before a capability component mounts, neither its adapter nor its Ruby package
+is requested. Concurrent formatting/network mounts each request their adapter
+and bytecode once, and the network callbacks return the expected result.
+
+The payload audit now validates all three fixtures with shared integrity and
+explicit membership expectations, tests rejection of accidental eager loading,
+and gates network bytes as well as minimal/formatting bytes. Repeated builds
+remain byte-identical across temporary roots. The earlier E5.S2 ceiling failure
+is resolved by the measured, explained budget refresh in
+[PAYLOAD_BUDGETS.md](PAYLOAD_BUDGETS.md); raw ceilings remain exact and gzip
+tolerance is unchanged.

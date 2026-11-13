@@ -6,7 +6,6 @@ import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { setupConsoleLogging } from "./test_utils";
 
-test.use({ channel: "chrome" });
 test.describe.configure({ mode: "serial" });
 
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -40,7 +39,7 @@ class EmitSource
   def fire
     Mochi.emit("ping")
     Mochi.emit("select", id: "tr_9f2a")
-    Mochi.emit("targeted", id: "tr_7", target: "emit-listener")
+    Mochi.emit("targeted", id: "tr_7")
   end
 end
 `);

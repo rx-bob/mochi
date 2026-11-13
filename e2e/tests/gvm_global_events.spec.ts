@@ -187,6 +187,53 @@ class CycleB
 end
 `);
 
+  fs.writeFileSync(path.join(lib, "EventContractProbe.rb"), `
+class EventContractProbe
+  @tag_name = "event-contract-probe"
+  def initialize
+    @calls = 0
+    @initial_calls = 0
+    Mochi.subscribe("initial_notice", :receive_initial)
+  end
+  def html
+    %Q{<button class="initial" onclick="{publish_initial}">Initial</button><button class="start" onclick="{start}">Start</button><button class="stop" onclick="{stop}">Stop</button><button class="shape" onclick="{bad_shape}">Shape</button><button class="object" onclick="{bad_object}">Object</button><button class="cycle" onclick="{bad_cycle}">Cycle</button><button class="number" onclick="{bad_number}">Number</button><p class="calls">{@calls}</p><p class="initial-calls">{@initial_calls}</p>}
+  end
+  def publish_initial
+    Mochi.emit("initial_notice", ok: true)
+  end
+  def receive_initial(payload)
+    @initial_calls = @initial_calls + 1
+  end
+  def start
+    Mochi.subscribe("ordered_notice", :receive)
+    Mochi.subscribe("ordered_notice", :receive)
+    Mochi.emit("ordered_notice", ok: true)
+  end
+  def stop
+    Mochi.unsubscribe("ordered_notice", :receive)
+    Mochi.emit("ordered_notice", ok: true)
+  end
+  def receive(payload)
+    @calls = @calls + 1
+  end
+  def bad_shape
+    Mochi.emit("ordered_notice", false)
+  end
+  def bad_object
+    Mochi.emit("ordered_notice", ok: true)
+    Mochi.emit("ordered_notice", value: self)
+  end
+  def bad_cycle
+    payload = {}
+    payload[:cycle] = payload
+    Mochi.emit("ordered_notice", payload)
+  end
+  def bad_number
+    Mochi.emit("ordered_notice", value: 1.0 / 0.0)
+  end
+end
+`);
+
   fs.writeFileSync(path.join(projectDir, "index.html"), `
 <!doctype html>
 <html><head><meta charset="utf-8"><script src="mochi-loader.js"></script></head>
@@ -264,23 +311,7 @@ test("Ruby global events reach explicit live subscribers with exact payload valu
   const first = page.locator("#first");
   const second = page.locator("#second");
   const unregistered = page.locator("#unregistered");
-  await page.evaluate(() => {
-    (window as any).__outboxes = [];
-    const element = document.querySelector("#publisher") as any;
-    const module = element._mochiModule;
-    const clear = module._mochi_emit_outbox_clear.bind(module);
-    module._mochi_emit_outbox_clear = () => {
-      const offset = module._mochi_emit_outbox_offset();
-      const length = module._mochi_emit_outbox_len();
-      (window as any).__outboxes.push(new TextDecoder().decode(module.HEAPU8.subarray(offset, offset + length)));
-      return clear();
-    };
-  });
   await publisher.locator("button").click();
-  console.log("DEBUG emit", await page.evaluate(() => ({
-    outboxes: (window as any).__outboxes,
-    stats: (window as any).MochiLoader.debugStats(),
-  })));
   await expect(publisher.locator(".publishes")).toHaveText("1");
   await expect(first.locator(".deliveries")).toHaveText("1");
   await expect(second.locator(".deliveries")).toHaveText("1");
@@ -301,6 +332,49 @@ test("Ruby global events reach explicit live subscribers with exact payload valu
   await expect(first.locator(".deliveries")).toHaveText("1");
   await expect(unregistered.locator(".calls")).toHaveText("0");
   expect(errors).toEqual([]);
+});
+
+test("Ruby initialization subscriptions and publication preserve statement order", async ({ page }) => {
+  await page.goto(`${baseURL}/index.html`);
+  await waitForInitialComponents(page);
+  await page.evaluate(() => document.body.appendChild(document.createElement("event-contract-probe")));
+  const probe = page.locator("event-contract-probe");
+  await probe.evaluate((element: any) => element._mochiReady);
+  await probe.locator("button.initial").click();
+  await expect(probe.locator(".initial-calls")).toHaveText("1");
+  await probe.locator("button.start").click();
+  await expect(probe.locator(".calls")).toHaveText("1");
+  await probe.locator("button.stop").click();
+  await expect(probe.locator(".calls")).toHaveText("1");
+  await probe.locator("button.start").click();
+  await expect(probe.locator(".calls")).toHaveText("2");
+});
+
+test("unsupported Ruby publications fail with source context and no partial delivery", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await page.goto(`${baseURL}/index.html`);
+  await waitForInitialComponents(page);
+  await page.evaluate(() => document.body.appendChild(document.createElement("event-contract-probe")));
+  const probe = page.locator("event-contract-probe");
+  await probe.evaluate((element: any) => element._mochiReady);
+  await probe.locator("button.start").click();
+  await expect(probe.locator(".calls")).toHaveText("1");
+  for (const [index, kind] of ["shape", "object", "cycle", "number"].entries()) {
+    await probe.locator(`button.${kind}`).click();
+    await expect(probe.locator(".calls")).toHaveText("1");
+    const errors = await page.evaluate(() => (window as any).__mochiErrors);
+    expect(errors).toHaveLength(index + 1);
+    expect(errors[index].message).toContain("Mochi.emit payload must be a bounded Hash");
+    expect(errors[index].method).toBe(`bad_${kind}`);
+    expect(errors[index].source).toMatch(/EventContractProbe\.rb:\d+/);
+  }
+  await probe.locator("button.start").click();
+  await expect(probe.locator(".calls")).toHaveText("2");
 });
 
 test("Ruby event loops stop at profile capacity and later events recover", async ({ page }) => {
@@ -389,7 +463,7 @@ test("two Ruby components stop an A-to-B-to-A event cycle at the profile bound",
     document.querySelector("#cycle-b-instance")?.remove();
   });
   await expect.poll(async () => (await page.evaluate(() => (window as any).MochiLoader.debugStats())).globalEventSubscribers)
-    .toBe(2);
+    .toBe(4);
 });
 
 test("unmounted and remounted components release and renew event subscriptions", async ({ page }) => {

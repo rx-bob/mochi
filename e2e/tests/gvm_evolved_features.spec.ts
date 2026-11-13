@@ -3588,7 +3588,7 @@ end
   }
 });
 
-test("GVM formatting host loads only when a formatting component mounts", async ({ page }) => {
+test("GVM capability hosts load once only when their components mount", async ({ page }) => {
   setupConsoleLogging(page);
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-format-lazy-"));
   const bundleDir = path.join(projectDir, "bundle");
@@ -3614,6 +3614,23 @@ class LazyFormat
   end
 end
 `);
+  fs.writeFileSync(path.join(projectDir, "lib", "LazyNetwork.rb"), `
+class LazyNetwork
+  @tag_name = "lazy-network"
+  def initialize
+    @body = "waiting"
+  end
+  def mounted
+    Mochi.fetch("/probe", :received)
+  end
+  def received(result)
+    @body = result["body"]
+  end
+  def html
+    %Q{<p class="network">{@body}</p>}
+  end
+end
+`);
   fs.writeFileSync(path.join(projectDir, "index.html"), `<!doctype html>
 <html>
   <head>
@@ -3635,9 +3652,10 @@ end
   const lazyManifest = JSON.parse(
     fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"),
   );
-  expect(lazyManifest.schema_version).toBe(2);
+  expect(lazyManifest.schema_version).toBe(3);
   expect(lazyManifest.format_host).toBe("mochi-format.js");
   expect(lazyManifest.capabilities.formatting.host).toBe("mochi-format.js");
+  expect(lazyManifest.capabilities.network.host).toBe("mochi-fetch.js");
   const plain = readComponentDescriptor(bundleDir, lazyManifest, "plain-panel");
   const lazy = readComponentDescriptor(bundleDir, lazyManifest, "lazy-format");
   expect(plain.formatting).toBeUndefined();
@@ -3646,26 +3664,37 @@ end
   const requested: string[] = [];
   page.on("request", (request) => requested.push(request.url()));
 
-  const { server, baseURL } = await startStaticServer(bundleDir);
+  const { server, baseURL } = await startStaticServer(bundleDir, {
+    apiHandler: (request, response) => {
+      if (request.url !== "/probe") return false;
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("loaded");
+      return true;
+    },
+  });
   try {
     await page.goto(`${baseURL}/index.html`);
     await expect(page.locator("plain-panel").locator("p.plain")).toHaveText("plain");
     expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(0);
+    expect(requested.filter((url) => url.endsWith("/mochi-fetch.js"))).toHaveLength(0);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-network.chi"))).toHaveLength(0);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-network.json"))).toHaveLength(0);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(0);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(0);
     expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(0);
 
     await page.evaluate(() => {
-      document.body.appendChild(document.createElement("lazy-format"));
+      document.body.append(document.createElement("lazy-format"), document.createElement("lazy-format"));
     });
-    await expect(page.locator("lazy-format").locator("p.lazy")).toHaveText("1,234.5");
+    await expect(page.locator("lazy-format").locator("p.lazy")).toHaveText(["1,234.5", "1,234.5"]);
+    expect(requested.filter((url) => url.endsWith("/mochi-fetch.js"))).toHaveLength(0);
     expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(1);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(1);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(1);
     expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(1);
 
     await page.evaluate(async () => {
-      document.querySelector("lazy-format")?.remove();
+      document.querySelectorAll("lazy-format").forEach((element) => element.remove());
       await new Promise((resolve) => setTimeout(resolve, 0));
       document.body.appendChild(document.createElement("lazy-format"));
     });
@@ -3673,6 +3702,13 @@ end
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.json"))).toHaveLength(1);
     expect(requested.filter((url) => url.endsWith("/components/lazy-format.chi"))).toHaveLength(1);
     expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(1);
+    await page.evaluate(() => {
+      document.body.append(document.createElement("lazy-network"), document.createElement("lazy-network"));
+    });
+    await expect(page.locator("lazy-network").locator("p.network")).toHaveText(["loaded", "loaded"]);
+    expect(requested.filter((url) => url.endsWith("/mochi-fetch.js"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-network.chi"))).toHaveLength(1);
+    expect(requested.filter((url) => url.endsWith("/components/lazy-network.json"))).toHaveLength(1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(projectDir, { recursive: true, force: true });

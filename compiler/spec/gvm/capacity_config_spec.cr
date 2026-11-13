@@ -48,6 +48,29 @@ describe CapacityConfig do
   ensure
     FileUtils.rm_rf(root) if root
   end
+
+  it "accounts for wire metadata and every concurrent reservation" do
+    {
+      "host_network_response_bytes" => {5_441_i64, /JSON envelope expansion/},
+      "host_file_chunk_bytes" => {48_961_i64, /base64 expansion/},
+      "host_file_whole_read_bytes" => {48_961_i64, /base64 expansion/},
+      "host_file_buffer_bytes" => {32_767_i64, /concurrent file chunks/},
+      "host_network_buffer_bytes" => {1_279_999_i64, /concurrent network responses/},
+      "host_drag_payload_bytes" => {1_323_i64, /JSON escaping/},
+    }.each do |name, boundary|
+      values = CapacityConfig::DEFAULTS.dup
+      values[name] = boundary[0]
+      expect_raises(Exception, boundary[1]) { CapacityConfig.new(values) }
+    end
+
+    values = CapacityConfig::DEFAULTS.dup
+    values["host_network_response_bytes"] = 5_440
+    values["host_network_buffer_bytes"] = 256 * 5_440
+    values["host_file_chunk_bytes"] = 48_960
+    values["host_file_whole_read_bytes"] = 48_960
+    values["host_file_buffer_bytes"] = 4 * 48_960
+    CapacityConfig.new(values)["host_file_buffer_bytes"].should eq(195_840)
+  end
 end
 
 describe CapacityArtifactBuilder do

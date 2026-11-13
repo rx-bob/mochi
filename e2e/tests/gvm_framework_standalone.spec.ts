@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { withFrameworkProject } from "./framework_helpers";
+import { setupConsoleLogging } from "./test_utils";
 
 test("compiled Ruby child props update through an interactive parent", async ({ page }) => {
   const pageErrors: string[] = [];
@@ -25,6 +26,116 @@ test("compiled Ruby child props update through an interactive parent", async ({ 
 
   expect(pageErrors).toEqual([]);
   expect(mochiErrors).toEqual([]);
+});
+
+test("numeric rounding works in initialization, helpers, events, and bindings", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  setupConsoleLogging(page, { expectedMochiErrors: true });
+  await page.addInitScript(() => {
+    (window as any).__numericErrors = [];
+    document.addEventListener("mochi:error", (event) => {
+      (window as any).__numericErrors.push((event as CustomEvent).detail);
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const capabilityPackages = await page.evaluate(async () => {
+      const manifest = await (await fetch("mochi-manifest.json")).json();
+      return Object.keys(manifest.packages).filter((name) => name.startsWith("capability:"));
+    });
+    expect(capabilityPackages).toEqual([]);
+    const root = page.locator("numeric-contracts-root");
+    await expect(root.locator(".integer-round")).toHaveText("-2");
+    await expect(root.locator(".float-round")).toHaveText("1.3");
+    await expect(root.locator(".float-type")).toHaveText("2.0");
+    await expect(root.locator(".negative-floor")).toHaveText("-1.3");
+    await expect(root.locator(".initial-value")).toHaveText("-3");
+    await expect(root.locator(".helper-round")).toHaveText("2");
+    await expect(root.locator(".event-value")).toHaveText("0");
+    await root.locator("button.invalid").click();
+    const runtimeErrors = await page.evaluate(() => (window as any).__numericErrors);
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0].phase).toBe("event");
+    expect(runtimeErrors[0].method).toBe("invalid_value");
+    expect(runtimeErrors[0].source).toMatch(/NumericContractsRoot\.rb:\d+/);
+    await root.locator("button.update").click();
+    await expect(root.locator(".event-value")).toHaveText("-1.3");
+    expect(await page.evaluate(() => (window as any).__numericErrors)).toHaveLength(1);
+  }, "<numeric-contracts-root></numeric-contracts-root>");
+
+  expect(errors).toEqual([]);
+});
+
+test("Array sum, min, and max work through helper, block, event, and binding calls", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    (window as any).__collectionErrors = [];
+    window.addEventListener("mochi:error", (event) => {
+      (window as any).__collectionErrors.push((event as CustomEvent).detail);
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("collection-contracts-root");
+    await expect(root.locator(".sum")).toHaveText("6");
+    await expect(root.locator(".minimum")).toHaveText("1");
+    await expect(root.locator(".maximum")).toHaveText("3");
+    await expect(root.locator(".helper-sum")).toHaveText("22");
+    await expect(root.locator(".helper-min")).toHaveText("3");
+    await expect(root.locator(".event-value")).toHaveText("0");
+    await root.locator("button.update").click();
+    await expect(root.locator(".event-value")).toHaveText("1");
+    expect(await page.evaluate(() => (window as any).__collectionErrors)).toEqual([]);
+  }, "<collection-contracts-root></collection-contracts-root>");
+
+  expect(errors).toEqual([]);
+});
+
+test("Array aggregators work through helpers, blocks, bindings, and events", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  setupConsoleLogging(page, { expectedMochiErrors: true });
+  await page.addInitScript(() => {
+    (window as any).__aggregationErrors = [];
+    document.addEventListener("mochi:error", (event) => {
+      (window as any).__aggregationErrors.push((event as CustomEvent).detail);
+    });
+  });
+
+  await withFrameworkProject(async (baseURL) => {
+    await page.goto(`${baseURL}/index.html`);
+    const root = page.locator("aggregation-contracts-root");
+    const manifest = await page.evaluate(async () => (await (await fetch("mochi-manifest.json")).json()));
+    expect(Object.keys(manifest.packages)).toContain("ruby:lib/mochi_builtin_collections.rb");
+    expect(Object.keys(manifest.packages).some((name: string) => name.startsWith("capability:"))).toBe(false);
+    await expect(root.locator(".sum")).toHaveText("6");
+    await expect(root.locator(".empty-sum")).toHaveText("0");
+    await expect(root.locator(".initial-sum")).toHaveText("11");
+    await expect(root.locator(".mixed-sum")).toHaveText("3.0");
+    await expect(root.locator(".block-sum")).toHaveText("12");
+    await expect(root.locator(".minimum")).toHaveText("-4");
+    await expect(root.locator(".maximum")).toHaveText("3");
+    await expect(root.locator(".string-minimum")).toHaveText("apple");
+    await expect(root.locator(".string-maximum")).toHaveText("plum");
+    await expect(root.locator(".event-total")).toHaveText("0");
+
+    await root.locator("button.incompatible").click();
+    const runtimeErrors = await page.evaluate(() => (window as any).__aggregationErrors);
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0].phase).toBe("event");
+    expect(runtimeErrors[0].method).toBe("incompatible_minimum");
+    expect(runtimeErrors[0].source).toMatch(/AggregationContractsRoot\.rb:\d+/);
+
+    await root.locator("button.update").click();
+    await expect(root.locator(".event-total")).toHaveText("10");
+    expect(await page.evaluate(() => (window as any).__aggregationErrors)).toHaveLength(1);
+  }, "<aggregation-contracts-root></aggregation-contracts-root>");
+
+  expect(errors).toEqual([]);
 });
 
 test("row attributes and handlers keep the current lexical scope through updates", async ({ page }) => {

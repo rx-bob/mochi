@@ -348,12 +348,28 @@ observable range. Ruby `Float` is a binary64 value, including `Infinity` and
 division: `1 / 2` is `0`, while `1.0 / 2` is `0.5`. Mixed comparisons and
 arithmetic promote the integer operand to `Float`.
 
+Arrays support `sum`, `min`, and `max`, including block forms, through a small
+optional Ruby package. Apps that do not call these methods do not load it. See
+the [supported Ruby surface](references/RUBY_SURFACE.md#array-aggregation) for
+comparison rules and VM limits.
+
 Checked integer overflow, integer division by zero, and unsupported numeric
 operations stop the entry with a `mochi:error` instead of wrapping or
 truncating. The error names `integer overflow`, `division by zero`, or
 `type mismatch` and includes the Ruby method's source location. Floating-point
 division by zero follows IEEE 754 and produces `Infinity` or `NaN`, matching
 Ruby.
+
+`Integer` and `Float` support `round`, `floor`, and `ceil` with optional decimal
+precision from -18 through 18. `round` accepts `half: :up` (default),
+`half: :down`, or `half: :even`. Positive precision on a Float returns Float;
+zero or negative precision returns Integer. Integer precision at zero or above
+keeps the Integer unchanged. Float rounding stays in binary64 and is not an
+exact decimal or money operation. Unsupported precision and rounding modes
+raise a source-located VM error; non-finite Float conversion at zero or negative
+precision raises a Float-domain error, and results outside the signed 64-bit
+range raise integer overflow. See the [supported Ruby surface](references/RUBY_SURFACE.md#numeric-rounding)
+for exact overloads and examples.
 
 Values crossing the browser boundary keep exact integers above JavaScript's
 2^53 exact-number range. Props and child-event payloads use a typed number
@@ -747,6 +763,10 @@ end
 def stop_listening
   Mochi.unsubscribe("profile_opened", :receive_profile)
 end
+
+def receive_profile(payload)
+  @profile_id = payload[:id]
+end
 ```
 
 Duplicate registration for the same component, event, and receiver is
@@ -755,6 +775,19 @@ disposed. A method receives nothing just because its name matches a published
 event; it runs only when registered. `Mochi.emit` no longer broadcasts
 `mochi:action` DOM events or supports `target:` filtering. See
 [API migrations](references/API_MIGRATIONS.md#global-events) for migration.
+
+Subscriptions made in `initialize` or `mounted` belong to that mount. They
+receive publications only once the component is ready; earlier publications
+are skipped without removing the subscription and are not replayed. A failed
+mount removes its registrations. Within one Ruby handler, subscribe, emit, and
+unsubscribe take effect in statement order; explicit self-subscription works
+the same way as subscribing another instance.
+
+Payloads are Hashes with String/Symbol keys and nested arrays, hashes, strings,
+symbols, finite numbers, booleans, or nil. Signed 64-bit integers remain exact.
+Objects, non-finite numbers, cycles, excessive nesting (over 16 levels), and
+payloads exceeding the compiled transport bound fail with Ruby source context
+before delivery. A failed handler's pending publications are discarded.
 
 ### Component lifecycle
 

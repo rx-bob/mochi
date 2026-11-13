@@ -364,6 +364,53 @@ RUBY
     end
   end
 
+  it "loads Array aggregation bytecode for direct and helper sends only" do
+    root = File.join(Dir.tempdir, "mochi_package_aggregates_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      collections = dependency_prelude(root, "lib/mochi_builtin_collections.rb", <<-RUBY)
+class Array
+  def sum(initial = 0)
+    initial
+  end
+end
+RUBY
+      plain = dependency_component(root, "plain-aggregate", "PlainAggregate", "class PlainAggregate\nend\n")
+      direct = dependency_component(root, "direct-aggregate", "DirectAggregate", <<-RUBY)
+class DirectAggregate
+  def total(values)
+    values.sum(5)
+  end
+end
+RUBY
+      helper = dependency_helper(root, "mochi-helpers-aggregate.chi", "lib/aggregate_helper.rb", <<-RUBY)
+class AggregateHelper
+  def self.lowest(rows)
+    rows.min
+  end
+end
+RUBY
+      indirect = dependency_component(root, "indirect-aggregate", "IndirectAggregate", <<-RUBY)
+class IndirectAggregate
+  def lowest(rows)
+    AggregateHelper.lowest(rows)
+  end
+end
+RUBY
+      indirect.manifest.helper_chi = helper.key
+
+      graph = dependency_graph(root, [plain, direct, indirect], [collections], [helper])
+      collection_id = "ruby:lib/mochi_builtin_collections.rb"
+      direct.manifest.dependencies.should contain(collection_id)
+      graph.package("helper:lib/aggregate_helper.rb").not_nil!.dependencies.should contain(collection_id)
+      indirect.manifest.dependencies.should contain("helper:lib/aggregate_helper.rb")
+      plain.manifest.dependencies.should_not contain(collection_id)
+      plain.manifest.dependencies.should eq([] of String)
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "rebuilds identical package identities, dependencies, and order across checkout paths" do
     root_one = File.join(Dir.tempdir, "mochi_package_reproducible_one_#{Random.rand(1_000_000)}")
     root_two = File.join(Dir.tempdir, "mochi_package_reproducible_two_#{Random.rand(1_000_000)}")

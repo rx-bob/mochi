@@ -2633,6 +2633,47 @@ test("global events reach only registered instances and unsubscribe removes one 
   assert.equal(loader.debugStats().globalEventSubscribers, 0);
 });
 
+test("publications during mount preserve pending subscriptions without calling them", async () => {
+  const { loader, module, log } = await setup([COMPONENT]);
+  log.methods.add("receive");
+  log.requiredArgs.set("receive", 1);
+  const publisher = document.createElement("my-counter");
+  document.body.appendChild(publisher);
+  await publisher._mochiReady;
+  const receiver = document.createElement("my-counter");
+  let pendingChecked = false;
+  log.onDispatch = (name, instance) => {
+    if (name !== "mounted") return;
+    module.queueEmit([
+      { __host: "event_subscribe", event: "notice", callback: "receive", instance },
+      { __host: "event_subscribe", event: "notice", callback: "receive", instance },
+      { __host: "event_publish", event: "notice", payload: { phase: "mounting" } },
+    ].map(JSON.stringify).join("\n") + "\n");
+    publisher._dispatchAction("increment");
+    assert.equal(receiver._mochiMountState, "mounting");
+    assert.equal(log.dispatchedArgs.length, 0);
+    assert.equal(loader.debugStats().globalEventSubscribers, 1);
+    pendingChecked = true;
+  };
+  document.body.appendChild(receiver);
+  await receiver._mochiReady;
+  assert.equal(pendingChecked, true);
+  assert.equal(log.dispatchedArgs.length, 0);
+  module.queueEmit('{"__host":"event_publish","event":"notice","payload":{"phase":"ready"}}\n');
+  publisher._dispatchAction("increment");
+  assert.deepEqual(log.dispatchedArgs.map((entry) => entry.args), [[{ phase: "ready" }]]);
+  receiver.remove();
+  await flushLifecycle();
+  assert.equal(loader.debugStats().globalEventSubscribers, 0);
+  module.reuseInstance(2);
+  pendingChecked = false;
+  log.dispatchedArgs.length = 0;
+  document.body.appendChild(receiver);
+  await receiver._mochiReady;
+  assert.equal(pendingChecked, true);
+  assert.equal(loader.debugStats().globalEventSubscribers, 1);
+});
+
 test("child events route to their exact parent instance with typed payloads", async () => {
   const { module, log } = await setup([EVENT_PARENT_COMPONENT, EMITTER_COMPONENT]);
   log.methods.add("choose");
@@ -5935,6 +5976,75 @@ test("manifest capability limits must match the compiled host profile", async ()
     setup([FORMAT_COMPONENT], { manifest: base }),
     /limit 'cache_entries' does not match compiled capacity 'host_format_cache_entries'/
   );
+});
+
+test("bootstrap rejects missing, nonpositive, and unknown adapter limits before loading", async () => {
+  for (const limits of [undefined, {}, { cache_entries: 0 }, { cache_entries: 32, extra: 1 }]) {
+    const base = manifest([FORMAT_COMPONENT]);
+    base.capabilities = {
+      formatting: { version: 1, host: "mochi-format.js", operations: { format: "sync" }, limits },
+    };
+    let requests = 0;
+    await assert.rejects(setup([FORMAT_COMPONENT], {
+      manifest: base,
+      hostModuleFactory: async () => { requests += 1; return formatAdapter(); },
+    }), /no host limits|does not match compiled capacity|unknown host limits/);
+    assert.equal(requests, 0);
+  }
+});
+
+test("bootstrap validates network wire expansion and concurrent reservations", async () => {
+  for (const [overrides, error] of [
+    [{ host_network_response_bytes: 6000 }, /JSON expansion and metadata/],
+    [{ host_network_buffer_bytes: 1000000 }, /concurrent responses/],
+    [{ host_network_pending_requests: 65536 }, /16-bit table capacity/],
+    [{ host_network_response_bytes: 2147483648 }, /capacity profile/],
+  ]) {
+    const base = manifest([COMPONENT]);
+    const capacities = { ...TEST_HOST_CAPACITIES, ...overrides };
+    base.capacity_profile = { ...base.capacity_profile, capacities };
+    base.capabilities = {
+      network: {
+        version: 1, host: "mochi-fetch.js", operations: { fetch: "async", cancel: "sync" },
+        limits: {
+          pending_requests: capacities.host_network_pending_requests,
+          response_bytes: capacities.host_network_response_bytes,
+          response_buffer_bytes: capacities.host_network_buffer_bytes,
+          envelope_bytes: capacities.host_fetch_envelope_bytes,
+        },
+      },
+    };
+    await assert.rejects(setup([COMPONENT], { manifest: base }), error);
+  }
+});
+
+test("concurrent adapters receive immutable lowered build limits", async () => {
+  const base = manifest([FORMAT_COMPONENT]);
+  base.capacity_profile = {
+    ...base.capacity_profile,
+    capacities: { ...TEST_HOST_CAPACITIES, host_format_cache_entries: 2 },
+  };
+  base.capabilities = {
+    formatting: {
+      version: 1, host: "mochi-format.js", operations: { format: "sync" },
+      limits: { cache_entries: 2 },
+    },
+  };
+  let requests = 0;
+  const { module } = await setup([FORMAT_COMPONENT], {
+    manifest: base,
+    runtimeCapacityProfile: base.capacity_profile,
+    hostModuleFactory: async () => { requests += 1; return formatAdapter(); },
+  });
+  const elements = [document.createElement("format-panel"), document.createElement("format-panel")];
+  document.body.append(...elements);
+  await Promise.all(elements.map((element) => element._mochiReady));
+  base.capabilities.formatting.limits.cache_entries = 100;
+  const limits = module.__mochiHostCapabilities.formatting.limits;
+  assert.equal(requests, 1);
+  assert.equal(limits.cache_entries, 2);
+  assert.ok(Object.isFrozen(limits));
+  assert.equal(Reflect.set(limits, "cache_entries", 100), false);
 });
 
 test("manifest capability adapters must be local artifacts", async () => {

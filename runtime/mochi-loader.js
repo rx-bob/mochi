@@ -548,7 +548,8 @@
     if (!eventName || eventName.length > 128 || !callback || callback.length > 128 || !instance) return;
     var element = state.elements.get(instance);
     if (!element || element._mochiDisconnected || element._mochiUnmounted ||
-        element._mochiMountState !== "mounted" || String(element._mochiInstance) !== instance ||
+        (element._mochiMountState !== "mounted" && element._mochiMountState !== "mounting") ||
+        String(element._mochiInstance) !== instance ||
         state.unmountedInstances.has(instance)) return;
     if (!hasMethod(module, element._mochiInstance, callback)) {
       reportError(element, "event", callback,
@@ -688,12 +689,14 @@
       if (subscribers.get(key) !== record) return;
       var element = state.elements.get(record.instance);
       if (!element || element._mochiDisconnected || element._mochiUnmounted ||
-          element._mochiMountState !== "mounted" ||
           element._mochiMountToken !== record.mountToken ||
           String(element._mochiInstance) !== record.instance) {
         subscribers.delete(key);
         return;
       }
+      // Pending subscriptions survive publications during mount, but only
+      // ready receivers join a publication's snapshot. Nothing is replayed.
+      if (element._mochiMountState !== "mounted") return;
       var delivery = {
         eventName: eventName,
         record: record,
@@ -2725,6 +2728,14 @@
       throw new Error("mochi-loader: mount failed for " + component.class_name + ": " + lastError(module));
     }
 
+    // Mount hooks can enqueue host registrations while another component is
+    // finishing its own mount. Publish the owner mapping before those hooks so
+    // whichever mount drains the shared VM outbox can resolve every recipient.
+    element._mochiModule = module;
+    element._mochiInstance = instance;
+    state.elements.set(String(instance), element);
+    state.unmountedInstances.delete(String(instance));
+
     var mountedStarted = false;
     try {
       if (declared) {
@@ -2767,10 +2778,16 @@
         }
       }
       discardHostOutboxes(module);
+      removeGlobalEventSubscriptions(instance, mountToken);
+      if (state.elements.get(String(instance)) === element) {
+        state.elements.delete(String(instance));
+      }
       var cleanupError = disposeVmInstance(module, instance);
       if (cleanupError) {
         console.error("[mochi] " + component.tag_name + " rollback cleanup failed", cleanupError);
       }
+      element._mochiModule = null;
+      element._mochiInstance = null;
       throw error;
     }
   }
@@ -4904,8 +4921,8 @@
       Object.keys(CAPABILITY_LIMIT_KEYS[name]).forEach(function (limitName) {
         var capacityName = CAPABILITY_LIMIT_KEYS[name][limitName];
         var value = profile.capacities[capacityName];
-        if (!Number.isSafeInteger(value) || value <= 0) {
-          throw new Error("mochi-loader: capacity profile is missing positive " + capacityName);
+        if (!Number.isSafeInteger(value) || value <= 0 || value > 2147483647) {
+          throw new Error("mochi-loader: capacity profile requires positive 32-bit " + capacityName);
         }
       });
     });
@@ -4974,6 +4991,20 @@
           });
           if (Object.keys(limits).length !== Object.keys(limitSchema).length) {
             throw new Error("mochi-loader: capability '" + name + "' has unknown host limits in " + manifestUrl);
+          }
+          var entries = name === "formatting" ? limits.cache_entries : limits.pending_requests;
+          if (entries > 65535) {
+            throw hostAdapterError(name, capability.host, null, "host limit exceeds the 16-bit table capacity");
+          }
+          if (name === "network") {
+            if (limits.envelope_bytes < 1024 || limits.response_bytes * 12 + 256 > limits.envelope_bytes) {
+              throw hostAdapterError(name, capability.host, null,
+                "response capacity exceeds the fetch envelope after JSON expansion and metadata");
+            }
+            if (limits.pending_requests * limits.response_bytes > limits.response_buffer_bytes) {
+              throw hostAdapterError(name, capability.host, null,
+                "concurrent responses exceed the response buffer capacity");
+            }
           }
         }
         if (capability.operations !== undefined) {
