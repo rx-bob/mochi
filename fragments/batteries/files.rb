@@ -10,6 +10,14 @@ class MochiFiles
     Mochi.host_async("files", "read_next", [reader], callback)
   end
 
+  def self.read(reader, callback)
+    Mochi.host_async("files", "read", [reader], callback)
+  end
+
+  def self.read_text(reader, callback, encoding = "UTF-8")
+    Mochi.host_async("files", "read_text", [reader, encoding], callback)
+  end
+
   def self.cancel(reader)
     close(reader)
   end

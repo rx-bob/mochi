@@ -1541,13 +1541,14 @@ test("file input and drop handlers receive synchronous metadata and unmount rele
     files: {
       version: 1,
       host: "mochi-files.js",
-      operations: { release: "sync", open: "sync", close: "sync", read_next: "async" },
+      operations: { release: "sync", open: "sync", close: "sync", read_next: "async", read: "async", read_text: "async" },
       packages: [],
       limits: {
         handles: TEST_HOST_CAPACITIES.host_file_handles,
         metadata_bytes: TEST_HOST_CAPACITIES.host_event_args_bytes,
         readers: TEST_HOST_CAPACITIES.host_file_readers,
         chunk_bytes: TEST_HOST_CAPACITIES.host_file_chunk_bytes,
+        whole_read_bytes: TEST_HOST_CAPACITIES.host_file_whole_read_bytes,
         envelope_bytes: TEST_HOST_CAPACITIES.host_fetch_envelope_bytes,
       },
     },
@@ -6510,13 +6511,14 @@ test("closing a file reader suppresses its pending Ruby callback", async () => {
     files: {
       version: 1,
       host: "mochi-files.js",
-      operations: { release: "sync", open: "sync", close: "sync", read_next: "async" },
+      operations: { release: "sync", open: "sync", close: "sync", read_next: "async", read: "async", read_text: "async" },
       packages: [],
       limits: {
         handles: TEST_HOST_CAPACITIES.host_file_handles,
         metadata_bytes: TEST_HOST_CAPACITIES.host_event_args_bytes,
         readers: TEST_HOST_CAPACITIES.host_file_readers,
         chunk_bytes: TEST_HOST_CAPACITIES.host_file_chunk_bytes,
+        whole_read_bytes: TEST_HOST_CAPACITIES.host_file_whole_read_bytes,
         envelope_bytes: TEST_HOST_CAPACITIES.host_fetch_envelope_bytes,
       },
     },
@@ -6527,7 +6529,7 @@ test("closing a file reader suppresses its pending Ruby callback", async () => {
       name: "files",
       version: 1,
       sync: { release() {}, open() {}, close() {} },
-      async: { read_next: () => pending },
+      async: { read_next() {}, read: () => pending, read_text() {} },
     }),
   });
   log.methods.add("next");
@@ -6539,7 +6541,7 @@ test("closing a file reader suppresses its pending Ruby callback", async () => {
 
   module.queueEmit(JSON.stringify({
     __host: "capability_async", id: 77, instance: "110", capability: "files",
-    operation: "read_next", args: ["reader-1"], callback: "on_read",
+    operation: "read", args: ["reader-1"], callback: "on_read",
   }) + "\n");
   element._dispatchAction({ action: "next" });
   await flushLifecycle();

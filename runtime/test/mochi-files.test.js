@@ -154,3 +154,133 @@ test("stream failures release the reader slot and return a deterministic error",
   adapter.sync.open(metadata.handle, context.owner, context.mountToken, readerLimits);
   adapter.release(metadata.handle, context.owner, context.mountToken);
 });
+
+test("bounded whole-file reads assemble exact bytes from capped slices", async () => {
+  const source = new Blob([Uint8Array.from({ length: 256 }, (_, index) => index)]);
+  Object.defineProperties(source, { name: { value: "binary.bin" }, lastModified: { value: 0 } });
+  const originalSlice = source.slice.bind(source);
+  const ranges = [];
+  source.slice = (start, end) => {
+    ranges.push([start, end]);
+    assert.ok(end - start <= 37);
+    return originalSlice(start, end);
+  };
+  const context = { owner: "whole-owner", mountToken: 12 };
+  const wholeLimits = { ...limits, readers: 1, chunk_bytes: 37, whole_read_bytes: 256, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, wholeLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, wholeLimits);
+  const result = await adapter.async.read(JSON.stringify([metadata.handle]), wholeLimits, context);
+  assert.deepEqual([...Buffer.from(result.__mochi_bytes, "base64")], Array.from({ length: 256 }, (_, index) => index));
+  assert.ok(ranges.length > 1);
+  assert.deepEqual(ranges[0], [0, 37]);
+  assert.equal(ranges.at(-1)[1], 256);
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+});
+
+test("oversized whole-file reads reject before slicing and free their slot", async () => {
+  let slices = 0;
+  const source = {
+    name: "too-large.bin", size: 5, lastModified: 0,
+    slice() { slices += 1; throw new Error("must not read"); },
+  };
+  const context = { owner: "oversized-owner", mountToken: 13 };
+  const wholeLimits = { ...limits, readers: 1, chunk_bytes: 4, whole_read_bytes: 4, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, wholeLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, wholeLimits);
+  await assert.rejects(
+    adapter.async.read(JSON.stringify([metadata.handle]), wholeLimits, context),
+    /whole-file read limit/,
+  );
+  assert.equal(slices, 0);
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+});
+
+test("text reads preserve split UTF-8 sequences and reject malformed or unsupported encodings", async () => {
+  const source = new Blob(["a".repeat(35) + "€" + "z"]);
+  Object.defineProperties(source, { name: { value: "split.txt" }, lastModified: { value: 0 } });
+  const context = { owner: "text-owner", mountToken: 14 };
+  const wholeLimits = { ...limits, readers: 1, chunk_bytes: 37, whole_read_bytes: 100, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, wholeLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, wholeLimits);
+  const result = await adapter.async.read_text(JSON.stringify([metadata.handle, "UTF-8"]), wholeLimits, context);
+  assert.equal(Buffer.from(result.__mochi_bytes, "base64").toString("utf8"), "a".repeat(35) + "€z");
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+
+  const malformed = {
+    name: "malformed.txt", size: 2, lastModified: 0,
+    slice(start, end) {
+      return new Blob([Uint8Array.from([0x61, 0xff]).slice(start, end)]);
+    },
+  };
+  const bad = adapter.snapshotInput({ target: { files: [malformed] } }, context, wholeLimits).files[0];
+  adapter.sync.open(bad.handle, context.owner, context.mountToken, wholeLimits);
+  await assert.rejects(
+    adapter.async.read_text(JSON.stringify([bad.handle, "UTF-8"]), wholeLimits, context),
+    /malformed UTF-8/,
+  );
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(bad.handle, context.owner, context.mountToken);
+
+  const unsupported = adapter.snapshotInput({ target: { files: [file("unsupported.txt", 1)] } }, context, wholeLimits).files[0];
+  adapter.sync.open(unsupported.handle, context.owner, context.mountToken, wholeLimits);
+  await assert.rejects(
+    adapter.async.read_text(JSON.stringify([unsupported.handle, "Shift_JIS"]), wholeLimits, context),
+    /only UTF-8 is supported/,
+  );
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(unsupported.handle, context.owner, context.mountToken);
+});
+
+test("closing an in-flight whole-file read cancels its callback path", async () => {
+  let cancelled = false;
+  const source = {
+    name: "slow-whole.bin", size: 4, lastModified: 0,
+    slice() {
+      return {
+        stream: () => new ReadableStream({ pull() {}, cancel() { cancelled = true; } }),
+      };
+    },
+  };
+  const context = { owner: "cancel-whole-owner", mountToken: 15 };
+  const wholeLimits = { ...limits, readers: 1, chunk_bytes: 4, whole_read_bytes: 4, envelope_bytes: 1024 };
+  const metadata = adapter.snapshotInput({ target: { files: [source] } }, context, wholeLimits).files[0];
+  adapter.sync.open(metadata.handle, context.owner, context.mountToken, wholeLimits);
+  const pending = adapter.async.read(JSON.stringify([metadata.handle]), wholeLimits, context);
+  adapter.sync.close(metadata.handle, context.owner, context.mountToken, wholeLimits);
+  await assert.rejects(pending, /closed/);
+  assert.equal(cancelled, true);
+  assert.equal(adapter.readerCount(), 0);
+  adapter.release(metadata.handle, context.owner, context.mountToken);
+});
+
+test("whole-file conveniences serialize and recover their bounded reader slot", async () => {
+  let cancelled = false;
+  const slow = {
+    name: "slow.bin", size: 1, lastModified: 0,
+    slice() {
+      return { stream: () => new ReadableStream({ pull() {}, cancel() { cancelled = true; } }) };
+    },
+  };
+  const quick = new Blob(["x"]);
+  Object.defineProperties(quick, { name: { value: "quick.bin" }, lastModified: { value: 0 } });
+  const context = { owner: "whole-slot-owner", mountToken: 16 };
+  const wholeLimits = { ...limits, readers: 2, chunk_bytes: 4, whole_read_bytes: 4, envelope_bytes: 1024 };
+  const files = adapter.snapshotInput({ target: { files: [slow, quick] } }, context, wholeLimits).files;
+  adapter.sync.open(files[0].handle, context.owner, context.mountToken, wholeLimits);
+  adapter.sync.open(files[1].handle, context.owner, context.mountToken, wholeLimits);
+  const pending = adapter.async.read(JSON.stringify([files[0].handle]), wholeLimits, context);
+  await assert.rejects(
+    adapter.async.read(JSON.stringify([files[1].handle]), wholeLimits, context),
+    /another whole-file read is already active/,
+  );
+  adapter.sync.close(files[0].handle, context.owner, context.mountToken, wholeLimits);
+  await assert.rejects(pending, /closed/);
+  assert.equal(cancelled, true);
+  adapter.sync.open(files[1].handle, context.owner, context.mountToken, wholeLimits);
+  const recovered = await adapter.async.read(JSON.stringify([files[1].handle]), wholeLimits, context);
+  assert.equal(Buffer.from(recovered.__mochi_bytes, "base64").toString(), "x");
+  adapter.release(files[0].handle, context.owner, context.mountToken);
+  adapter.release(files[1].handle, context.owner, context.mountToken);
+});

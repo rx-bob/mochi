@@ -521,12 +521,14 @@ RUBY
       graph.capabilities["files"].operations.map { |operation| {operation.name, operation.mode} }
         .should eq([
           {"release", "sync"}, {"open", "sync"}, {"close", "sync"}, {"read_next", "async"},
+          {"read", "async"}, {"read_text", "async"},
         ])
       graph.capabilities["files"].limit_keys.sort.should eq([
         {"handles", "host_file_handles"},
         {"metadata_bytes", "host_event_args_bytes"},
         {"readers", "host_file_readers"},
         {"chunk_bytes", "host_file_chunk_bytes"},
+        {"whole_read_bytes", "host_file_whole_read_bytes"},
         {"envelope_bytes", "host_fetch_envelope_bytes"},
       ].sort)
       graph.capability_package_ids.should eq(Set{"ruby:lib/mochi_builtin_files.rb"})

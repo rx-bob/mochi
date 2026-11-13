@@ -3,13 +3,6 @@ const http = require("node:http");
 const path = require("node:path");
 const playwright = require("playwright");
 
-const [bundleDir, planPath, browserList = "chromium,firefox,webkit"] = process.argv.slice(2);
-if (!bundleDir || !planPath) {
-  console.error("usage: mochi_test_runner.cjs <bundle-dir> <test-plan.json> [browsers]");
-  process.exit(2);
-}
-
-const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -37,6 +30,126 @@ function locate(root, selector) {
 
 function sourceLabel(step) {
   return `${step.source}:${step.line}`;
+}
+
+function syntheticFiles(step) {
+  if (!Array.isArray(step.files) || step.files.length === 0) {
+    throw new Error(`${sourceLabel(step)}: files must be a non-empty Array`);
+  }
+  return step.files.map((spec) => {
+    if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+      throw new Error(`${sourceLabel(step)}: each test file must be a Hash`);
+    }
+    const hasPath = typeof spec.path === "string" && spec.path.length > 0;
+    const hasBytes = Object.prototype.hasOwnProperty.call(spec, "bytes");
+    if (hasPath === hasBytes) {
+      throw new Error(`${sourceLabel(step)}: test file needs exactly one of path or bytes`);
+    }
+    let bytes;
+    let defaultName;
+    if (hasPath) {
+      const filePath = path.resolve(path.dirname(step.source), spec.path);
+      let stat;
+      try {
+        stat = fs.statSync(filePath);
+      } catch (error) {
+        throw new Error(`${sourceLabel(step)}: cannot read test file '${spec.path}': ${error.message}`);
+      }
+      if (!stat.isFile()) throw new Error(`${sourceLabel(step)}: test file path '${spec.path}' is not a file`);
+      if (stat.size > 16 * 1024 * 1024) throw new Error(`${sourceLabel(step)}: test file exceeds the 16 MiB harness limit`);
+      bytes = fs.readFileSync(filePath);
+      defaultName = path.basename(filePath);
+    } else if (typeof spec.bytes === "string") {
+      if (Buffer.byteLength(spec.bytes, "utf8") > 16 * 1024 * 1024) {
+        throw new Error(`${sourceLabel(step)}: test file exceeds the 16 MiB harness limit`);
+      }
+      bytes = Buffer.from(spec.bytes, "utf8");
+    } else if (Array.isArray(spec.bytes) && spec.bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+      if (spec.bytes.length > 16 * 1024 * 1024) {
+        throw new Error(`${sourceLabel(step)}: test file exceeds the 16 MiB harness limit`);
+      }
+      bytes = Buffer.from(spec.bytes);
+    } else {
+      throw new Error(`${sourceLabel(step)}: test file bytes must be a String or byte Array`);
+    }
+    if (bytes.length > 16 * 1024 * 1024) throw new Error(`${sourceLabel(step)}: test file exceeds the 16 MiB harness limit`);
+    const delay = spec.delay_ms === undefined ? 0 : Number(spec.delay_ms);
+    if (!Number.isInteger(delay) || delay < 0 || delay > 1000) {
+      throw new Error(`${sourceLabel(step)}: test file delay_ms must be between 0 and 1000`);
+    }
+    if (spec.fail_read !== undefined && typeof spec.fail_read !== "boolean") {
+      throw new Error(`${sourceLabel(step)}: test file fail_read must be true or false`);
+    }
+    return {
+      name: typeof spec.name === "string" && spec.name.length > 0 ? spec.name : defaultName || "mochi-test.bin",
+      type: typeof spec.type === "string" ? spec.type : "",
+      lastModified: Number.isFinite(Number(spec.last_modified)) ? Number(spec.last_modified) : 0,
+      bytes: bytes,
+      delayMs: delay,
+      failRead: spec.fail_read === true,
+    };
+  });
+}
+
+async function dispatchFileDrop(page, tag, selector, files) {
+  return page.evaluate(({ tag, selector, files }) => {
+    const host = document.querySelector(tag);
+    const target = host && host.shadowRoot && host.shadowRoot.querySelector(selector);
+    if (!target) throw new Error(`selector '${selector}' matched no drop target`);
+    const transfer = new DataTransfer();
+    files.forEach((spec) => {
+      const binary = atob(spec.bytesBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const file = new File([bytes], spec.name, { type: spec.type, lastModified: spec.lastModified });
+      if (spec.delayMs > 0 || spec.failRead) {
+        const originalSlice = file.slice.bind(file);
+        Object.defineProperty(file, "slice", {
+          value(start, end) {
+            const part = originalSlice(start, end);
+            return {
+              stream() {
+                const source = part.stream().getReader();
+                let failed = false;
+                return new ReadableStream({
+                  async pull(controller) {
+                    if (spec.failRead && !failed) {
+                      failed = true;
+                      controller.error(new Error("synthetic file read failure"));
+                      return;
+                    }
+                    const result = await source.read();
+                    if (!result.done && spec.delayMs > 0) {
+                      await new Promise((resolve) => setTimeout(resolve, spec.delayMs));
+                    }
+                    if (result.done) controller.close();
+                    else controller.enqueue(result.value);
+                  },
+                  cancel(reason) { return source.cancel(reason); },
+                }, { highWaterMark: 0 });
+              },
+            };
+          },
+        });
+      }
+      transfer.items.add(file);
+    });
+    const dragover = new DragEvent("dragover", {
+      bubbles: true, cancelable: true, composed: true, dataTransfer: transfer,
+    });
+    target.dispatchEvent(dragover);
+    target.dispatchEvent(new DragEvent("drop", {
+      bubbles: true, cancelable: true, composed: true, dataTransfer: transfer,
+    }));
+    return dragover.defaultPrevented;
+  }, {
+    tag,
+    selector,
+    files: files.map((file) => ({
+      name: file.name, type: file.type, lastModified: file.lastModified,
+      bytesBase64: file.bytes.toString("base64"), delayMs: file.delayMs, failRead: file.failRead,
+    })),
+  });
 }
 
 async function waitForPointerIdle(page) {
@@ -221,6 +334,30 @@ async function runCase(browser, browserName, baseUrl, testCase) {
         if (step.operation === "assert_text" && result.actual !== step.expected) {
           throw new Error(`${origin}: expected '${step.expected}' at '${step.selector}', got '${result.actual}'`);
         }
+      } else if (step.operation === "select_files") {
+        if (!host) throw new Error(`${origin}: mount a component before selecting files`);
+        const files = syntheticFiles(step);
+        const target = page.locator(host).locator(step.selector);
+        await target.setInputFiles(files.map((file) => ({
+          name: file.name,
+          mimeType: file.type,
+          lastModified: file.lastModified,
+          buffer: file.bytes,
+        })));
+      } else if (step.operation === "drop_files") {
+        if (!host) throw new Error(`${origin}: mount a component before dropping files`);
+        const files = syntheticFiles(step);
+        const accepted = await dispatchFileDrop(page, host, step.selector, files);
+        if (!accepted) throw new Error(`${origin}: Mochi did not accept the synthetic file dragover`);
+      } else if (step.operation === "drag") {
+        if (!host) throw new Error(`${origin}: mount a component before dragging`);
+        await page.locator(host).locator(step.source).dragTo(page.locator(host).locator(step.target));
+      } else if (step.operation === "assert_state") {
+        if (!host) throw new Error(`${origin}: mount a component before asserting state`);
+        const actual = await page.locator(host).locator(step.selector).innerText();
+        if (actual.trim() !== step.expected) {
+          throw new Error(`${origin}: expected state '${step.expected}', got '${actual.trim()}'`);
+        }
       } else if (step.operation === "expect_error") {
         expectedError = step.message || "";
         continue;
@@ -294,6 +431,13 @@ async function runCase(browser, browserName, baseUrl, testCase) {
 }
 
 async function main() {
+  const [bundleDir, planPath, browserList = "chromium,firefox,webkit"] = process.argv.slice(2);
+  if (!bundleDir || !planPath) {
+    console.error("usage: mochi_test_runner.cjs <bundle-dir> <test-plan.json> [browsers]");
+    process.exitCode = 2;
+    return;
+  }
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   const server = http.createServer((request, response) => {
     const pathname = decodeURIComponent((request.url || "/").split("?")[0]);
     const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
@@ -348,7 +492,11 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error.stack || error);
-  process.exitCode = 1;
-});
+if (process.env.MOCHI_TEST_RUNNER_LIBRARY === "1") {
+  module.exports = { syntheticFiles };
+} else {
+  main().catch((error) => {
+    console.error(error.stack || error);
+    process.exitCode = 1;
+  });
+}

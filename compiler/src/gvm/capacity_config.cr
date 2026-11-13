@@ -156,6 +156,7 @@ struct CapacityConfig
       "host_event_queue_bytes"      => 1_i64,
       "host_drag_payload_bytes"     => 1_i64,
       "host_file_chunk_bytes"       => 1_i64,
+      "host_file_readers"           => 1_i64,
       "host_file_whole_read_bytes"  => 1_i64,
       "host_file_buffer_bytes"      => 1_i64,
     }.each do |name, minimum|
@@ -177,10 +178,14 @@ struct CapacityConfig
     raise "file chunk and decoded binary value exceed scratch_bytes" if @values["host_file_chunk_bytes"] + chunk_wire_bytes > @values["scratch_bytes"]
     whole_wire_bytes = ((@values["host_file_whole_read_bytes"] + 2) // 3) * 4 + 256
     raise "whole-file capacity exceeds the fetch envelope after base64 expansion" if whole_wire_bytes > fetch_envelope
-    file_reservation = @values["host_file_readers"] *
-                       (@values["host_file_chunk_bytes"] + chunk_wire_bytes)
-    raise "concurrent file chunks and envelopes exceed host_file_buffer_bytes" if file_reservation > @values["host_file_buffer_bytes"]
-    raise "whole-file capacity exceeds host_file_buffer_bytes" if @values["host_file_whole_read_bytes"] > @values["host_file_buffer_bytes"]
+    file_chunk_reservation = @values["host_file_readers"] *
+                             (@values["host_file_chunk_bytes"] + chunk_wire_bytes)
+    raise "concurrent file chunks and envelopes exceed host_file_buffer_bytes" if file_chunk_reservation > @values["host_file_buffer_bytes"]
+    whole_read_reservation = @values["host_file_whole_read_bytes"] +
+                             @values["host_file_chunk_bytes"] + whole_wire_bytes +
+                             (@values["host_file_readers"] - 1) *
+                             (@values["host_file_chunk_bytes"] + chunk_wire_bytes)
+    raise "whole-file read and concurrent chunks exceed host_file_buffer_bytes" if whole_read_reservation > @values["host_file_buffer_bytes"]
     drag_wire_bytes = @values["host_drag_payload_bytes"] * 6 + 256
     raise "drag payload capacity exceeds host_event_args_bytes after JSON escaping" if drag_wire_bytes > @values["host_event_args_bytes"]
     event_queue_bytes = @values["host_event_queue_entries"] * (@values["host_drag_payload_bytes"] * 6 + 64)

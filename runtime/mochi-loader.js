@@ -15,6 +15,7 @@
       metadata_bytes: "host_event_args_bytes",
       readers: "host_file_readers",
       chunk_bytes: "host_file_chunk_bytes",
+      whole_read_bytes: "host_file_whole_read_bytes",
       envelope_bytes: "host_fetch_envelope_bytes"
     },
     network: {

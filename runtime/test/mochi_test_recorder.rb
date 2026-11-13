@@ -21,6 +21,18 @@ module Mochi
         record("fill", { "selector" => selector.to_s, "value" => value.to_s })
       end
 
+      def select_files(selector, files:)
+        record("select_files", { "selector" => test_selector(selector), "files" => test_files(files) })
+      end
+
+      def drop_files(selector, files:)
+        record("drop_files", { "selector" => test_selector(selector), "files" => test_files(files) })
+      end
+
+      def drag(source, target)
+        record("drag", { "source" => test_selector(source), "target" => test_selector(target) })
+      end
+
       def pointer_press(selector)
         record("pointer_press", { "selector" => selector.to_s })
       end
@@ -56,6 +68,13 @@ module Mochi
         })
       end
 
+      def assert_state(selector, expected)
+        record("assert_state", {
+          "selector" => test_selector(selector),
+          "expected" => expected.to_s
+        })
+      end
+
       def assert_attribute(selector, name, expected)
         record("assert_attribute", { "selector" => selector.to_s, "name" => name.to_s, "expected" => expected.to_s })
       end
@@ -81,6 +100,45 @@ module Mochi
       end
 
       private
+
+      def test_selector(selector)
+        value = selector.to_s
+        raise ArgumentError, "test selector must not be empty" if value.empty?
+        value
+      end
+
+      def test_files(files)
+        raise ArgumentError, "files must be a non-empty Array" unless files.is_a?(Array) && !files.empty?
+
+        files.map do |file|
+          raise ArgumentError, "each test file must be a Hash" unless file.is_a?(Hash)
+          attributes = file.each_with_object({}) { |(key, value), result| result[key.to_s] = value }
+          allowed = %w[path name type bytes last_modified delay_ms fail_read]
+          unknown = attributes.keys - allowed
+          raise ArgumentError, "unsupported test file fields: #{unknown.join(", ")}" unless unknown.empty?
+          has_path = attributes["path"].is_a?(String) && !attributes["path"].empty?
+          has_bytes = attributes.key?("bytes")
+          raise ArgumentError, "test file needs exactly one of path or bytes" if has_path == has_bytes
+          raise ArgumentError, "test file path must be a non-empty String" if attributes.key?("path") && !has_path
+          if has_bytes
+            bytes = attributes["bytes"]
+            unless bytes.is_a?(String) ||
+                   (bytes.is_a?(Array) && bytes.all? { |byte| byte.is_a?(Integer) && byte.between?(0, 255) })
+              raise ArgumentError, "test file bytes must be a String or an Array of bytes"
+            end
+            byte_count = bytes.is_a?(String) ? bytes.bytesize : bytes.length
+            raise ArgumentError, "test file bytes exceed the 16 MiB harness limit" if byte_count > 16 * 1024 * 1024
+          end
+          if attributes.key?("delay_ms") &&
+             (!attributes["delay_ms"].is_a?(Integer) || !attributes["delay_ms"].between?(0, 1_000))
+            raise ArgumentError, "test file delay_ms must be between 0 and 1000"
+          end
+          if attributes.key?("fail_read") && ![true, false].include?(attributes["fail_read"])
+            raise ArgumentError, "test file fail_read must be true or false"
+          end
+          attributes
+        end
+      end
 
       def record(operation, attributes = {})
         location = caller_locations(2, 1).first

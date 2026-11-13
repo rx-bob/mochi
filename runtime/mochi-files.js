@@ -30,6 +30,7 @@
     var handles = new Map();
     var owners = new Map();
     var readers = new Map();
+    var wholeReads = 0;
     var nextId = 1;
 
     function ownerMatches(record, context) {
@@ -42,6 +43,10 @@
       if (!reader) return false;
       if (context && !ownerMatches(reader, context)) fail("reader belongs to another component mount");
       readers.delete(handle);
+      if (reader.wholeRead) {
+        wholeReads -= 1;
+        reader.wholeRead = false;
+      }
       reader.closed = true;
       if (reader.streamReader) {
         try {
@@ -66,7 +71,7 @@
       if (readers.size >= limits.readers) fail("active readers exceed configured reader limit");
       readers.set(handle, {
         owner: String(owner), mountToken: mountToken, file: file.file,
-        offset: 0, inFlight: false, streamReader: null, closed: false
+        offset: 0, inFlight: false, streamReader: null, wholeRead: false, closed: false
       });
       return handle;
     }
@@ -150,6 +155,118 @@
         if (readers.get(handle) === generation && !generation.closed) {
           cancelReader(handle, context);
         }
+        var message = error && error.message ? error.message : String(error);
+        throw new Error(message.slice(0, 128) || "file read failed");
+      });
+    }
+
+    function readWhole(argsJson, limits, context, textMode) {
+      var args = JSON.parse(argsJson);
+      var handle = args && args[0];
+      var record = readers.get(handle);
+      if (!ownerMatches(record, context) || record.closed) fail("reader is stale or belongs to another mount");
+      if (record.inFlight) fail("reader already has a read in flight");
+      var encoding = args && args[1];
+      if (textMode && (typeof encoding !== "string" || !/^utf-?8$/i.test(encoding))) {
+        cancelReader(handle, context);
+        return Promise.reject(new Error("unsupported file text encoding; only UTF-8 is supported"));
+      }
+      if (record.offset !== 0) {
+        cancelReader(handle, context);
+        return Promise.reject(new Error("whole-file reads require a newly opened reader"));
+      }
+      var size = record.file.size;
+      if (size > limits.whole_read_bytes) {
+        cancelReader(handle, context);
+        return Promise.reject(new Error("file exceeds configured whole-file read limit"));
+      }
+      if (wholeReads >= 1) {
+        cancelReader(handle, context);
+        return Promise.reject(new Error("another whole-file read is already active"));
+      }
+
+      record.inFlight = true;
+      var output = new Uint8Array(size);
+      var decoder;
+      try {
+        if (textMode) decoder = new TextDecoder("utf-8", { fatal: true });
+      } catch (_) {
+        cancelReader(handle, context);
+        return Promise.reject(new Error("strict UTF-8 decoding is unavailable in this browser"));
+      }
+      wholeReads += 1;
+      record.wholeRead = true;
+      var offset = 0;
+
+      function readPart() {
+        if (readers.get(handle) !== record || record.closed) {
+          return Promise.reject(new Error("file reader was closed"));
+        }
+        if (offset >= size) {
+          try {
+            if (decoder) decoder.decode();
+          } catch (_) {
+            return Promise.reject(new Error("file contains malformed UTF-8"));
+          }
+          var value = { __mochi_bytes: encodeBase64(output) };
+          if (byteLength(JSON.stringify({ ok: true, value: value, error: null })) > limits.envelope_bytes) {
+            return Promise.reject(new Error("whole-file result exceeds configured host inbox capacity"));
+          }
+          record.offset = size;
+          cancelReader(handle, context);
+          return Promise.resolve(value);
+        }
+
+        var start = offset;
+        var end = Math.min(start + limits.chunk_bytes, size);
+        var part = new Uint8Array(limits.chunk_bytes);
+        var used = 0;
+        var streamReader;
+        try {
+          var slice = record.file.slice(start, end);
+          if (!slice || typeof slice.stream !== "function") {
+            throw new Error("bounded file streaming is unavailable");
+          }
+          streamReader = slice.stream().getReader();
+          record.streamReader = streamReader;
+        } catch (error) {
+          var message = error && error.message ? error.message : String(error);
+          return Promise.reject(new Error(message.slice(0, 128) || "file read failed"));
+        }
+
+        function pumpPart() {
+          return streamReader.read().then(function (result) {
+            if (readers.get(handle) !== record || record.closed) throw new Error("file reader was closed");
+            if (result.done) {
+              if (used !== end - start) throw new Error("file source ended before the requested byte range");
+              var bytes = part.subarray(0, used);
+              if (decoder) {
+                try {
+                  decoder.decode(bytes, { stream: true });
+                } catch (_) {
+                  throw new Error("file contains malformed UTF-8");
+                }
+              }
+              output.set(bytes, start);
+              offset = end;
+              record.streamReader = null;
+              return readPart();
+            }
+            var incoming = result.value;
+            if (!incoming || !Number.isSafeInteger(incoming.length) ||
+                used + incoming.length > limits.chunk_bytes || used + incoming.length > end - start) {
+              throw new Error("file source exceeded configured chunk size");
+            }
+            part.set(incoming, used);
+            used += incoming.length;
+            return pumpPart();
+          });
+        }
+        return pumpPart();
+      }
+
+      return readPart().catch(function (error) {
+        if (readers.get(handle) === record && !record.closed) cancelReader(handle, context);
         var message = error && error.message ? error.message : String(error);
         throw new Error(message.slice(0, 128) || "file read failed");
       });
@@ -277,7 +394,9 @@
         }
       },
       async: {
-        read_next: readNext
+        read_next: readNext,
+        read: function (argsJson, limits, context) { return readWhole(argsJson, limits, context, false); },
+        read_text: function (argsJson, limits, context) { return readWhole(argsJson, limits, context, true); }
       },
       snapshotInput: function (event, context, limits) {
         return snapshot(event, context, limits, true);

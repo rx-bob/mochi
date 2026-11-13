@@ -1,5 +1,13 @@
 import { test, expect } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { withFrameworkProject } from "./framework_helpers";
+
+const repoRoot = path.resolve(__dirname, "..", "..");
+const compiler = path.join(repoRoot, "compiler", "mochi");
+const fixture = path.join(__dirname, "..", "fixtures", "framework_contracts");
 
 test("Ruby transfers typed values and external text during native drag event windows", async ({ page }) => {
   const errors: string[] = [];
@@ -65,10 +73,13 @@ test("file inputs and controlled file drops stream bounded bytes from mount-owne
     expect(manifest.capabilities.files).toMatchObject({
       version: 1,
       host: "mochi-files.js",
-      operations: { release: "sync", open: "sync", close: "sync", read_next: "async" },
+      operations: {
+        release: "sync", open: "sync", close: "sync", read_next: "async",
+        read: "async", read_text: "async",
+      },
       limits: {
         handles: 128, metadata_bytes: 8192, readers: 4,
-        chunk_bytes: 8192, envelope_bytes: 65536,
+        chunk_bytes: 8192, whole_read_bytes: 48000, envelope_bytes: 65536,
       },
     });
     expect(manifest.capabilities.drag).toBeUndefined();
@@ -105,4 +116,24 @@ test("file inputs and controlled file drops stream bounded bytes from mount-owne
   }, "<file-contract></file-contract>");
 
   expect(errors).toEqual([]);
+});
+
+test("Ruby-authored file, drop, and structured drag tests run through mochi test", async ({ browserName }) => {
+  test.setTimeout(240_000);
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi file tests "));
+  try {
+    fs.cpSync(fixture, project, { recursive: true });
+    fs.writeFileSync(path.join(project, "index.html"),
+      "<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>");
+    const output = execFileSync(compiler,
+      ["test", "-i", project, `--browsers=${browserName}`],
+      { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+    expect(output).toContain("file input reads exact binary bytes and strict UTF-8 text");
+    expect(output).toContain("file drops stream oversized files and report errors and cancellation");
+    expect(output).toContain("structured drag actions deliver Ruby values and state");
+  } catch (error: any) {
+    throw new Error([error.stderr, error.stdout, error.message].filter(Boolean).join("\n"));
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
 });

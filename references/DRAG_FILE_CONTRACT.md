@@ -133,6 +133,32 @@ serialized response against `host_fetch_envelope_bytes` before it enters the
 VM inbox. Oversized files are streamed without allocating a whole-file Ruby
 String. Applications must release file handles when they no longer need them.
 
+For a small file, `MochiFiles.read(reader, callback)` returns the complete
+binary String. It checks the file size against `host_file_whole_read_bytes`
+(default 48,000) before requesting any bytes, then assembles bounded slices.
+An oversized file returns an error without reading it; reopen the handle and
+use `read_next` instead. Whole-file reads use the configured reader slot and
+Mochi permits one whole-file operation at a time so concurrent streaming
+readers retain their reserved buffers. It closes the reader on success or
+failure. `close` or `cancel` during a read cancels the current slice and
+suppresses the callback.
+
+`MochiFiles.read_text(reader, callback, "UTF-8")` provides the same bounded
+whole-file convenience for text. UTF-8 is the only supported encoding. Mochi
+decodes each bounded range with a strict streaming decoder, so a multibyte
+character split across slices remains intact. Malformed UTF-8 and unsupported
+encoding names return deterministic errors; no replacement characters or
+general Ruby Encoding subsystem are provided. The returned Ruby String
+contains the validated UTF-8 bytes.
+
+Ruby-authored tests can use `select_files(selector, files: [...])`,
+`drop_files(selector, files: [...])`, and `drag(source, target)`. File entries
+accept a path relative to the test file or inline `bytes` as a String or an
+Array of byte values. The test runner constructs browser File and DataTransfer
+objects. These helpers and their synthetic input stay in the test runner and
+do not enter application bundles. `assert_state` checks rendered Ruby state;
+`expect_error` checks runtime errors against the calling Ruby test line.
+
 File support is a separate optional `files` adapter. File-input-only apps do
 not load drag handling, and text-only drag apps do not load file handling. A
 component that handles both kinds of transfer declares both capabilities.

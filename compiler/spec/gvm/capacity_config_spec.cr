@@ -53,6 +53,7 @@ describe CapacityConfig do
     {
       "host_network_response_bytes" => {5_441_i64, /JSON envelope expansion/},
       "host_file_chunk_bytes"       => {48_961_i64, /base64 expansion/},
+      "host_file_readers"           => {0_i64, /host_file_readers.*positive/},
       "scratch_bytes"               => {16_384_i64, /file chunk and decoded binary value/},
       "host_file_whole_read_bytes"  => {48_961_i64, /base64 expansion/},
       "host_file_buffer_bytes"      => {32_767_i64, /concurrent file chunks/},
@@ -67,10 +68,11 @@ describe CapacityConfig do
     values = CapacityConfig::DEFAULTS.dup
     values["host_network_response_bytes"] = 5_440
     values["host_network_buffer_bytes"] = 256 * 5_440
+    values["host_file_readers"] = 1
     values["host_file_chunk_bytes"] = 48_960
     values["host_file_whole_read_bytes"] = 48_960
-    values["host_file_buffer_bytes"] = 4 * (48_960 + 65_536)
-    CapacityConfig.new(values)["host_file_buffer_bytes"].should eq(457_984)
+    values["host_file_buffer_bytes"] = 48_960 + 48_960 + 65_536
+    CapacityConfig.new(values)["host_file_buffer_bytes"].should eq(163_456)
   end
 end
 
