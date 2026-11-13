@@ -601,3 +601,26 @@ RUBY
     end
   end
 end
+
+describe "qualified helper constants" do
+  it "keeps equal leaf names in separate packages and follows the actual namespace" do
+    root = File.join(Dir.tempdir, "mochi_helper_scope_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      record = dependency_prelude(root, "lib/record.rb", "module RecordData\n BASE = 7\n def self.base; BASE; end\nend")
+      other = dependency_prelude(root, "lib/other.rb", "module OtherData\n BASE = 99\n def self.base; BASE; end\nend")
+      global = dependency_prelude(root, "lib/global.rb", "BASE = 123")
+      component = dependency_component(root, "probe-root", "ProbeRoot", "class ProbeRoot\n def value; RecordData::BASE; end\nend", "<p>{RecordData::BASE}</p>")
+      symbols = TreeSitter::SourceSymbolExtractor.extract(record.source)
+      symbols.exports.should eq(["RecordData", "RecordData::BASE"])
+      symbols.exports.should_not contain("BASE")
+      graph = dependency_graph(root, [component], [record, other, global])
+      node = graph.packages[MochiPackaging::PackageGraph.component_package_id("probe-root")]
+      node.dependencies.should contain(MochiPackaging::PackageGraph.ruby_package_id("lib/record.rb"))
+      node.dependencies.should_not contain(MochiPackaging::PackageGraph.ruby_package_id("lib/other.rb"))
+      node.dependencies.should_not contain(MochiPackaging::PackageGraph.ruby_package_id("lib/global.rb"))
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+end

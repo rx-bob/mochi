@@ -8,7 +8,7 @@ The source reports are the twelve files in `/Users/bob/repos/sencha/feedback/`, 
 
 [InspectorRoot.rb](../e2e/fixtures/ui_contracts/lib/InspectorRoot.rb) generates 48 deterministic records, each with a stable string ID, severity, message, and nested source/sequence details. It renders 12 records per page, filters by a literal message substring, clamps page bounds including empty results, and retains selection by ID. Records remain hashes throughout. It uses no service, external asset, app-authored JavaScript, or optional browser capability.
 
-The E1.S1 baseline used a bounded scalar-index loop for page extraction. E1.S2 now uses `matches.slice(@page * 12, 12)` and verifies first, middle, last, filtered, and empty pages. E1.S3 moves generation into the helper module; E4.S1/E4.S2 own computed projections. These stages are explicit, not claims that the missing facilities are already supported.
+The E1.S1 baseline used a bounded scalar-index loop for page extraction. E1.S2 now uses `matches.slice(@page * 12, 12)` and verifies first, middle, last, filtered, and empty pages. E1.S3 now owns generation and filtering through `RecordData`, with qualified page-size constants; E4.S1/E4.S2 own computed projections. These stages are explicit, not claims that the missing facilities are already supported.
 
 [inspector_test.rb](../e2e/fixtures/ui_contracts/test/inspector_test.rb) is authored in Mochi's existing Ruby browser DSL. It checks all twelve first-page IDs/messages/severities, nested details, pagination, literal filtering, empty results, recovery, and stable selection. The framework test additionally counts actual DOM rows rather than trusting the fixture's displayed count.
 
@@ -43,14 +43,14 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | --- | --- | --- | --- |
 | `01-block-conditionals-and-loops.md` | Block `if` inside table rows, `each` inside `if`, and nested `each` preserve lexical scope and structure. | **reproduced-defect:** `01-if-in-each` rejects `if row['visible']` as an invalid Ruby expression, with source location. **supported-in-isolation:** `01-each-in-if` renders Alpha and `01-nested-each` renders Group/Alpha. The originally reported context mismatch and more complex combinations remain **unresolved**, not fixed. | E2.S1 |
 | `02-array-slice-and-brackets.md` | `[1,2,3,4][1,2]` and `.slice(1,2)` return a fresh `[2,3]`. | **supported:** both probes now return a fresh two-element array containing `2,3`. `02-array-contexts` verifies Ruby boundaries, initialization/helper/handler/template parity, shallow identity, source-located errors, and slot exhaustion/recovery. Original `.to_s` expressions remain in the probes: Array text rendering still returns empty and is a separate unresolved surface, not a slicing failure. | E1.S2; history acceptance E3.S3 |
-| `03-qualified-constants.md` | `RecordData::BASE` and `RecordData.base_ms` return `1794571200000` in component contexts. | **reproduced-defect:** `03-constant` fails in `initialize` with `bad opcode`. **supported-in-isolation:** `03-singleton` returns the correct value from the same helper module. The reported singleton receiver failure in the larger component remains **unresolved**; initialization does not prove handler/template parity. | E1.S3 |
+| `03-qualified-constants.md` | `RecordData::BASE` and `RecordData.base_ms` return `1794571200000` in component contexts. | **supported:** both original probes return the correct value. `03-helper-contexts` compares direct Ruby with initializer, ordinary method, handler, and template results; separate helpers retain independent `BASE` values. Missing constants/methods name their references and the component call site. Arbitrary nested module/class registration remains outside this contract. | E1.S3 |
 | `04-scratch-capacity.md` | Structured local data work either completes correctly or reports the actual configured resource; later valid work recovers. | **supported-in-isolation:** `04-structured-records` mounts 480 hashes with nested attribute arrays; `04-concatenation` builds 360 lines / 24,370 bytes; `04-repeated-split` evaluates 480-line splits in 20 bindings. No exhaustion occurs for these inputs. Original richer object/byte exhaustion and repeated-update/recovery behavior remain **unresolved**. Configurability is an existing, tested **intentional-contract**. | E4.S1–E4.S3 |
 | `05-template-attribute-quoting.md` | Double-quoted Ruby hash keys work inside double-quoted HTML attributes and conditional classes. | **reproduced-defect:** `05-attribute-quotes` rejects `aria-label="{@modal["title"]}"` as an unclosed placeholder; independent `05-conditional-quotes` rejects `class="{if @node["ghost"]}ghost{end}"` with `stray '}' in template`. Both diagnostics identify the Ruby source. | E2.S2 |
 | `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **reproduced-defect:** `06-svg-each` ultimately has two correct SVG paths, but Chromium reports two invalid moveto errors during insertion containing the placeholder marker. Final correct attributes do not close this report. Other engines may be silent. SVG custom-element children remain explicitly deferred. | E3.S1 |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **reproduced-defect:** `07-binding-handler` shows input value `needle`, Ruby query empty, and callback observation `:a`. **supported-in-isolation:** selecting `b` updates project and callback observation to `:b`. This separate native input/change sequence does not establish same-event composition or attribute-order independence. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **intentional-contract:** `08-event-dataset` observes empty target data for a span click and `log-001` for a direct row event. **reproduced-defect/API gap:** `current_target_dataset` is absent (renders empty). Descendant selection is not fixed by changing existing target semantics. | E3.S2 |
 | `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
-| `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported-in-isolation:** `10-next` renders `alpha,beta`. Original larger-component unknown-method error remains **unresolved**. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; helper failures remain separately captured in 03. | E1.S2, E1.S3 |
+| `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported:** `10-next` renders `alpha,beta`; E1.S3 adds nested `each`, `map` with `next value`, lexical-local updates, and continuation after iteration across helper/component contexts. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; E1.S3 covers helper parity in 03 and rejects unsupported nonlocal control flow before mounting. | E1.S2, E1.S3 |
 | `11-boolean-typecheck.md` | Documented `prop :enabled, Boolean, default: false` works in both runtime and typecheck. | **supported-in-isolation:** `11-boolean` renders `false`. **reproduced-defect:** compiling the identical source with `--typecheck` exits 1 with `Unable to resolve constant Boolean` at the prop declaration. | E2.S4 |
 | `12-assets-and-css-imports.md` | Public assets retain the documented output path; CSS resolution and icon packaging have explicit source-backed behavior. | **intentional-contract:** `12-assets-css` serves `/public/probe.svg`, resolves `lib/nested/../themes/base.css`, applies its color, and packages only the referenced `home` icon. **intentional-contract:** `12-missing-css` fails at build time with component/path details. **reproduced-defect:** `12-root-css` cannot import a present project-root `styles/base.css` through `../../styles/base.css`: the isolated compiler tree omits that directory. This differs from direct StyleComposer support. | E7.S2: document supported source layout and resolve or explicitly retain the root-style boundary |
 
@@ -69,7 +69,7 @@ These links identify related coverage, not retroactive proof that a new report i
 | Reports | Existing coverage and limits |
 | --- | --- |
 | 01, 05 | [framework standalone browser tests](../e2e/tests/gvm_framework_standalone.spec.ts), [each row compiler](../compiler/spec/html/each_row_compiler_spec.cr), [template expressions](../compiler/spec/html/template_expression_spec.cr). Smaller contextual rows/conditionals do not prove mixed table branches. |
-| 02, 03, 10 | [source preparation](../compiler/spec/gvm/source_preparer_spec.cr), [Ruby surface](RUBY_SURFACE.md), framework numeric/collection browser tests. Slicing now has direct E1.S2 VM/browser coverage; aggregation and singleton success do not prove qualified constants. |
+| 02, 03, 10 | [source preparation](../compiler/spec/gvm/source_preparer_spec.cr), [Ruby surface](RUBY_SURFACE.md), framework numeric/collection browser tests. E1.S2/E1.S3 now directly cover slicing, scoped helper constants/receivers, and local block next in VM/compiler/browser tests. |
 | 04 | [capacity config](../compiler/spec/gvm/capacity_config_spec.cr), [capacity boundaries](../e2e/tests/gvm_capacity_boundaries.spec.ts), [capacity contract](CAPACITY_CONTRACT.md). Config tests build two isolated profiles, validate limits, and verify VM source stays unchanged. |
 | 06–09 | [loader tests](../runtime/test/mochi-loader.test.js), [pointer contracts](../e2e/tests/gvm_pointer_contracts.spec.ts), [drag/file contracts](../e2e/tests/gvm_drag_file_contracts.spec.ts), [file adapter tests](../runtime/test/mochi-files.test.js). File tests cover exact bounds, streaming, cancellation and lifetime cleanup. |
 | 11 | [Sorbet integration](../compiler/spec/sorbet/integration_spec.cr) and [component generation](../compiler/spec/webcomponents/component_generator_spec.cr). A successful runtime prop declaration does not imply a clean typecheck. |
@@ -161,4 +161,54 @@ Per-probe compiler/source/bundle hashes remain attached to browser reports.
 Array `.to_s` and direct text rendering still return empty; the original
 expressions remain visible in report 02's probes, alongside explicit
 length/content assertions. This does not claim Array rendering support.
-Next in the recommended order: E1.S3.
+E1.S3 follows this historical verification; its results are recorded below.
+
+### E1.S3: helper receivers, constants, and block next
+
+`RecordData` now owns inspector generation and filtering. Scoped constant
+storage and executable `GETMCNST` support fix `RecordData::BASE`; method and
+block frames retain the defining helper's lexical owner. Packaging exports
+`RecordData::BASE` instead of an unrelated global `BASE`. Explicit singleton
+calls keep their receiver, including missing-method diagnostics. Source
+preparation preserves these forms without rewriting them into literals.
+
+The verifier previously started RITE sections at byte 22 instead of 20, so
+its stale opcode table was bypassed. It now walks real records and every
+nested IREP using the current mruby 4.0 opcode numbers. Unsupported unwind
+operations, exception handlers, and `redo` fail before bundle emission.
+A second, temporary debug compile supplies authored opcode-error lines;
+normal shipped bytecode gains no debug section. Compiler doubles now emit a
+valid minimal RITE fixture, so they cannot mask a verifier bypass.
+
+`next` already compiled to correct local block returns. Real-bytecode Goose
+tests and native-Ruby browser oracles now verify each/map results, nested
+iteration, lexical locals, and enclosing-method continuation. Block `break`
+and nonlocal block `return` are explicitly rejected instead of incorrectly
+acting like local returns. Runtime diagnostics preserve the existing
+component method-declaration/template-binding source granularity. Arbitrary
+nested class/module registration and full exception unwinding remain outside
+the supported helper contract described in [Ruby surface](RUBY_SURFACE.md).
+
+Verification on 2026-11-13:
+
+- `task specs`: **518 examples passed**, no failures/errors/pending.
+- `goosetest test`: **215 cases / 20,943 assertions passed**; mirror audit:
+  **36 matched**, zero missing/orphaned tests.
+- `task framework:e2e`: **303 checks passed** across Chromium, Firefox, and
+  WebKit (243 main framework/UI plus 60 asset/install/evolved-feature checks).
+- After the final template dependency regression was added, `task specs`
+  passed again and `task framework:ui` passed **147 checks** on all engines.
+  Qualified template references do not load an unrelated global `BASE` package.
+- `task payload` passed with exactly **1,038 raw / 534 gzip bytes** added to
+  core WASM. No optional adapter, debug section, or capacity override was added.
+- `task compile-time:framework`: all **15 builds passed** below 1,000 ms.
+- Crystal formatting, Ruby syntax, and whitespace checks passed. Goose changed
+  files retain only pre-existing G010/G014 file/function-length diagnostics,
+  reproduced against HEAD; new constant code/tests have no lint diagnostics.
+
+Final compiler SHA-256:
+`277f131bde639798f28c7c7346f89e4e800716bef7cfdb12668224926affef9b`.
+Final WASM SHA-256:
+`c87012d711bae6d099233f312dca2a248beda749cc13f1d5e9ef6be017589cf9`.
+The historic E1.S1/E1.S2 identities above remain unchanged as evidence.
+Next in the recommended order: E2.S1.

@@ -8,6 +8,7 @@ require "../webcomponents/resource_manifest"
 require "./package_graph"
 require "./source_preparer"
 require "./rite_verifier"
+require "./rite_debug_info"
 require "./capacity_config"
 require "./capacity_artifact_builder"
 
@@ -376,6 +377,7 @@ class MrbcCompiler
   ) : String
     source = SorbetTypeStripper.strip(ruby_code)
     source = GvmSourcePreparer.strip_class_ivars(source)
+    GvmSourcePreparer.validate_control_flow!(source, source_path || label, source_line_offset)
 
     prefix = "mochi-#{safe_name(label)}"
     ruby_file = File.tempfile(prefix, ".rb")
@@ -390,7 +392,13 @@ class MrbcCompiler
 
       bytecode = File.read(mrb_file.path).to_slice
       verify_context = source_path ? "#{label} (#{source_path})" : label
-      RiteVerifier.verify!(bytecode, verify_context)
+      begin
+        RiteVerifier.verify!(bytecode, verify_context)
+      rescue error : RiteVerifier::Unsupported
+        run_mrbc(ruby_file.path, mrb_file.path, source_path, source_line_offset, debug: true)
+        line = RiteDebugInfo.line_for(File.read(mrb_file.path).to_slice, error.irep_index, error.pc) || 1
+        raise "#{source_path || label}:#{line + source_line_offset - 1}: unsupported #{error.construct}"
+      end
       body = strip_rite_header(bytecode, label)
 
       File.write(chi_path, body)
@@ -406,13 +414,14 @@ class MrbcCompiler
     output_path : String,
     source_path : String? = nil,
     source_line_offset : Int32 = 1,
+    debug : Bool = false,
   ) : Nil
     mrbc = resolved_mrbc_path
     stdout = IO::Memory.new
     stderr = IO::Memory.new
     status = Process.run(
       mrbc,
-      ["-o", output_path, ruby_path],
+      debug ? ["-g", "-o", output_path, ruby_path] : ["-o", output_path, ruby_path],
       output: stdout,
       error: stderr
     )

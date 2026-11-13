@@ -21,18 +21,29 @@ module TreeSitter
       references = Set(String).new
       method_calls = Set(String).new
 
-      collect_declaration_exports(root, exports)
+      collect_exports(root, exports, "")
       collect(root, exports, references, method_calls)
 
       SourceSymbols.new(exports.to_a.sort, references.to_a.sort, method_calls.to_a.sort)
     end
 
-    private def self.collect_declaration_exports(root : Node, exports : Set(String)) : Nil
-      ClassExtractor.extract_class_decls(root).each do |declaration|
-        add_constant(exports, declaration.name)
-        add_constant(exports, declaration.qualified_name)
-        add_constant(exports, declaration.enclosing.first?) if declaration.enclosing.first?
+    private def self.collect_exports(node : Node, exports : Set(String), scope : String) : Nil
+      if node.type.in?("class", "module")
+        if name = node.child_by_field_name("name")
+          scope = qualify(scope, name.text)
+          add_constant(exports, scope)
+        end
+      elsif node.type == "assignment"
+        if left = node.child_by_field_name("left")
+          add_constant(exports, qualify(scope, left.text)) if left.type.in?("constant", "scope_resolution")
+        end
       end
+      node.each_named_child { |child| collect_exports(child, exports, scope) }
+    end
+
+    private def self.qualify(scope : String, name : String) : String
+      return name.lchop("::") if name.starts_with?("::")
+      scope.empty? ? name : "#{scope}::#{name}"
     end
 
     private def self.collect(
@@ -40,22 +51,21 @@ module TreeSitter
       exports : Set(String),
       references : Set(String),
       method_calls : Set(String),
+      scope : String = "",
     ) : Nil
       case node.type
+      when "class", "module"
+        if name = node.child_by_field_name("name")
+          scope = qualify(scope, name.text)
+        end
       when "constant"
-        add_constant(references, node.text)
+        local = qualify(scope, node.text)
+        add_constant(references, exports.includes?(local) ? local : node.text)
       when "scope_resolution"
         text = node.text
         add_constant(references, text)
         add_constant(references, text.split("::").first)
-      when "assignment"
-        if left = node.child_by_field_name("left")
-          if left.type.in?("constant", "scope_resolution")
-            text = left.text
-            add_constant(exports, text)
-            add_constant(exports, text.split("::").first)
-          end
-        end
+        return # Children are parts of this reference, not bare exported names.
       when "call"
         if node.child_by_field_name("receiver")
           if method = node.child_by_field_name("method")
@@ -66,7 +76,7 @@ module TreeSitter
       end
 
       node.each_named_child do |child|
-        collect(child, exports, references, method_calls)
+        collect(child, exports, references, method_calls, scope)
       end
     end
 

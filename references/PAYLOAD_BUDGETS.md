@@ -57,15 +57,30 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 491,552 | 158,845 | 3 |
-| Minimal initial | 495,230 | 160,551 | 7 |
-| Feature initial | 496,042 | 160,736 | 7 |
+| Core runtime | 492,590 | 159,379 | 3 |
+| Minimal initial | 496,268 | 161,085 | 7 |
+| Feature initial | 497,080 | 161,270 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 510,278 | 165,337 | 11 |
-| Network initial | 500,365 | 162,049 | 8 |
-| Network total | 500,365 | 162,049 | 8 |
+| Feature total | 511,316 | 165,871 | 11 |
+| Network initial | 501,403 | 162,583 | 8 |
+| Network total | 501,403 | 162,583 | 8 |
+
+### Scoped helper constants and dispatch cost
+
+UI-contract story E1.S3 adds **1,038 raw / 534 gzip bytes** to WASM, from
+211,555 / 95,234 to 212,593 / 95,768. Constants retain their owning module;
+method and block frames retain lexical scope; qualified constant reads execute
+in the VM; and missing explicit helper calls name the actual receiver.
+These are essential Ruby semantics, so the measured cost belongs to the core.
+The VM stores an owner identifier per constant/method/frame; no global
+capacity is raised. Helper implementations remain dependency-selected Ruby
+bytecode. The loader, JS glue, and later optional feature payload are unchanged.
+The repaired compiler verifier runs only at build time, and failure-only debug
+compilation adds no debug section to successful bundles. Budgets increase by
+exactly the measured core delta.
 
 ### Array indexing and slicing cost
+
 
 UI-contract story E1.S2 adds **2,007 raw / 887 gzip bytes** to WASM, from
 209,548 / 94,347 to 211,555 / 95,234. The shared checked dispatch handles
@@ -195,7 +210,7 @@ Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 211,555 | 95,234 |
+| `mochi-gvm.wasm` | 212,593 | 95,768 |
 | `mochi-gvm.js` | 63,170 | 17,609 |
 | `mochi-loader.js` | 216,827 | 46,002 |
 

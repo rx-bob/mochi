@@ -9,17 +9,7 @@ class InspectorRoot
   @selected_detail
 
   def initialize
-    @records = []
-    index = 1
-    while index <= 48
-      @records << {
-        "id" => "record-#{index}",
-        "severity" => index % 3 == 0 ? "warning" : "info",
-        "message" => "Record #{index} processed",
-        "details" => {"source" => "worker-#{index % 4}", "sequence" => index}
-      }
-      index += 1
-    end
+    @records = RecordData.build
     @query = ""
     @page = 0
     @selected_id = ""
@@ -28,12 +18,12 @@ class InspectorRoot
   end
 
   def refresh_page
-    matches = @records.select { |record| record["message"].include?(@query) }
+    matches = RecordData.filter(@records, @query)
     @matched_count = matches.length
-    last_page = @matched_count == 0 ? 0 : (@matched_count - 1) / 12
+    last_page = @matched_count == 0 ? 0 : (@matched_count - 1) / RecordData::PAGE_SIZE
     @page = last_page if @page > last_page
     @page = 0 if @page < 0
-    @visible_records = matches.slice(@page * 12, 12)
+    @visible_records = matches.slice(@page * RecordData::PAGE_SIZE, RecordData::PAGE_SIZE)
   end
 
   def filter(event)

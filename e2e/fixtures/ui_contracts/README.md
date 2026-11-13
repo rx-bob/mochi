@@ -10,6 +10,13 @@ oracles, initialization/helper/handler/template execution, invalid arguments,
 and bounded exhaustion followed by a successful smaller slice. Source and
 capacity diagnostics are checked by the framework suite on each engine.
 
+E1.S3 moves record generation and filtering into `lib/RecordData.rb` and uses
+qualified constants for page size. The inspector target also runs
+`probes/03-helper-contexts/test/helper_test.rb`, comparing helper results with
+native Ruby across initializer, method, event, and template calls. It checks
+separate module constants, nested `next`, map values, missing references, and
+recovery. Unsupported rescue/ensure is a build-diagnostic probe.
+
 From the Mochi repository root:
 
 ```sh

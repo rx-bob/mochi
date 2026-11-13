@@ -105,3 +105,20 @@ RUBY
     result.should contain("HELPER = 1")
   end
 end
+
+describe "helper source preparation" do
+  it "retains namespace, receiver, block locals, and original lines" do
+    source = "module RecordData\n  BASE = 7\n  def self.build\n    [1, 2].map { |x| next BASE if x == 2; x }\n  end\nend\nclass Probe\n  @tag_name = 'probe'\n  def value\n    RecordData::BASE + RecordData.build[0]\n  end\nend\n"
+    prepared = GvmSourcePreparer.strip_class_ivars(source)
+    prepared.lines[0, 7].should eq(source.lines[0, 7])
+    prepared.lines[8..].should eq(source.lines[8..])
+    GvmSourcePreparer.validate_control_flow!(prepared, "lib/probe.rb")
+  end
+
+  it "rejects redo with the authored path and offset without matching strings" do
+    GvmSourcePreparer.validate_control_flow!("def value; 'redo'; end", "lib/probe.rb")
+    expect_raises(Exception, "lib/probe.rb:12: unsupported redo") do
+      GvmSourcePreparer.validate_control_flow!("def value\n [1].each { redo }\nend", "lib/probe.rb", 11)
+    end
+  end
+end

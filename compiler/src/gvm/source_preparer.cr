@@ -8,6 +8,19 @@ require "../tree-sitter/ruby_parser"
 # instance methods and can be dropped safely. Instance variables inside method
 # definitions are preserved.
 class GvmSourcePreparer
+  def self.validate_control_flow!(source : String, path : String, line_offset : Int32 = 1) : Nil
+    parsed = TreeSitter::RubyParser.new.parse(source)
+    reject_redo(parsed.root_node, path, line_offset)
+  end
+
+  private def self.reject_redo(node : TreeSitter::Node, path : String, line_offset : Int32) : Nil
+    if node.type == "redo"
+      line = node.start_point.row + line_offset
+      raise "#{path}:#{line}: unsupported redo"
+    end
+    node.each_named_child { |child| reject_redo(child, path, line_offset) }
+  end
+
   def self.strip_class_ivars(source : String) : String
     parser = TreeSitter::RubyParser.new
     parsed = parser.parse(source)

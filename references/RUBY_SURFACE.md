@@ -4,6 +4,44 @@ Mochi implements a practical Ruby interface for browser applications. This
 document records supported forms and explicit VM limits. It does not promise
 full MRI, Enumerable, or arbitrary-precision compatibility.
 
+## Helper constants, receivers, and block control flow
+
+Top-level helper modules can define constants and singleton methods using
+ordinary Ruby. `RecordData::BASE` reads that module's constant, and
+`RecordData.build` keeps `RecordData` as its receiver. Two helper modules may
+each define `BASE` without sharing its value or creating a duplicate-package
+error. Bare constant reads in a helper method use its defining module; blocks
+retain that lexical owner and their enclosing locals.
+
+These forms work in component initialization, ordinary methods, handlers, and
+template expressions. The inspector's [RecordData helper](../e2e/fixtures/ui_contracts/lib/RecordData.rb)
+owns record generation, constants, and literal filtering. Missing qualified
+constants identify the authored name, such as `RecordData::MISSING`; missing
+singleton calls identify the actual receiver and method. Runtime source
+locations retain the existing descriptor granularity: the invoked component
+method declaration or generated template binding, rather than an exact
+instruction line inside a helper.
+
+`next` and postfix `next if` skip only the current `each`/`map` iteration.
+`next value` supplies that iteration's `map` result; bare `next` supplies
+`nil`. Nested loops preserve outer locals, and the enclosing method continues
+after iteration. These forms use normal local block-return bytecodes; no
+extra control-flow runtime is needed.
+
+The compiler verifies actual mruby 4.0 instruction numbers and every nested
+IREP before emitting a bundle. Unsupported block `break`, nonlocal block
+`return`, rescue/ensure, Range bytecodes, and `redo` fail at build time with
+the construct name and authored source location. Ordinary method `return`
+and supported while-loop `break`/`next` remain valid. The bare keyword `redo`
+is not a valid handler method name. On opcode rejection, a temporary debug
+compile supplies mrbc's line table; successful bundles contain no added debug
+section.
+
+This contract does not add arbitrary nested class/module registration,
+constant inheritance/`const_missing`, or full Ruby exception and nonlocal
+unwinding semantics. Essential scoped constant dispatch remains in the VM;
+helpers continue to load as dependency-selected Ruby bytecode.
+
 ## Numeric rounding
 
 `Integer` and binary64 `Float` support these ordinary methods:

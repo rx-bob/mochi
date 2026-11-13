@@ -164,6 +164,8 @@ RUBY
 end
 
 private def write_fake_mrbc(path : String, log_path : String)
+  # A real minimal RITE record keeps the compiler double subject to verification.
+  fixture = File.expand_path("../fixtures/gvm/minimal.mrb", __DIR__)
   script = <<-SH
 #!/bin/sh
 out=""
@@ -175,7 +177,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 cp "$input" "#{log_path}"
-{ printf 'RITE0400'; printf '\\000\\000'; printf 'RUBYBYTECODE'; } > "$out"
+cp "#{fixture}" "$out"
 SH
 
   File.write(path, script)
@@ -206,7 +208,7 @@ describe MrbcCompiler do
       compiler.compile([component], output)
 
       chi_path = File.join(output, "components", "my-counter.chi")
-      File.read(chi_path).should eq("RUBYBYTECODE")
+      File.read(chi_path).should eq(File.read(File.expand_path("../fixtures/gvm/minimal.mrb", __DIR__)).byte_slice(10))
       File.read(File.join(output, "mochi-gvm.wasm")).should eq("WASM")
       File.read(File.join(output, "mochi-gvm.js")).should eq("JS")
       File.read(File.join(output, "mochi-loader.js")).should eq("LOADER")
@@ -483,7 +485,7 @@ SH
     end
   end
 
-  if real_mrbc = MrbcCompiler.find_mrbc
+  if real_mrbc = ENV["MRBC"]? || MrbcCompiler.find_mrbc
     it "emits valid mrbc bytecode under 1 KB" do
       dir = File.join(Dir.tempdir, "mochi_real_mrbc_spec_#{Random.rand(1_000_000)}")
       Dir.mkdir_p(dir)

@@ -455,9 +455,11 @@ module MochiPackaging
     private def template_constant_references(component : MochiComponent) : Array(String)
       references = [] of String
       component_template_text(component).each do |text|
-        text.scan(/\b[A-Z][A-Za-z0-9_]*\b/) do |match|
+        text.scan(/\b[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*/) do |match|
           name = match[0]
           references << name unless references.includes?(name)
+          root = name.split("::").first
+          references << root unless references.includes?(root)
         end
       end
       references
