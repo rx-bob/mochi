@@ -57,13 +57,23 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 510,703 | 165,203 | 3 |
-| Minimal initial | 514,381 | 166,908 | 7 |
-| Feature initial | 515,193 | 167,095 | 7 |
+| Core runtime | 511,067 | 165,293 | 3 |
+| Minimal initial | 514,745 | 166,998 | 7 |
+| Feature initial | 515,557 | 167,185 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 530,474 | 171,916 | 11 |
-| Network initial | 519,516 | 168,406 | 8 |
-| Network total | 519,516 | 168,406 | 8 |
+| Feature total | 530,838 | 172,006 | 11 |
+| Network initial | 519,880 | 168,496 | 8 |
+| Network total | 519,880 | 168,496 | 8 |
+
+### Lifecycle source diagnostics (completion audit)
+
+The loader adds **364 raw / 90 gzip bytes** to preserve the lifecycle caller
+through failed-mount rollback and qualify helper method names by class. A
+`MochiDownload#save` failure during `mounted` must identify `mounted`, not an
+unrelated component `save` method. Runtime initializer/mounted collision tests
+and real-browser startup failures cover this path. WASM, JS glue, optional
+packages/adapters and default capacities are unchanged. The exact budgets above
+include this measured diagnostic correction; the story deltas below are historical.
 
 ### Optional bounded downloads (E6.S3)
 
@@ -469,7 +479,7 @@ Core runtime (current measured artifacts):
 | --- | ---: | ---: |
 | `mochi-gvm.wasm` | 217,508 | 98,677 |
 | `mochi-gvm.js` | 64,160 | 17,893 |
-| `mochi-loader.js` | 229,035 | 48,633 |
+| `mochi-loader.js` | 229,399 | 48,723 |
 
 The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block

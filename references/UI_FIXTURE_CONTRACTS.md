@@ -4,8 +4,9 @@ The three portable Ruby fixtures now exercise the supported contracts below.
 Every report has a supported, intentional, or deferred disposition; this does
 not claim full Ruby compatibility or reproduction of every original product
 workload. No external application checkout is needed to build or run evidence.
-See [final verification](#final-verification-e7s2) for current check results
-and artifact identities; chronological results later in this file are historical.
+See the [completion audit](#completion-audit-al-dente) for current check results
+and the [E7.S2 checkpoint](#final-verification-e7s2) for its artifact identities;
+chronological results later in this file are historical.
 
 The twelve source reports were discovered in `/Users/bob/repos/sencha/feedback/`
 (the plan calls this Cowboy feedback). Their **01–12 filenames identify this
@@ -1253,3 +1254,33 @@ regression changed in this story. No VM/runtime feature, default limit, payload
 budget, product checkout, benchmark, telemetry or feature flag changed. No
 commits were made. This is the final story in the plan; retained deferrals above
 are explicit scope boundaries, not claims of implemented behavior.
+
+## Completion audit (al-dente)
+
+Verified all 21 stories and 87 acceptance criteria on 2026-11-14. One small
+diagnostic gap was reproduced and fixed: a failed `MochiDownload.save` call
+during `mounted` could report an unrelated component `save` method's line
+after mount rollback cleared VM error state. The loader now retains the
+lifecycle caller and qualifies parsed method names by component class.
+Initializer and mounted regressions cover source attribution and cleanup.
+No larger unimplemented story gap was identified within the published scope.
+
+- The fresh baseline `task check` passed: **573 compiler examples**, **239
+  Goose cases / 23,003 assertions**, **232 runtime tests**, and **459 browser
+  checks**, plus payload and compile-time gates.
+- After the correction, **234 runtime tests** and **462 browser checks**
+  passed: 402 main checks plus 60 asset/install checks across Chromium,
+  Firefox and WebKit. The new browser case checks both lifecycle failures.
+- Payload membership, determinism and exact ceilings passed. The correction
+  costs **364 raw / 90 gzip bytes** in the loader: core is now **511,067 raw /
+  165,293 gzip**, minimal initial **514,745 / 166,998**. WASM, glue, optional
+  packages and default capacities are unchanged. See
+  [payload budgets](PAYLOAD_BUDGETS.md#lifecycle-source-diagnostics-completion-audit).
+- All 15 minimal compile-time checks passed at **132.7–227.6 ms**, below
+  1,000 ms. Goose formatting and change whitespace checks passed.
+
+Audit baseline: Mochi `42bf6791ffe44ed9a89a9f974ea0ce82c69c855e` plus this
+uncommitted correction; GVM remains `f215374734f7aea014bb2bdd48a47b688b496d79`.
+The compiler and VM implementation did not change during the audit. The
+retained boundaries above remain explicit; this review does not establish
+full Ruby compatibility or reproduce every historical product workload.

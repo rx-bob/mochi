@@ -71,6 +71,35 @@ test("downloads stay optional, preserve binary bytes, and retain accepted URLs t
   }, "<probe-root></probe-root>");
 });
 
+test("download startup failures retain lifecycle source despite helper name collisions @ui-inspector", async ({ page }) => {
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  for (const lifecycle of ["initialize", "mounted"]) {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-download-source-"));
+    try {
+      fs.cpSync(path.join(fixture, "probes/14-download"), project, {recursive: true});
+      const source = path.join(project, "lib/ProbeRoot.rb");
+      const invalid = '    MochiDownload.save("", "text/plain", "x")\n';
+      const original = fs.readFileSync(source, "utf8");
+      const modified = lifecycle === "initialize"
+        ? original.replace("  def initialize\n", "  def initialize\n" + invalid)
+        : original.replace("  def save\n", "  def mounted\n" + invalid + "  end\n\n  def save\n");
+      fs.writeFileSync(source, modified);
+      await withCompiledProject(project, async url => {
+        await page.goto(url);
+        await expect.poll(() => page.evaluate(() => (window as any).__uiErrors.length)).toBe(1);
+        const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+        expect(errors[0].method).toBe(lifecycle);
+        expect(errors[0].source).toBe(`lib/ProbeRoot.rb:${modified.split("\n").indexOf(`  def ${lifecycle}`) + 1}`);
+        if (lifecycle === "mounted") expect(errors[0].message).toContain("MochiDownload#save");
+        expect(errors[0].message).toContain("metadata limits");
+        await expect(page.locator("probe-root .save")).toHaveCount(0);
+        await settleConsole();
+        for (const error of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) expect(error).toContain("metadata limits");
+      }, "<probe-root></probe-root>");
+    } finally { fs.rmSync(project, {recursive: true, force: true}); }
+  }
+});
+
 test("Ruby timestamp conversions and error recovery @ui-inspector", async ({ browserName }) => {
   const output = runRubyProject(path.join(fixture, "probes/09-time"), browserName);
   expect(output).toContain(`PASS [${browserName}] Unix seconds preserve fractions`);

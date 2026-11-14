@@ -1833,6 +1833,27 @@ test("helper failures do not borrow an unrelated component method's source", asy
   assert.equal(details[0].source, "lib/counter.rb:12");
 });
 
+for (const lifecycle of ["initialize", "mounted"]) {
+  test(`${lifecycle} helper failures retain lifecycle source after rollback`, async () => {
+    const component = {...COMPONENT, source: {file: "lib/counter.rb", line: 3},
+      methods: {initialize: 8, mounted: 12, save: 20}};
+    const {log} = await setup([component]);
+    const details = [];
+    document.addEventListener("mochi:error", event => details.push(event.detail));
+    log.errorText = "MochiDownload#save: invalid download metadata";
+    if (lifecycle === "initialize") log.failMount = true;
+    else { log.methods.add("mounted"); log.failDispatch.add("mounted"); }
+    const element = document.createElement("my-counter");
+    document.body.appendChild(element);
+    await assert.rejects(element._mochiReady, /MochiDownload#save/);
+    assert.equal(details.length, 1);
+    assert.equal(details[0].method, lifecycle);
+    assert.equal(details[0].source, `lib/counter.rb:${component.methods[lifecycle]}`);
+    assert.equal(log.components.size, 0);
+    assert.equal(log.bindings.length, 0);
+  });
+}
+
 test("capacity errors include the compiled profile and failed outboxes are discarded", async () => {
   const component = {
     ...COMPONENT,

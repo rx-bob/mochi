@@ -3083,6 +3083,9 @@
 
       return { module: module, instance: instance, mountToken: mountToken };
     } catch (error) {
+      // Rollback clears VM error state; retain the lifecycle caller rather
+      // than attributing a helper's method name to this component.
+      if (error && typeof error === "object") error.mochiMethod = mountedStarted ? "mounted" : "initialize";
       if (mountedStarted) {
         // The component reached `mounted`, so give its `unmounted` hook one
         // chance to reverse partial Ruby-side setup before the registrations go.
@@ -4926,7 +4929,8 @@
               element._mochiMountState = "failed";
               var phase = error && error.mochiPhase ? error.mochiPhase : "mount";
               var reported = reportError(
-                element, phase, methodFromError(error, "initialize"),
+                element, phase, methodFromError(error, error && error.mochiMethod || "initialize",
+                  element._mochiComponent && element._mochiComponent.class_name),
                 error, element._mochiModule
               );
               // A failed transaction must not leave generated placeholders or
