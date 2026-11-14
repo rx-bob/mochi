@@ -3,6 +3,57 @@ import path from 'node:path';
 import { withCompiledProject } from './framework_helpers';
 const fixture = path.resolve(__dirname, '../fixtures/feedback_review');
 
+test('feedback: 118 authored methods and 140 generated getters stay correct across instances and remounts', async ({page}) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if(message.type() === 'error') errors.push(message.text()); });
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const first = page.locator('binding-boundary.first');
+    const second = page.locator('binding-boundary.second');
+    await expect(first.locator('.seed')).toHaveText('10');
+    await expect(first.locator('[data-slot="0"]')).toHaveText('10');
+    await expect(first.locator('[data-slot="139"]')).toHaveText('149');
+    await expect(second.locator('.seed')).toHaveText('20');
+    await expect(second.locator('[data-slot="139"]')).toHaveText('159');
+    await expect(first.locator('.boundary-row').first()).toHaveAttribute('data-row', 'a');
+    await first.locator('[data-row="a"] .action').click();
+    await expect(first.locator('.last-event')).toHaveText('Alpha');
+    await expect(first.locator('.event-count')).toHaveText('1');
+    await expect(second.locator('.last-event')).toHaveText('none');
+
+    await page.locator('.replace-boundary-inputs').click();
+    await expect(first.locator('.seed')).toHaveText('30');
+    await expect(first.locator('[data-slot="139"]')).toHaveText('169');
+    await expect(second.locator('.seed')).toHaveText('70');
+    await expect(second.locator('[data-slot="139"]')).toHaveText('209');
+    await expect(first.locator('.boundary-row').first()).toHaveAttribute('data-row', 'b');
+    await expect(first.locator('[data-row="a"] .row-label')).toHaveText('Alpha2');
+    await second.locator('[data-row="b"] .action').click();
+    await expect(second.locator('.last-event')).toHaveText('Beta2');
+    await expect(second.locator('.event-count')).toHaveText('1');
+    await expect(first.locator('.last-event')).toHaveText('Alpha');
+
+    await first.locator('.toggle-rows').click();
+    await expect(first.locator('.boundary-row')).toHaveCount(0);
+    await expect(second.locator('.boundary-row')).toHaveCount(2);
+    await first.locator('.toggle-rows').click();
+    await expect(first.locator('[data-row="a"] .row-label')).toHaveText('Alpha2');
+    await first.locator('[data-row="a"] .action').click();
+    await expect(first.locator('.last-event')).toHaveText('Alpha2');
+    await expect(first.locator('.event-count')).toHaveText('2');
+    await expect(second.locator('.last-event')).toHaveText('Beta2');
+    expect(errors).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__mochiErrors)).toEqual([]);
+  }, '<binding-boundary-host></binding-boundary-host>');
+});
+
 test('feedback: nested typed children retain both event connections across updates and remounts', async ({page}) => {
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));

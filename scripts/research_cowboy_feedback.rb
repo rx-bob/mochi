@@ -24,6 +24,14 @@ Dir.mktmpdir('mochi-feedback-review-') do |dir|
   methods = (0...118).map { |i| "def m#{i}\n #{i}\nend" }.join("\n")
   html = Array.new(bindings, '<span>{m0}</span>').join
   cases["methods_118_bindings_#{bindings}"] = source(methods + "\ndef html\n %Q{<div>#{html}</div>}\nend")
+
+  distinct_html = (0...bindings).map do |i|
+    %Q{<span data-slot="#{i}">{@seed + #{i}}</span>}
+  end.join
+  distinct_methods = (0...116).map { |i| "def m#{i}\n #{i}\nend" }.join("\n")
+  cases["distinct_methods_118_bindings_#{bindings}"] = source(
+    "def initialize\n @seed = 1\nend\n#{distinct_methods}\ndef html\n %Q{<div>#{distinct_html}</div>}\nend"
+  )
 end
   cases['missing_css_import'] = source('def html; %Q{<p>OK</p>}; end' + "\ndef css\n %Q{@import \"missing.css\";}\nend")
   cases['unbraced_event'] = source('def handle(event); end' + "\ndef html\n %Q{<review-child on:action=\"handle\"></review-child>}\nend")
