@@ -3997,7 +3997,7 @@ test("binding paths resolve through text nodes and comments exactly as emitted",
     ...COMPONENT,
     tag_name: "path-check",
     class_name: "PathCheck",
-    html_template: '\n  <div class="one"><b>text</b></div>\n  <!--if-anchor-0-->\n  <p class="two">x</p>\n',
+    html_template: '\n  <div class="one"><b>text</b></div>\n  <!--if-anchor-0-->\n  <p class="two">{html}</p>\n',
     bindings: [
       { id: 7, path: [1, 0, 0], kind: "text", attr_name: null, template_text: "text", getter_sym: "__mochi_bind_7" },
       { id: 8, path: [3], kind: "cond", attr_name: null, template_text: "<p>shown</p>", getter_sym: "__mochi_bind_8" },
@@ -4013,8 +4013,7 @@ test("binding paths resolve through text nodes and comments exactly as emitted",
 
   assert.equal(element.bindingTargets[7].textContent, "text");
   assert.equal(element.bindingTargets[8].nodeType, 8);
-  assert.equal(element.bindingTargets[9].nodeType, 1);
-  assert.equal(element.bindingTargets[9].textContent, "x");
+  assert.equal(element.bindingTargets[9].__mochiRangeTarget, true);
   const styleCount = element.shadowRoot.adoptedStyleSheets
     ? element.shadowRoot.adoptedStyleSheets.length
     : element.shadowRoot.querySelectorAll("style").length;
@@ -4744,8 +4743,8 @@ test("html and attribute patches update their cached targets", async () => {
   document.body.appendChild(htmlElement);
   await htmlElement._mochiReady;
 
-  assert.equal(htmlElement.bindingTargets[0].nodeType, 1);
-  assert.equal(htmlElement.bindingTargets[0].innerHTML, "<b>icon</b>");
+  assert.equal(htmlElement.bindingTargets[0].__mochiRangeTarget, true);
+  assert.equal(htmlElement.shadowRoot.querySelector(".icon > b").textContent, "icon");
 
   module.patchQueue.push({ patches: [{ id: 0, value: "https://example.test/path" }] });
   const attrElement = document.createElement("attr-check");
@@ -4863,14 +4862,31 @@ test("ordinary text bindings stay literal and only trusted markup creates elemen
   const mixed = element.shadowRoot.querySelector(".mixed");
   assert.equal(mixed.querySelector("em"), null);
   assert.equal(mixed.querySelector(".icon").tagName.toLowerCase(), "svg");
+  assert.equal(mixed.querySelector(".icon").parentNode, mixed);
   assert.equal(mixed.textContent, 'Before <em>plain</em> & "quoted"  after');
+  const icon = mixed.querySelector(".icon");
 
   module.patchQueue.push({ patches: [{ id: 1, value: "next & <tag>" }] });
   loader.applyPatches(element);
   assert.equal(mixed.querySelector("em"), null);
   assert.equal(mixed.querySelector("tag"), null);
   assert.equal(mixed.textContent, 'Before next & <tag>  after');
-  assert.equal(mixed.querySelector(".icon").tagName.toLowerCase(), "svg");
+  assert.equal(mixed.querySelector(".icon"), icon);
+
+  module.patchQueue.push({ patches: [{ id: 2, value: "" }] });
+  loader.applyPatches(element);
+  assert.equal(mixed.querySelector(".icon"), null);
+  assert.equal(mixed.textContent, 'Before next & <tag>  after');
+
+  module.patchQueue.push({ patches: [{ id: 2, value: "<b>one</b><i>two</i>" }] });
+  loader.applyPatches(element);
+  assert.deepEqual(Array.from(mixed.children).map(child => child.tagName.toLowerCase()), ["b", "i"]);
+  assert.equal(mixed.textContent, 'Before next & <tag> onetwo after');
+
+  module.patchQueue.push({ patches: [{ id: 2, value: "" }] });
+  loader.applyPatches(element);
+  assert.equal(mixed.children.length, 0);
+  assert.equal(mixed.textContent, 'Before next & <tag>  after');
 });
 
 test("trusted row slots render markup while row item html strings stay data", async () => {
@@ -4923,6 +4939,51 @@ test("trusted row slots render markup while row item html strings stay data", as
   assert.equal(rows[2].textContent, "string plain");
   assert.equal(rows[2].querySelector("button"), null);
   assert.equal(global.__mochiPwned, undefined);
+});
+
+test("trusted text ranges parse raw fragments in their SVG and table insertion contexts", async () => {
+  const svgText = "{svg_markup}";
+  const tableText = "{table_markup}";
+  const template = '<svg class="scene">{svg_markup}</svg><table><tbody><tr><td>{table_markup}</td></tr></tbody></table>';
+  const component = {
+    tag_name: "trusted-context-check",
+    class_name: "TrustedContextCheck",
+    chi_file: "trusted-context-check.chi",
+    html_template: template,
+    css: "",
+    bindings: [
+      {
+        id: 0, path: [0, 0], kind: "html", trusted_markup: true, attr_name: null,
+        template_text: svgText, template_start: 0, template_end: Buffer.byteLength(svgText), getter_sym: "__mochi_bind_0",
+      },
+      {
+        id: 1, path: [1, 0, 0, 0, 0], kind: "html", trusted_markup: true, attr_name: null,
+        template_text: tableText, template_start: 0, template_end: Buffer.byteLength(tableText), getter_sym: "__mochi_bind_1",
+      },
+    ],
+    events: [],
+  };
+  const { loader, module } = await setup([component]);
+  module.patchQueue.push({ patches: [
+    { id: 0, value: '<circle class="raw-circle" cx="3" cy="4" r="2"></circle>' },
+    { id: 1, value: '<span class="raw-cell">cell</span><em>two</em>' },
+  ] });
+  const element = document.createElement("trusted-context-check");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const svg = element.shadowRoot.querySelector("svg.scene");
+  const circle = svg.querySelector(":scope > circle.raw-circle");
+  assert.ok(circle);
+  assert.equal(circle.namespaceURI, "http://www.w3.org/2000/svg");
+  const cell = element.shadowRoot.querySelector("td");
+  assert.deepEqual(Array.from(cell.children).map(child => child.tagName.toLowerCase()), ["span", "em"]);
+  assert.equal(cell.querySelector("span.raw-cell").textContent, "cell");
+  assert.equal(cell.querySelector("td"), null);
+
+  module.patchQueue.push({ patches: [{ id: 1, value: "<strong>next</strong>" }] });
+  loader.applyPatches(element);
+  assert.deepEqual(Array.from(cell.children).map(child => child.tagName.toLowerCase()), ["strong"]);
 });
 
 test("row html bindings without trusted markup are rejected", async () => {
@@ -5702,7 +5763,7 @@ test("trusted row html slots patch between markers without replacing siblings", 
         each_rows: {
           id: 0,
           keyed: true,
-          template: '<li class="row"><input class="keep"><span class="slot">\uE0020\uE003</span></li>',
+          template: '<li class="row"><input class="keep">\uE0020\uE003</li>',
           bindings: [{ slot: 0, kind: "html", trusted_markup: true, attr_name: null }],
           children: [],
         },
@@ -5724,8 +5785,9 @@ test("trusted row html slots patch between markers without replacing siblings", 
 
   const row = element.shadowRoot.querySelector("li.row");
   const input = row.querySelector("input.keep");
-  const slot = row.querySelector("span.slot");
-  assert.equal(slot.querySelector("b").textContent, "one");
+  const bold = row.querySelector("b");
+  assert.equal(bold.parentNode, row);
+  assert.equal(bold.textContent, "one");
 
   module.patchQueue.push({
     patches: [{
@@ -5737,9 +5799,18 @@ test("trusted row html slots patch between markers without replacing siblings", 
 
   assert.equal(element.shadowRoot.querySelector("li.row"), row);
   assert.equal(row.querySelector("input.keep"), input);
-  assert.equal(row.querySelector("span.slot"), slot);
-  assert.equal(slot.querySelector("b"), null);
-  assert.equal(slot.querySelector("i").textContent, "two");
+  assert.equal(row.querySelector("b"), null);
+  assert.equal(row.querySelector("i").parentNode, row);
+  assert.equal(row.querySelector("i").textContent, "two");
+
+  module.patchQueue.push({ patches: [{ id: 0, value: JSON.stringify([[{ id: "a" }, [""], [], "a"]]) }] });
+  loader.applyPatches(element);
+  assert.deepEqual(Array.from(row.children).map(child => child.tagName.toLowerCase()), ["input"]);
+  assert.equal(row.querySelector("input.keep"), input);
+
+  module.patchQueue.push({ patches: [{ id: 0, value: JSON.stringify([]) }] });
+  loader.applyPatches(element);
+  assert.equal(element.shadowRoot.querySelector("li.row"), null);
 });
 
 test("unkeyed rows keep positional identity while patching values", async () => {

@@ -421,6 +421,17 @@ wrapped with `Mochi.raw(...)` opts into trusted markup. Literal HTML entities
 outside Ruby expressions decode once, including conditional attribute text;
 entities inside Ruby strings retain their exact Ruby value.
 
+Trusted markup occupies its authored text position without a framework-created
+wrapper. SVG or other nodes can therefore be direct flex/grid children and
+match direct-child selectors. Add an explicit HTML wrapper when you want to
+style or lay out the fragment as one box. A value update replaces only the
+nodes owned by that raw expression, leaving adjacent text and sibling DOM
+identity intact. Mochi does not recompile trusted strings as templates:
+placeholder text and event-looking attributes inside them do not create Ruby
+bindings. Browser custom elements follow ordinary connect/disconnect behavior
+when their containing raw range is inserted or removed; component tags inside
+runtime strings do not add dependencies to the bundle.
+
 `{{literal}}` escapes braces in text and quoted attributes. Attribute hashes
 retain `class={{ "active" => @active }}` and the quoted equivalent. In quoted
 attributes a valid hash, an empty hash, or explicit pair/splat syntax selects

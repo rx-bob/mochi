@@ -249,6 +249,16 @@ markup your app authored or already trusts. It is accepted in text content,
 including list rows, and rejected in attribute values. Values without it never
 create elements or event handlers.
 
+Trusted markup is inserted at the authored text position without an implicit
+element wrapper. Its nodes can be direct flex/grid children and match direct
+child selectors. Write an enclosing element explicitly when it needs its own
+styles, attributes, or layout box. When a raw value changes, Mochi replaces
+only that value's owned node range; neighboring text, inputs, and components
+keep their identity. Raw strings are not parsed again as Mochi templates, so
+placeholders or event syntax inside them do not become Ruby bindings. Browser
+custom elements in trusted markup connect and disconnect with their inserted
+nodes; their tags are not dependency-discovered from a runtime string.
+
 ## List rows
 
 Rows keep their DOM identity while their values change. Use an explicit Ruby

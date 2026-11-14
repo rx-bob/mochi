@@ -57,13 +57,23 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 419,360 | 134,604 | 3 |
-| Minimal initial | 423,038 | 136,309 | 7 |
-| Feature initial | 423,850 | 136,496 | 7 |
+| Core runtime | 424,471 | 135,576 | 3 |
+| Minimal initial | 428,149 | 137,281 | 7 |
+| Feature initial | 428,961 | 137,468 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 439,131 | 141,317 | 11 |
-| Network initial | 428,173 | 137,807 | 8 |
-| Network total | 428,173 | 137,807 | 8 |
+| Feature total | 444,242 | 142,289 | 11 |
+| Network initial | 433,284 | 138,779 | 8 |
+| Network total | 433,284 | 138,779 | 8 |
+
+### Trusted markup ranges (E6.S1)
+
+The core loader grows **5,111 raw / 972 gzip bytes**. The new range handling
+inserts trusted nodes at their authored positions, patches only the owned range,
+and parses fragments in their actual HTML, SVG, or table context. This removes
+the implicit layout element without replacing neighboring drafts, focus, or
+component nodes. The compiler schema, WASM, JS glue, optional packages, and
+adapters are unchanged. Core-containing ceilings increase by this measured
+loader delta; later feature bytes and capacity defaults stay unchanged.
 
 ### Mount-owned timer validation (E4.S1)
 
@@ -527,7 +537,7 @@ Core runtime (current measured artifacts):
 | --- | ---: | ---: |
 | `mochi-gvm.wasm` | 179,993 | 81,975 |
 | `mochi-gvm.js` | 8,658 | 3,631 |
-| `mochi-loader.js` | 230,709 | 48,998 |
+| `mochi-loader.js` | 235,820 | 49,970 |
 
 The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block
@@ -547,9 +557,9 @@ Minimal initial (current measured artifacts):
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-Minimal initial is 423,038 / 136,309; formatting feature initial is 423,850 /
-136,496; formatting feature total is 439,131 / 141,317; and network initial /
-total is 428,173 / 137,807. The checked-in JSON budget matches these measured
+Minimal initial is 428,149 / 137,281; formatting feature initial is 428,961 /
+137,468; formatting feature total is 444,242 / 142,289; and network initial /
+total is 433,284 / 138,779. The checked-in JSON budget matches these measured
 artifacts.
 
 Feature initial adds only manifest metadata:

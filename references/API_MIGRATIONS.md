@@ -83,6 +83,24 @@ chains stop at the active VM profile's `host_event_queue_entries` or
 the event and subscription context. Mochi clears the offending queued work;
 other queued publications and later independent events can still run.
 
+## Trusted markup composition
+
+`Mochi.raw(value)` inserts trusted markup at its authored text position. It no
+longer gains an implicit `<span>` around the fragment. This preserves direct
+SVG children, flex/grid item structure, and direct-child selectors. If the
+fragment needs one styled layout box, write that wrapper in the component
+template.
+
+Mochi owns the inserted nodes for each raw expression range. Updating the value
+removes only those nodes; neighboring text, drafts, focus, and child component
+instances remain in place. Empty and multi-node fragments use the same range.
+The parser uses the actual insertion context, including SVG and table cells.
+Raw strings are not scanned as a second Mochi template, and their contents do
+not gain Ruby bindings or compiled Mochi event handlers. A browser-defined
+custom element in the markup receives normal DOM connection/disconnection;
+its name is not dependency-discovered from the runtime value. This does not add
+content projection or arbitrary component composition.
+
 ## Numeric and currency contracts
 
 Ruby `Integer` uses checked signed 64-bit arithmetic; overflow raises a

@@ -3244,12 +3244,6 @@
     }
     validateBindingPlaceholder(element, node, binding, context);
 
-    if ((binding.kind === "html" || binding.kind === "text_html") && node.nodeType === 3) {
-      var span = global.document.createElement("span");
-      span.textContent = node.textContent;
-      node.parentNode.replaceChild(span, node);
-      node = span;
-    }
     if (binding.kind === "text" || binding.kind === "text_html") {
       textBindingState(node, binding);
     } else if (binding.kind === "attr" && node.nodeType === 1) {
@@ -3261,6 +3255,82 @@
     element.bindingTargets[binding.id] = node;
     element.bindingData[binding.id] = binding;
     return node;
+  }
+
+  function installTextRangeGroup(element, root, node, bindings, context) {
+    var template = bindings[0].template_text;
+    var entries = bindings.map(function (binding) {
+      validateBindingPlaceholder(element, node, binding, context);
+      var start = binding.template_start;
+      var end = binding.template_end;
+      if (typeof start !== "number" || typeof end !== "number") {
+        if (bindings.length !== 1 || typeof template !== "string" || !/^\{[^{}]+\}$/.test(template)) {
+          throw new Error("mochi-loader: missing text range for " + bindingContext(element, binding, context));
+        }
+        start = 0;
+        end = template.length;
+      }
+      return {
+        binding: binding,
+        start: byteOffsetToIndex(template, start),
+        end: byteOffsetToIndex(template, end)
+      };
+    }).sort(function (left, right) { return left.start - right.start; });
+    var fragment = global.document.createDocumentFragment();
+    var cursor = 0;
+    entries.forEach(function (entry) {
+      if (entry.start < cursor || entry.end <= entry.start || entry.end > template.length) {
+        throw new Error("mochi-loader: overlapping or invalid text range for " +
+          bindingContext(element, entry.binding, context));
+      }
+      var literal = unescapeBraces(template.slice(cursor, entry.start));
+      if (literal) fragment.appendChild(global.document.createTextNode(literal));
+      var start = global.document.createComment("mochi-binding-start-" + entry.binding.id);
+      var end = global.document.createComment("mochi-binding-end-" + entry.binding.id);
+      fragment.appendChild(start);
+      fragment.appendChild(end);
+      var target = { __mochiRangeTarget: true, start: start, end: end, value: undefined };
+      element.bindingTargets[entry.binding.id] = target;
+      element.bindingData[entry.binding.id] = entry.binding;
+      cursor = entry.end;
+    });
+    var trailing = unescapeBraces(template.slice(cursor));
+    if (trailing) fragment.appendChild(global.document.createTextNode(trailing));
+    if (!node.parentNode) {
+      throw new Error("mochi-loader: detached text target for " + bindingContext(element, bindings[0], context));
+    }
+    node.parentNode.replaceChild(fragment, node);
+  }
+
+  function installBindingTargets(element, root, bindings, context) {
+    var ordered = (bindings || []).slice().sort(function (left, right) {
+      var a = left.path || [], b = right.path || [];
+      for (var i = 0; i < Math.min(a.length, b.length); i++) {
+        if (a[i] !== b[i]) return b[i] - a[i];
+      }
+      return b.length - a.length;
+    });
+    for (var at = 0; at < ordered.length; at++) {
+      var binding = ordered[at];
+      if (binding.kind === "html" || binding.kind === "text_html") {
+        var node = resolveTarget(root, binding.path || []);
+        if (node && node.nodeType === 3) {
+          var group = [binding];
+          var next = at + 1;
+          while (next < ordered.length) {
+            var candidate = ordered[next], a = binding.path || [], b = candidate.path || [];
+            if ((candidate.kind !== "html" && candidate.kind !== "text_html") || a.length !== b.length ||
+                a.some(function (part, index) { return part !== b[index]; })) break;
+            group.push(candidate);
+            next++;
+          }
+          installTextRangeGroup(element, root, node, group, context);
+          at = next - 1;
+          continue;
+        }
+      }
+      installBindingTarget(element, root, binding, context);
+    }
   }
 
   function eventTarget(event, root, eventName) {
@@ -3848,13 +3918,23 @@
   }
 
   function applyTextPatch(target, binding, value) {
-    var state = textBindingState(target, binding);
-    if (state.values[binding.id] === value) return;
-    state.values[binding.id] = value;
+    if (target && target.__mochiRangeTarget) {
+      if (binding.trusted_markup) {
+        assignRangeHtml(target, resolveIconAssetReferences(
+          displayBindingValue(value), state.manifest, state.manifestUrl
+        ));
+      } else {
+        assignRangeText(target, value);
+      }
+      return;
+    }
+    var bindingState = textBindingState(target, binding);
+    if (bindingState.values[binding.id] === value) return;
+    bindingState.values[binding.id] = value;
     if (binding.kind === "text_html") {
-      target.innerHTML = substitute(state, state.values, true);
+      target.innerHTML = substitute(bindingState, bindingState.values, true);
     } else {
-      target.textContent = substitute(state, state.values, false);
+      target.textContent = substitute(bindingState, bindingState.values, false);
     }
   }
 
@@ -3864,11 +3944,53 @@
     }
     if (target.__mochiHtmlValue === value) return;
     target.__mochiHtmlValue = value;
-    target.innerHTML = resolveIconAssetReferences(
-      displayBindingValue(value),
-      state.manifest,
-      state.manifestUrl
-    );
+    var markup = resolveIconAssetReferences(displayBindingValue(value), state.manifest, state.manifestUrl);
+    if (target.__mochiRangeTarget) {
+      assignRangeHtml(target, markup);
+    } else {
+      target.innerHTML = markup;
+    }
+  }
+
+  function clearRange(target) {
+    var parent = target.start && target.start.parentNode;
+    if (!parent || target.end.parentNode !== parent) {
+      throw new Error("mochi-loader: detached trusted markup range");
+    }
+    var node = target.start.nextSibling;
+    while (node && node !== target.end) {
+      var next = node.nextSibling;
+      parent.removeChild(node);
+      node = next;
+    }
+    if (node !== target.end) throw new Error("mochi-loader: invalid trusted markup range");
+    return parent;
+  }
+
+  function assignRangeText(target, value) {
+    var next = displayBindingValue(value);
+    if (target.value === next) return;
+    target.value = next;
+    var parent = clearRange(target);
+    if (next !== "") parent.insertBefore(global.document.createTextNode(next), target.end);
+  }
+
+  function rangeFragmentFor(markup, target) {
+    var parent = target.start.parentNode;
+    if (parent && parent.nodeType === 1 && typeof global.document.createRange === "function") {
+      var range = global.document.createRange();
+      range.selectNodeContents(parent);
+      return range.createContextualFragment(markup || "");
+    }
+    return fragmentFor(markup);
+  }
+
+  function assignRangeHtml(target, markup) {
+    if (target.value === markup) return;
+    target.value = markup;
+    var fragment = rangeFragmentFor(markup, target);
+    var parent = clearRange(target);
+    parent.insertBefore(fragment, target.end);
   }
 
   var BOOLEAN_ATTRIBUTES = {
@@ -4032,9 +4154,7 @@
     var branchBindings = branch.bindings || [];
     var endNode = target.nextSibling;
 
-    branchBindings.forEach(function (binding) {
-      installBindingTarget(element, fragment, binding, "conditional branch");
-    });
+    installBindingTargets(element, fragment, branchBindings, "conditional branch");
 
     // Scalar SVG attributes must be complete before a branch enters the DOM.
     // Structural bindings replay after insertion to retain their parent context.
@@ -4328,6 +4448,8 @@
     var next = displayRowValue(value);
     if (host.value === next) return;
     host.value = next;
+    var markup = resolveIconAssetReferences(next, state.manifest, state.manifestUrl);
+    var fragment = rangeFragmentFor(markup, host);
     var parent = host.start.parentNode;
     if (!parent) throw new Error("mochi-loader: detached row html slot " + host.slot);
     var node = host.start.nextSibling;
@@ -4336,7 +4458,7 @@
       parent.removeChild(node);
       node = after;
     }
-    parent.insertBefore(fragmentFor(next), host.end);
+    parent.insertBefore(fragment, host.end);
   }
 
   function assignRowAttribute(host, values) {
@@ -5229,10 +5351,7 @@
       _resolveBindings(root) {
         var runtime = this._mochiRuntime;
         if (!runtime) return;
-        var bindings = runtime.bindings;
-        for (var i = 0; i < bindings.length; i++) {
-          installBindingTarget(this, root, bindings[i], tag);
-        }
+        installBindingTargets(this, root, runtime.bindings, tag);
       }
 
       _attachEvents(root) {

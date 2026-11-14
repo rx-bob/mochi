@@ -85,6 +85,68 @@ test('feedback: nested typed children retain both event connections across updat
   }, '<review-root></review-root>');
 });
 
+test('feedback: raw ranges compose as direct nodes and preserve keyed siblings across replacement and disposal', async ({page}) => {
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator('raw-composition-root');
+    const mixed = root.locator('.raw-mixed');
+    const tags = () => mixed.evaluate(element => Array.from(element.children).map(child => child.tagName.toLowerCase()));
+    const rowA = root.locator('[data-row="a"]');
+    const rowAHandle = await rowA.elementHandle();
+    const childAHandle = await rowA.locator('review-child').elementHandle();
+    const draft = rowA.locator('.draft');
+
+    await expect(mixed).toHaveText('Before after');
+    expect(await tags()).toEqual(['svg']);
+    expect(await root.locator('.raw-cell').evaluate(element => Array.from(element.children).map(child => child.tagName.toLowerCase())))
+      .toEqual(['b', 'em']);
+    await expect(root.locator('.raw-cell > b.table-value')).toHaveText('table');
+    await expect(root.locator('.user-label')).toHaveText('<img class="untrusted" src=x onerror="bad()">');
+    expect(await root.locator('.user-label img').count()).toBe(0);
+    expect(await rowA.evaluate(element => element.querySelector(':scope > .row-mark')?.textContent)).toBe('A');
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().elements)).toBe(3);
+
+    await draft.fill('unsaved draft');
+    await draft.focus();
+    await root.locator('.update-raw').evaluate(element => (element as HTMLElement).click());
+    expect(await tags()).toEqual(['svg', 'strong']);
+    await expect(mixed).toHaveText('Before {not_a_binding} after');
+    await expect(draft).toHaveValue('unsaved draft');
+    await expect(draft).toBeFocused();
+    expect(await rowAHandle!.evaluate((element: any) => element.isConnected &&
+      element === document.querySelector('raw-composition-root')!.shadowRoot!.querySelector('[data-row="a"]'))).toBe(true);
+    expect(await childAHandle!.evaluate((element: any) => element.isConnected &&
+      element === document.querySelector('raw-composition-root')!.shadowRoot!.querySelector('[data-row="a"] review-child'))).toBe(true);
+
+    await rowA.locator('.action').click();
+    await expect(root.locator('.selected')).toHaveText('Alpha');
+    await root.locator('.reorder').click();
+    expect(await rowAHandle!.evaluate((element: any) => element.isConnected &&
+      element === document.querySelector('raw-composition-root')!.shadowRoot!.querySelector('[data-row="a"]'))).toBe(true);
+    expect(await childAHandle!.evaluate((element: any) => element.isConnected &&
+      element === document.querySelector('raw-composition-root')!.shadowRoot!.querySelector('[data-row="a"] review-child'))).toBe(true);
+    expect(await rowA.locator('.draft').inputValue()).toBe('unsaved draft');
+
+    await root.locator('.update-raw').evaluate(element => (element as HTMLElement).click());
+    expect(await tags()).toEqual([]);
+    expect(await mixed.evaluate(element => element.textContent)).toBe('Before  after');
+    await root.locator('.update-raw').evaluate(element => (element as HTMLElement).click());
+    expect(await tags()).toEqual(['svg', 'strong']);
+    await root.locator('.update-raw').evaluate(element => (element as HTMLElement).click());
+    expect(await tags()).toEqual([]);
+
+    await root.locator('.toggle-rows').click();
+    await expect(root.locator('review-child')).toHaveCount(0);
+    await expect(root.locator('.row-mark')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().elements)).toBe(1);
+    expect(await tags()).toEqual([]);
+    await root.locator('.toggle-rows').click();
+    await expect(root.locator('review-child')).toHaveCount(2);
+    await expect(root.locator('.row-mark')).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().elements)).toBe(3);
+  }, '<raw-composition-root></raw-composition-root>');
+});
+
 test('feedback: binding failures name unsupported helper and preserve binding context for recovery', async ({page}) => {
   await withCompiledProject(fixture, async url => {
     await page.goto(url);
