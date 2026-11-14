@@ -187,6 +187,10 @@ function collectDiagnostics(page) {
 function assertDiagnostics(diagnostics, origin, expected = null, actionError = null) {
   const unexpected = diagnostics.filter(error => expected === null || !error.message.includes(expected));
   if (unexpected.length) {
+    if (actionError && actionError.message.includes(": wait_for selector ")) {
+      throw new Error(`${actionError.message}\n${unexpected.map(error =>
+        `${error.kind} error${error.source ? ` (${error.source})` : ""}: ${error.message}`).join("\n")}`);
+    }
     throw new Error(`${origin}: ${unexpected.map(error =>
       `${error.kind} error${error.source ? ` (${error.source})` : ""}: ${error.message}`).join("\n")}`);
   }
@@ -204,6 +208,105 @@ function assertDiagnostics(diagnostics, origin, expected = null, actionError = n
 async function readyComponent(page, tag) {
   await page.waitForFunction(tag => !!document.querySelector(tag)?._mochiReady, tag, { timeout: 5000 });
   await page.evaluate(async tag => { await document.querySelector(tag)._mochiReady; }, tag);
+}
+
+async function waitForTarget(page, tag, step, origin) {
+  const result = await page.evaluate(({ tag, selector, timeoutMs }) => new Promise(resolve => {
+    const started = Date.now();
+    const parts = selector.split(/\s*>>>\s*/).filter(Boolean);
+    let original = null;
+    let originalComponent = null;
+    let readyPromise = null;
+    let readyState = "pending";
+    let readyError = "";
+    const find = () => {
+      let scope = document.querySelector(tag)?.shadowRoot;
+      let found = null;
+      let component = null;
+      for (let index = 0; index < parts.length; index += 1) {
+        found = scope && scope.querySelector(parts[index]);
+        if (!found) return { target: null, component };
+        if ("_mochiMountState" in found) component = found;
+        if (index + 1 < parts.length) scope = found.shadowRoot;
+      }
+      return { target: found, component };
+    };
+    const finish = value => resolve(value);
+    const poll = () => {
+      let current;
+      try { current = find(); }
+      catch (error) { finish({ kind: "invalid", message: error.message }); return; }
+      if (original && !original.isConnected || originalComponent && !originalComponent.isConnected) {
+        finish({ kind: "detached" });
+        return;
+      }
+      if (original && current.target !== original || originalComponent && current.component !== originalComponent) {
+        finish({ kind: "replaced" });
+        return;
+      }
+      if (!original && current.target) original = current.target;
+      if (!originalComponent && current.component) originalComponent = current.component;
+      if (originalComponent && !readyPromise && originalComponent._mochiReady) {
+        readyPromise = originalComponent._mochiReady;
+        Promise.resolve(readyPromise).then(value => {
+          readyState = value && value.cancelled ? "cancelled" : "resolved";
+        }, error => {
+          readyError = error && error.mochi && error.mochi.message || error && error.message || String(error);
+          readyState = "rejected";
+        });
+      }
+      if (originalComponent) {
+        if (originalComponent._mochiMountState === "failed" || readyState === "rejected") {
+          const detail = originalComponent.mochiError && originalComponent.mochiError.mochi;
+          const message = detail && detail.message || readyError || "component mount failed";
+          finish({ kind: "failed", message });
+          return;
+        }
+        if (originalComponent._mochiMountState === "mounted" && readyState === "resolved" && original) {
+          finish({ kind: "ready" });
+          return;
+        }
+        if (readyState === "cancelled" && originalComponent._mochiReady !== readyPromise) {
+          readyPromise = originalComponent._mochiReady;
+          readyState = "pending";
+          Promise.resolve(readyPromise).then(value => {
+            readyState = value && value.cancelled ? "cancelled" : "resolved";
+          }, error => {
+            readyError = error && error.mochi && error.mochi.message || error && error.message || String(error);
+            readyState = "rejected";
+          });
+        }
+      }
+      if (!originalComponent && original) {
+        finish({ kind: "ready" });
+        return;
+      }
+      if (Date.now() - started >= timeoutMs) {
+        finish({ kind: originalComponent && originalComponent._mochiMountState !== "mounted" ? "pending" : "absent" });
+        return;
+      }
+      setTimeout(poll, 10);
+    };
+    poll();
+  }), { tag, selector: step.selector, timeoutMs: step.timeout_ms });
+
+  if (result.kind === "ready") return;
+  if (result.kind === "absent") {
+    throw new Error(`${origin}: wait_for timed out after ${step.timeout_ms}ms; selector '${step.selector}' element absent`);
+  }
+  if (result.kind === "pending") {
+    throw new Error(`${origin}: wait_for timed out after ${step.timeout_ms}ms; selector '${step.selector}' component mount pending`);
+  }
+  if (result.kind === "failed") {
+    throw new Error(`${origin}: wait_for selector '${step.selector}' component mount failed: ${result.message}`);
+  }
+  if (result.kind === "detached") {
+    throw new Error(`${origin}: wait_for selector '${step.selector}' target detached before it became ready`);
+  }
+  if (result.kind === "replaced") {
+    throw new Error(`${origin}: wait_for selector '${step.selector}' target was replaced before it became ready`);
+  }
+  throw new Error(`${origin}: wait_for selector '${step.selector}' is invalid: ${result.message}`);
 }
 
 async function settleFrames(page) {
@@ -493,6 +596,9 @@ async function runCase(browser, browserName, baseUrl, testCase) {
           if (actual.trim() !== step.expected) {
             throw new Error(`${origin}: expected state '${step.expected}', got '${actual.trim()}'`);
           }
+        } else if (step.operation === "wait_for") {
+          if (!host) throw new Error(`${origin}: mount a component before using wait_for`);
+          await waitForTarget(page, host, step, origin);
         } else if (step.operation === "wait") {
           await page.waitForFunction(() => {
             const stats = window.MochiLoader.debugStats();
@@ -644,7 +750,7 @@ function assertDownload(actual, step, origin) {
   }
 }
 
-module.exports = { syntheticFiles, collectDiagnostics, assertDiagnostics, runCase, assertDownload };
+module.exports = { syntheticFiles, collectDiagnostics, assertDiagnostics, runCase, assertDownload, waitForTarget };
 
 if (require.main === module && process.env.MOCHI_TEST_RUNNER_LIBRARY !== "1") {
   main().catch((error) => {

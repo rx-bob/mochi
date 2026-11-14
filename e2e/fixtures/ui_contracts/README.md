@@ -147,7 +147,12 @@ Ruby selectors begin inside the mounted root. Use `>>>` to cross a child shadow
 boundary, such as `[data-field='a'] field-editor >>> .draft`. `fill` handles text
 and selects; `click` handles controls/SVG. `focus`, `press` and `assert_focused`
 drive native keyboard behavior. `wait_for_settled` waits for lazy child mounts
-and pending host work. Download scenarios use trusted clicks and real artifacts:
+and pending host work across the mounted tree. `wait_for(selector,
+timeout_ms: 5000)` waits only for the selected element; when the selector names
+a Mochi component, it waits until that component is interactive. Use
+`>>>` selectors as with other Ruby actions. A timeout reports whether the
+element was absent or its component mount was pending. Download scenarios use
+trusted clicks and real artifacts:
 
 ```ruby
 # From test/download_test.rb, where jsonl and records are MRI-built expectations.

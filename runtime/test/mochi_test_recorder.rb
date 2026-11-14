@@ -90,6 +90,14 @@ module Mochi
         record("wait")
       end
 
+      def wait_for(selector, timeout_ms: 5_000)
+        value = test_selector(selector)
+        unless timeout_ms.is_a?(Integer) && timeout_ms.between?(1, 30_000)
+          raise ArgumentError, "wait_for timeout_ms must be an Integer between 1 and 30000"
+        end
+        record("wait_for", { "selector" => value, "timeout_ms" => timeout_ms })
+      end
+
       def assert_text(selector, expected)
         record("assert_text", {
           "selector" => selector.to_s,

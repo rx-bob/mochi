@@ -138,3 +138,31 @@ test("Ruby recorder preserves keyboard/focus steps and authored locations", () =
     assert.ok(steps.every(step => step.ruby_file === source));
   });
 });
+
+test("Ruby recorder serializes selector readiness with a bounded timeout and Ruby location", () => {
+  withTestProject((root, testDir) => {
+    const source = path.join(testDir, "wait_test.rb");
+    const plan = path.join(root, "plan.json");
+    fs.writeFileSync(source, 'Mochi::Test.test("wait") do\n  wait_for "panel-host >>> .ready", timeout_ms: 1200\nend\n');
+    const result = spawnSync("ruby", [recorder, testDir, plan], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const step = JSON.parse(fs.readFileSync(plan, "utf8")).tests[0].steps[0];
+    assert.deepEqual([step.operation, step.selector, step.timeout_ms, step.ruby_file, step.line],
+      ["wait_for", "panel-host >>> .ready", 1200, source, 2]);
+  });
+});
+
+test("Ruby recorder rejects empty selectors and unbounded wait timeouts at the authored line", () => {
+  withTestProject((root, testDir) => {
+    const source = path.join(testDir, "invalid_wait_test.rb");
+    const plan = path.join(root, "plan.json");
+    for (const action of ['wait_for ""', 'wait_for ".ready", timeout_ms: 0', 'wait_for ".ready", timeout_ms: 30001', 'wait_for ".ready", timeout_ms: 1.5']) {
+      fs.writeFileSync(source, `Mochi::Test.test("bad wait") do\n  ${action}\nend\n`);
+      const result = spawnSync("ruby", [recorder, testDir, plan], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /invalid_wait_test\.rb:2/);
+      assert.match(result.stderr, action === 'wait_for ""' ? /test selector must not be empty/ : /wait_for timeout_ms must be an Integer between 1 and 30000/);
+      assert.equal(fs.existsSync(plan), false);
+    }
+  });
+});

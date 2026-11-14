@@ -89,14 +89,23 @@ test("Ruby runner matches a rejected mount and consumes all diagnostic channels"
   }, "");
 });
 
-test("Ruby wait_for_settled waits for a lazily mounted child descriptor", async ({ browser, browserName }, testInfo) => {
+test("Ruby wait_for waits for one lazily mounted child without waiting on unrelated mounts", async ({ browser, browserName }, testInfo) => {
   const scenario = recordCase(testInfo, [
-    'mount "nested-form-root", open: false', 'click ".toggle"', 'wait_for_settled',
-    'assert_value "[data-field=\'a\'] field-editor >>> .draft", "Alpha"',
+    'mount "nested-form-root", open: false', 'click ".toggle"', 'click ".fresh"',
+    "wait_for \"[data-field='a'] field-editor >>> .draft\"",
+    "assert_value \"[data-field='a'] field-editor >>> .draft\", \"Fresh a\"",
+    "fill \"[data-field='a'] field-editor >>> .draft\", \"Ready\"",
+    "assert_text \"[data-field='a'] field-editor >>> .draft-validation\", \"Valid: Ready\"",
   ]);
   let delayed = false;
   const driver = { newPage: async () => {
     const page = await browser.newPage();
+    await page.addInitScript(() => {
+      const unrelated = document.createElement("unrelated-pending");
+      (unrelated as any)._mochiMountState = "mounting";
+      document.addEventListener("DOMContentLoaded", () => document.body.appendChild(unrelated));
+      setInterval(() => {}, 1000);
+    });
     await page.route("**/components/field-editor.json", async route => {
       delayed = true;
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -107,6 +116,50 @@ test("Ruby wait_for_settled waits for a lazily mounted child descriptor", async 
   await withCompiledProject(fixture, async baseURL => {
     expect(await runCase(driver, browserName, baseURL, scenario)).toBe(true);
     expect(delayed).toBe(true);
+  }, "");
+});
+
+test("Ruby wait_for fails when its pending child is removed", async ({ browser, browserName }, testInfo) => {
+  const scenario = recordCase(testInfo, [
+    'mount "nested-form-root", open: false', 'click ".toggle"',
+    "wait_for \"[data-field='a'] field-editor\", timeout_ms: 2000",
+  ]);
+  const driver = { newPage: async () => {
+    const page = await browser.newPage();
+    await page.route("**/components/field-editor.json", async route => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await page.evaluate(() => {
+        const root = document.querySelector("nested-form-root") as any;
+        root.shadowRoot.querySelector(".toggle").click();
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await route.continue();
+    });
+    return page;
+  } };
+  await withCompiledProject(fixture, async baseURL => {
+    await expect(runCase(driver, browserName, baseURL, scenario))
+      .rejects.toThrow(/runner_test\.rb:4: wait_for selector .* target detached before it became ready/);
+  }, "");
+});
+
+test("Ruby wait_for timeout identifies an absent selector at its Ruby source line", async ({ browser, browserName }, testInfo) => {
+  const scenario = recordCase(testInfo, [
+    'mount "inspector-root"', 'wait_for ".never-present", timeout_ms: 30',
+  ]);
+  await withCompiledProject(fixture, async baseURL => {
+    await expect(runCase(browser, browserName, baseURL, scenario))
+      .rejects.toThrow(/runner_test\.rb:3: wait_for timed out after 30ms; selector '\.never-present' element absent/);
+  }, "");
+});
+
+test("Ruby wait_for reports a rejected child mount at its Ruby source line", async ({ browser, browserName }, testInfo) => {
+  const scenario = recordCase(testInfo, [
+    'mount "wait-root"', 'click ".toggle"', 'wait_for "failing-child"',
+  ]);
+  await withCompiledProject(path.join(fixture, "probes/runner-child-mount-error"), async baseURL => {
+    await expect(runCase(browser, browserName, baseURL, scenario))
+      .rejects.toThrow(/runner_test\.rb:4: wait_for selector 'failing-child' component mount failed: .*unknown method/);
   }, "");
 });
 
