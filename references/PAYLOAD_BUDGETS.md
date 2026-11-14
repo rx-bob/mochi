@@ -57,13 +57,13 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 511,067 | 165,293 | 3 |
-| Minimal initial | 514,745 | 166,998 | 7 |
-| Feature initial | 515,557 | 167,185 | 7 |
+| Core runtime | 415,706 | 133,115 | 3 |
+| Minimal initial | 419,384 | 134,820 | 7 |
+| Feature initial | 420,196 | 135,007 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 530,838 | 172,006 | 11 |
-| Network initial | 519,880 | 168,496 | 8 |
-| Network total | 519,880 | 168,496 | 8 |
+| Feature total | 435,477 | 139,828 | 11 |
+| Network initial | 424,519 | 136,318 | 8 |
+| Network total | 424,519 | 136,318 | 8 |
 
 ### Lifecycle source diagnostics (completion audit)
 
@@ -473,13 +473,32 @@ The route and storage contracts had previously added 7,031 raw bytes and 1,378
 gzip bytes over the pre-route/storage baseline. Both changes belong to the core
 runtime, not to either fixture's entry component or later feature load.
 
+### Rebuilt GVM runtime and bytecode compatibility (E2.S3)
+
+The GVM WASM and JS were rebuilt from current runtime source before browser
+validation. Core artifacts now measure **415,706 raw / 133,115 gzip bytes**,
+down from the previous recorded **511,067 / 165,293**. This is a reduction of
+**95,361 raw / 32,178 gzip bytes** across WASM, JS glue, and loader. WASM
+shrinks by **40,556 / 18,080**, JS glue by **55,502 / 14,262**, while loader
+changes by **+697 / +164**. These exact artifact sizes replace the old ceilings;
+gzip tolerance remains unchanged.
+
+The rebuilt runtime executes mrbc's extended fallback method definitions.
+Development install records already bind compiler, WASM, JS glue, and capacity
+profile by SHA-256, so no identity schema or compatibility metadata change was
+needed. New installs capture the matching artifacts, and stale or explicitly
+incompatible paths continue to fail before compilation. The 255-method encoding
+cliff is removed; fixed method-table, bytecode, and other capacity limits remain
+documented in [fixed VM capacities](../docs/fixed-capacities.md). Debug tables
+remain excluded from shipped `.chi` files.
+
 Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 217,508 | 98,677 |
-| `mochi-gvm.js` | 64,160 | 17,893 |
-| `mochi-loader.js` | 229,399 | 48,723 |
+| `mochi-gvm.wasm` | 176,952 | 80,597 |
+| `mochi-gvm.js` | 8,658 | 3,631 |
+| `mochi-loader.js` | 230,096 | 48,887 |
 
 The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block
@@ -499,19 +518,18 @@ Minimal initial (current measured artifacts):
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-The pre-slicing complete core was 489,545 / 157,958 raw / gzip bytes. Minimal
-initial is 493,223 / 159,664; formatting feature initial is 494,035 / 159,849;
-formatting feature total is 508,271 / 164,450; and network initial/total is
-498,358 / 161,162. The E1.S2 increase documented above is included in the
-current JSON budget.
+Minimal initial is 419,384 / 134,820; formatting feature initial is 420,196 /
+135,007; formatting feature total is 435,477 / 139,828; and network initial /
+total is 424,519 / 136,318. The checked-in JSON budget matches these measured
+artifacts.
 
 Feature initial adds only manifest metadata:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-manifest.json` | 2,475 | 871 |
+| `mochi-manifest.json` | 2,450 | 869 |
 
-The feature manifest is 837 raw bytes and 188 gzip bytes larger than the
+The feature manifest is 812 raw bytes and 187 gzip bytes larger than the
 minimal manifest. This is capability metadata, not the adapter implementation.
 
 Later feature load:
@@ -531,7 +549,7 @@ Network initial adds these files to core:
 | File | Raw | Gzip |
 | --- | ---: | ---: |
 | `index.html` | 176 | 135 |
-| `mochi-manifest.json` | 1,960 | 764 |
+| `mochi-manifest.json` | 1,960 | 763 |
 | `components/network-panel.chi` | 418 | 287 |
 | `components/network-panel.json` | 633 | 343 |
 | `mochi-fetch.js` | 5,626 | 1,675 |

@@ -104,8 +104,8 @@ class InstallationPaths
   end
 
   # Validate all artifacts needed by a standard build before output cleanup or
-  # compilation begins. E5 will extend the runtime identity record with the
-  # selected fixed-capacity profile; current bundles use manifest schema 3.
+  # compilation begins. Runtime identity includes the selected default capacity
+  # profile; current bundles use manifest schema 3.
   def validate_build_resources! : Nil
     compiler = required_path("MOCHI_COMPILER", "compiler", [File.join(@development_root, "compiler", "mochi")], executable: true)
     required_path("MRBC", "mrbc", mrbc_defaults, executable: true)

@@ -79,6 +79,24 @@ describe InstallationPaths do
     FileUtils.rm_rf(root) if root
   end
 
+  it "rejects a missing explicit GVM path instead of using the installed runtime" do
+    root = File.join(Dir.tempdir, "mochi install explicit gvm #{Random.rand(1_000_000)}")
+    _paths, record = valid_installation_paths_fixture(root, "default")
+    paths = InstallationPaths.new(
+      {
+        "MOCHI_INSTALL_RECORD" => record,
+        "MOCHI_GVM_WASM"        => File.join(root, "missing-explicit.wasm"),
+      },
+      File.join(root, "checkout")
+    )
+
+    expect_raises(Exception, /MOCHI_GVM_WASM points to missing file/) do
+      paths.validate_build_resources!
+    end
+  ensure
+    FileUtils.rm_rf(root) if root
+  end
+
   it "rejects installation records with unsupported runtime profiles" do
     root = File.join(Dir.tempdir, "mochi install profile #{Random.rand(1_000_000)}")
     paths = valid_installation_paths_fixture(root, "custom-capacity")[0]

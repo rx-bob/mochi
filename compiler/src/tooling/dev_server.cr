@@ -55,6 +55,8 @@ class DevServer
       "text/html"
     when ".js"
       "application/javascript"
+    when ".wasm"
+      "application/wasm"
     when ".css"
       "text/css"
     when ".json"

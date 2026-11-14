@@ -41,6 +41,12 @@ ivar, slot, and byte pools must also leave room for the collector's reserved
 headroom. The compiler estimates inline arenas, bytecode, bridge buffers, and
 stack storage and rejects a `memory_bytes` value below that minimum.
 
+mruby's short method-definition operands no longer impose a 255-method cliff:
+the compiler verifier and GVM accept mrbc's extended fallback definitions.
+The runtime method registry remains bounded at 4,096 entries across loaded
+programs, and bytecode remains bounded by the profile's `abi_bytecode_bytes`
+limit. Other fixed VM and transport limits above still apply.
+
 GVM artifacts have a hard WebAssembly linear-memory maximum of
 `memory_bytes`. Linear memory can grow up to that limit for runtime and bytecode
 allocations, but the configured Goose arenas never expand. These limits bound
