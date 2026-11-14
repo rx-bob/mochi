@@ -2,6 +2,21 @@ require "spec"
 require "../../src/gvm/source_preparer"
 
 describe GvmSourcePreparer do
+  it "erases resolved top-level literal imports while preserving source positions" do
+    source = "require 'json'\nrequire_relative(\n  'helper'\n)\nclass Example\n def value\n  JSON.parse('null')\n end\nend\n"
+    result = GvmSourcePreparer.strip_class_ivars(source)
+    result.should_not contain("require")
+    result.bytesize.should eq(source.bytesize)
+    result.lines.size.should eq(source.lines.size)
+    result.lines[6].should eq(source.lines[6])
+    result.should contain("JSON.parse('null')")
+  end
+
+  it "does not erase dynamic, qualified, or method-level calls" do
+    source = "require name\nrequire \"\#{name}\"\nloader.require('json')\nclass Example\n def value\n  require 'json'\n end\nend\n"
+    GvmSourcePreparer.strip_class_ivars(source).should eq(source)
+  end
+
   it "removes class-level instance variables but keeps method state" do
     source = <<-RUBY
 class MyCounter

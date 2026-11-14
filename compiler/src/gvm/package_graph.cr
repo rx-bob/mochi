@@ -14,7 +14,7 @@ module MochiPackaging
   # Bundle schema shared by the entry manifest and the per-component
   # descriptors it points at. Both halves move together.
   SCHEMA_VERSION   = 3
-  RUNTIME_REQUIRES = Set{"json", "await"}
+  RUNTIME_REQUIRES = Set{"await"}
 
   # A host capability operation is either a synchronous WASM-to-JS call or an
   # asynchronous request whose result is delivered back to a live component.
@@ -35,6 +35,11 @@ module MochiPackaging
     limit_keys : Array(Tuple(String, String))
 
   CAPABILITY_DEFINITIONS = [
+    CapabilityDefinition.new(
+      "time", 1, "mochi-time.js", "Time",
+      [CapabilityOperation.new("now", "sync")],
+      [] of Tuple(String, String)
+    ),
     CapabilityDefinition.new(
       "formatting",
       1,
@@ -423,6 +428,11 @@ module MochiPackaging
               "#{resolved.sort.join(", ")}"
       end
       return resolved.first unless resolved.empty?
+
+      if import.method == "require" && import.path.in?("json", "time")
+        builtin = @packages["ruby:lib/mochi_builtin_#{import.path}.rb"]?
+        return builtin.id if builtin
+      end
 
       if import.method == "require" && RUNTIME_REQUIRES.includes?(import.path)
         return nil

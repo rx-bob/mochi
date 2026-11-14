@@ -49,7 +49,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, completed by E3.S1:** shared fragment lowering defers row geometry; ordinary SVG attributes now stay inert during parsing, compound values resolve together, and conditional scalar geometry initializes before insertion. `EditableGraphRoot` adds four keyed nodes/three paths, synchronous insertion audits, exact changed-path write counts, identity across reorder/delete/reinsert, branch recreation, canonical `viewBox`/`refX`, and marker references. SVG custom-element children remain deferred. | E2.S1 shared fix; E3.S1 graph |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **supported:** `07-binding-handler` observes `needle:a` on input and `needle:b` on select change. Shared Ruby scenarios cover both attribute orders, checkbox Booleans, current row arguments, property resets, branch recreation, and remount. `07-binding-failure` proves setter exhaustion blocks the callback and later events recover. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **supported, completed by E3.S2:** `dataset` retains target semantics; `target_dataset` names that snapshot explicitly and `current_target_dataset` exposes bound-handler data. Graph nodes and inspector table rows select identically from surfaces and descendants. Report 08 covers source-located oversized target/handler payload rejection and subsequent recovery under the default limit. | E3.S2 |
-| `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` now receives raw X/Y/Z/mode (`4:12:0:0`) with E5.S2. Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
+| `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **partially repaired/API gaps:** `09-json` requires JSON and round-trips an exact integer above 2^53 (E6.S1); `09-time` now proves pre-epoch seconds/floor/UTC identity (E6.S2). `09-math` and `09-regexp` still fail mounting with `unknown class`. `09-wheel` receives raw X/Y/Z/mode (`4:12:0:0`) with E5.S2. Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
 | `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported:** `10-next` renders `alpha,beta`; E1.S3 adds nested `each`, `map` with `next value`, lexical-local updates, and continuation after iteration across helper/component contexts. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; E1.S3 covers helper parity in 03 and rejects unsupported nonlocal control flow before mounting. | E1.S2, E1.S3 |
 | `11-boolean-typecheck.md` | Documented `prop :enabled, Boolean, default: false` works in both runtime and typecheck. | **supported:** `11-boolean`, the typed Boolean event probe, and the shared form build with `--typecheck`. Static/conditional/repeated child props retain false values; wrong Boolean event payloads are rejected before parent delivery. Genuine Sorbet errors remain covered. | E2.S4 |
 | `12-assets-and-css-imports.md` | Public assets retain the documented output path; CSS resolution and icon packaging have explicit source-backed behavior. | **intentional-contract:** `12-assets-css` serves `/public/probe.svg`, resolves `lib/nested/../themes/base.css`, applies its color, and packages only the referenced `home` icon. **intentional-contract:** `12-missing-css` fails at build time with component/path details. **reproduced-defect:** `12-root-css` cannot import a present project-root `styles/base.css` through `../../styles/base.css`: the isolated compiler tree omits that directory. This differs from direct StyleComposer support. | E7.S2: document supported source layout and resolve or explicitly retain the root-style boundary |
@@ -58,7 +58,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 
 The synthetic workload in report 04 preserves nested hashes/arrays, concatenation, and repeated scans, but not every byte and binding of the application. It does not reproduce the reported 32,738-byte allocation failure or prove that 480 arbitrarily large records fit. Default scratch limits remain 2,048 objects and 131,072 bytes. E4 must test realistic structured records, resource lifetimes, and failure/recovery, using existing configuration rather than silently raising global budgets.
 
-Report 09 is a capability inventory, not one executable expression. JSON parse is probed; JSON generation/`require "json"` loading and error contracts belong to E6.S1. Time.now is probed; the timestamp subset belongs to E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned keyboard shortcuts and dialog scope precedence are delivered in E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. These broader contracts remain unresolved until their stories deliver them.
+Report 09 is a capability inventory, not one executable expression. Bounded JSON parsing/generation, top-level `require "json"`, and error recovery are delivered in E6.S1. The UTC-instant Time subset, fixed-clock tests, and explicit timestamp formatting are delivered in E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned keyboard shortcuts and dialog scope precedence are delivered in E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. Other broader contracts remain unresolved until their stories deliver them.
 
 Full Math, Date/timezone breadth, Regexp/query parsing, slots, arbitrary DOM/window access, and SVG custom-element composition are explicit deferrals. Mochi's existing formatters, focus helpers, and focus-trap support do not imply those capabilities. Bounded files and static icons are already available: the default whole-file limit is **48,000 bytes**, not a two-megabyte promise; 8,192-byte chunks support larger bounded streaming reads. Icons are selected from project `icons/` assets and emitted on demand, not supplied as an implicit Lucide catalog.
 
@@ -1066,4 +1066,93 @@ Validation on 2026-11-14:
 - All 15 minimal compile-time checks passed at **133.3–221.5 ms**, below the
   strict 1,000 ms gate. No new telemetry, benchmark, or capacity controls.
 
-Next story: E6.S1 — provide bounded JSON parsing and generation.
+## E6.S1 — bounded optional JSON
+
+`require 'json'`, `JSON.parse`, and `JSON.generate` select a **271 raw / 197 gzip
+byte** Ruby package. The compiler resolves local imports before its built-in
+fallback. Top-level static imports are removed after dependency resolution,
+preserving source positions; browser integration caught the previously emitted
+runtime `require` call. Helpers inherit normal package reachability. Unrelated
+apps omit the JSON package; no JSON JavaScript adapter exists.
+
+Pure VM primitives reuse JSON parsing and escaping with a strict document mode:
+transport marker hashes stay ordinary data, integers remain signed64 without
+passing through JavaScript numbers, and UTF-8 is validated. Generation rejects
+non-string keys, unsupported objects, non-finite floats, and ancestor cycles
+while allowing shared acyclic values. Limits are 48,000 document bytes and 16
+containers; existing arena capacities can reject a smaller node-heavy document.
+Duplicate keys are last-value-wins. Errors publish no successful partial result
+and retain Ruby source context; later valid operations succeed. See the
+[complete JSON contract](RUBY_SURFACE.md#optional-json).
+
+Inspector Ruby tests parse a small nested sample and round-trip only the selected
+record, preserving the structured 480-record collection and 12-row page. A
+separate file contract uses existing bounded `MochiFiles.read_text`, verifies
+exact integers/Unicode, rejects oversized input, then reads a valid next file.
+No inspector import UI or monolithic multi-megabyte String was added.
+
+The shared codec is an explicit core cost: **2,823 raw / 1,290 gzip bytes** in
+WASM. Loader/glue and capacity defaults are unchanged. Core is now **506,784 /
+163,793**, with WASM **215,773 / 97,810**. Exact payload ceilings increase only
+by that measured delta; optional feature-later files remain unchanged.
+
+Validation on 2026-11-14:
+
+- **570 compiler examples**, **235 Goose cases / 22,551 assertions**, and
+  **221 runtime tests** passed. Goose formatting and Ruby fixture typechecking
+  passed. JSON uses a module, matching Sorbet's standard-library declaration.
+- **447 browser checks** passed across Chromium, Firefox, and WebKit: 387 main
+  (including 100-cycle lifecycle checks) plus 60 asset/install. JSON error tests
+  preserve output after rejection, recover on a valid next call, and identify
+  the authored method/source alongside the JSON VM method.
+- Payload membership, determinism, and exact ceilings passed. All 15 minimal
+  compile-time checks passed at **136.0–149.2 ms**, below the strict 1,000 ms gate.
+
+## E6.S2 — optional wall clock and timestamp contract
+
+`Time.now`, `Time.at(seconds)`, `to_i`, `to_f`, and `utc` supply a small UTC
+instant surface. Numeric Unix seconds stay exact as Integers or preserve their
+binary64 Float value, within ±8,640,000,000,000 seconds. Integer conversion
+floors before the epoch; UTC conversion returns the same object. The wall-clock
+adapter returns checked integer milliseconds, converted once to seconds by
+Ruby. It schedules nothing and retains no owner resources. Calendar APIs,
+Time.new, Date, parsing, local-zone state, and subsecond argument overloads stay
+unsupported with source-located errors. See the
+[timestamp contract](RUBY_SURFACE.md#optional-wall-clock-and-unix-timestamps).
+
+A narrow pure VM constructor creates ordinary state instances because this VM
+does not expose general Ruby object construction. It preserves normal ivar,
+dispatch, and GC behavior without registering components or extending capacity
+profiles. `Time.at` works in computed getters; the impure `Time.now` host read
+is rejected there. Goose tests retain/reclaim Time values through 100 GC cycles.
+
+`MochiFormat.timestamp` has an explicit seconds boundary, converting to Date's
+millisecond display precision. Existing ISO/date-only formatting stays intact.
+The inspector sorts raw integer millisecond instants, switches chronological
+direction, and displays selected records in explicit en-GB UTC/Tokyo zones.
+Changing display zone preserves ordering and selection. Tests use fixed record
+times and injected/fixed clocks, including pre-epoch and initialization reads.
+No test depends on today's date; existing monotonic elapsed timing is unchanged.
+
+Clock code is optional: **1,219 raw / 585 gzip bytes** for `mochi-time.js` plus
+**444 / 285** for Ruby Time. Browser checks prove omission from unrelated apps,
+one adapter request across remounts, ready-before-initialize behavior, and
+source-located failure/recovery. Formatting is a separate optional capability.
+
+The shared constructor and native bridges cost **870 raw / 446 gzip bytes** in
+WASM; loader/glue and capacity defaults are unchanged. Core is **507,654 /
+164,239**, WASM **216,643 / 98,256**. Optional formatting's timestamp path adds
+**1,045 / 220** across adapter and Ruby code, reflected only in feature-later
+payload. Exact ceilings track these measured changes.
+
+Validation on 2026-11-14:
+
+- **571 compiler examples**, **238 Goose cases / 22,996 assertions**, and
+  **226 runtime tests** passed. Goose formatting and fixture Ruby typechecking
+  passed; existing ISO/date-only formatting coverage remains green.
+- **453 browser checks** passed across Chromium, Firefox, and WebKit: 393 main
+  (including the 100-cycle lifecycle checks) plus 60 asset/install checks.
+- Payload membership, determinism, and exact ceilings passed. All 15 minimal
+  compile-time checks passed at **135.6–157.3 ms**, below the strict 1,000 ms gate.
+
+Next story: E6.S3 — download inspector JSONL and CSV through Ruby.

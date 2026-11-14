@@ -33,4 +33,22 @@ module RecordData
     records.each { |record| found = record if record["id"] == id }
     found
   end
+
+  def self.ordered(records, newest_first)
+    records.sort_by do |record|
+      milliseconds = record["details"]["timestamp"]
+      newest_first ? -milliseconds : milliseconds
+    end
+  end
+
+  def self.instant(record)
+    Time.at(record["details"]["timestamp"] / 1000.0)
+  end
+
+  def self.display_instant(record, zone)
+    MochiFormat.timestamp(instant(record).utc.to_f, "en-GB", zone,
+      {"year" => "numeric", "month" => "2-digit", "day" => "2-digit",
+       "hour" => "2-digit", "minute" => "2-digit", "second" => "2-digit",
+       "fractional_second_digits" => 3, "hour_cycle" => "h23"})
+  end
 end

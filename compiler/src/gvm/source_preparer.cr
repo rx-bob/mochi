@@ -27,6 +27,11 @@ class GvmSourcePreparer
     parser = TreeSitter::RubyParser.new
     parsed = parser.parse(source)
     ranges = [] of Tuple(Int32, Int32)
+    # The package graph resolves top-level imports before compilation. Their
+    # dependencies are loaded before this package; no runtime require exists.
+    parsed.root_node.each_named_child do |node|
+      ranges << {node.start_byte, node.end_byte} if static_import?(node)
+    end
     visit(parsed.root_node, ranges)
     return source if ranges.empty?
 
@@ -49,6 +54,21 @@ class GvmSourcePreparer
     end
     builder << source.byte_slice(cursor, source.bytesize - cursor) if cursor < source.bytesize
     builder.to_s
+  end
+
+  private def self.static_import?(node : TreeSitter::Node) : Bool
+    return false unless node.type == "call" || node.type == "command"
+    return false unless node.child_by_field_name("receiver").nil?
+    method = node.child_by_field_name("method") || node.child_by_field_name("name")
+    return false unless method && method.text.in?("require", "require_relative")
+    arguments = node.child_by_field_name("arguments")
+    return false unless arguments
+    children = [] of TreeSitter::Node
+    arguments.each_named_child { |child| children << child }
+    return false unless children.size == 1 && children.first.type == "string"
+    literal = true
+    children.first.each_named_child { |child| literal = false if child.type == "interpolation" }
+    literal
   end
 
   private def self.visit(node : TreeSitter::Node, ranges : Array(Tuple(Int32, Int32))) : Nil

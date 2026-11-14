@@ -10,6 +10,88 @@ const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
+test("Ruby timestamp conversions and error recovery @ui-inspector", async ({ browserName }) => {
+  const output = runRubyProject(path.join(fixture, "probes/09-time"), browserName);
+  expect(output).toContain(`PASS [${browserName}] Unix seconds preserve fractions`);
+  expect(output).toContain(`PASS [${browserName}] unsupported time forms`);
+});
+
+test("clock and formatting stay optional; fixed wall clock uses seconds @ui-inspector", async ({ page }) => {
+  await withCompiledProject(path.join(repoRoot, "compiler/spec/fixtures/payload/minimal"), async (_url, bundle) => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundle, "mochi-manifest.json"), "utf8"));
+    for (const capability of ["time", "formatting"]) expect(manifest.capabilities?.[capability]).toBeUndefined();
+    for (const file of ["mochi-time.js", "mochi-format.js"]) expect(fs.existsSync(path.join(bundle, file))).toBe(false);
+    expect(Object.keys(manifest.packages).some(key => /builtin_(time|format)\.rb/.test(key))).toBe(false);
+  });
+  await page.clock.setFixedTime(new Date(1794571200123));
+  const requests: string[] = [];
+  page.on("request", request => requests.push(request.url()));
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(path.join(fixture, "probes/09-time"), async url => {
+    await page.goto(url);
+    await expect(page.locator(".mounted-now")).toHaveText("1794571200.123:1794571200");
+    await expect(page.locator("output")).toHaveText("-1.25:-2:true");
+    await page.locator(".now-button").click();
+    await expect(page.locator(".now")).toHaveText("1794571200.123:1794571200");
+    await page.clock.setFixedTime(new Date(-1250));
+    await page.locator(".now-button").click();
+    await expect(page.locator(".now")).toHaveText("-1.25:-2");
+    await page.locator(".wrong-type").click();
+    const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+    expect(errors).toHaveLength(1);
+    const lines = fs.readFileSync(path.join(fixture, "probes/09-time/lib/ProbeRoot.rb"), "utf8").split("\n");
+    expect(errors[0].source).toBe(`lib/ProbeRoot.rb:${lines.indexOf("  def wrong_type") + 1}`);
+    expect(errors[0].vmText).toContain("Time.at expects Integer or Float Unix seconds");
+    await settleConsole();
+    for (const error of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) {
+      expect(error).toContain("Time.at expects Integer or Float Unix seconds");
+    }
+    await page.locator(".valid").click();
+    await expect(page.locator("output")).toHaveText("-1.25:-2:true");
+    for (let index = 0; index < 3; index++) {
+      await page.locator("probe-root").evaluate(element => element.replaceWith(document.createElement("probe-root")));
+      await page.locator(".now-button").click();
+      await expect(page.locator(".now")).toHaveText("-1.25:-2");
+    }
+    expect(requests.filter(request => request.endsWith("/mochi-time.js"))).toHaveLength(1);
+    expect(requests.filter(request => request.endsWith("/mochi-format.js"))).toHaveLength(1);
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+  }, "<clock-root></clock-root><probe-root></probe-root>");
+});
+
+test("JSON errors recover through ordinary Ruby calls @ui-inspector", async ({ browserName }) => {
+  const output = runRubyProject(path.join(fixture, "probes/09-json"), browserName);
+  expect(output).toContain(`PASS [${browserName}] JSON rejects invalid values`);
+});
+
+test("JSON stays optional and failures retain source locations @ui-inspector", async ({ page }) => {
+  await withCompiledProject(path.join(repoRoot, "compiler/spec/fixtures/payload/minimal"), async (_url, bundle) => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundle, "mochi-manifest.json"), "utf8"));
+    expect(Object.keys(manifest.packages).some(key => key.includes("builtin_json"))).toBe(false);
+    expect(fs.existsSync(path.join(bundle, "mochi-json.js"))).toBe(false);
+  });
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  await withCompiledProject(path.join(fixture, "probes/09-json"), async url => {
+    await page.goto(url);
+    await expect(page.locator("output")).toHaveText('{"id":9007199254740993}');
+    await page.locator(".malformed").click();
+    const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("invalid JSON or UTF-8");
+    const lines = fs.readFileSync(path.join(fixture, "probes/09-json/lib/ProbeRoot.rb"), "utf8").split("\n");
+    expect(errors[0].source).toBe(`lib/ProbeRoot.rb:${lines.indexOf("  def malformed") + 1}`);
+    expect(errors[0].method).toBe("malformed");
+    expect(errors[0].vmText).toContain("JSON#parse");
+    await settleConsole();
+    for (const diagnostic of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) {
+      expect(diagnostic).toContain("invalid JSON or UTF-8");
+    }
+    await page.locator(".valid").click();
+    await expect(page.locator(".computed")).toHaveText('{"id":9007199254740993}');
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+  }, "<probe-root></probe-root>");
+});
+
 test("active form shortcut scope suppresses graph actions and restores focus @ui-graph @ui-form", async ({ page }) => {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await withCompiledProject(fixture, async url => {
@@ -441,12 +523,12 @@ const compileFailures: Record<string, { message: string; owner: string }> = {
   "12-missing-css": { message: 'CSS import "missing.css"', owner: "intentional missing-file error; E7.S2" },
 };
 const mountFailures: Record<string, { message: string; owner: string }> = {
-  "09-json": { message: "ProbeRoot#initialize: unknown class", owner: "E6.S1" },
-  "09-time": { message: "ProbeRoot#initialize: unknown class", owner: "E6.S2" },
   "09-math": { message: "ProbeRoot#initialize: unknown class", owner: "deferred Math" },
   "09-regexp": { message: "ProbeRoot#initialize: unknown class", owner: "deferred Regexp" },
 };
 const textProbes: Record<string, { selector: string; text: string; count?: number; owner: string }> = {
+  "09-time": { selector: "output", text: "-1.25:-2:true", owner: "E6.S2" },
+  "09-json": { selector: "output", text: '{"id":9007199254740993}', owner: "E6.S1" },
   "01-if-in-each": { selector: "tbody tr.selected td", text: "Alpha", owner: "E2.S1" },
   "01-each-in-if": { selector: "div", text: "Alpha", owner: "E2.S1" },
   "01-nested-each": { selector: "section p", text: "Alpha", owner: "E2.S1" },

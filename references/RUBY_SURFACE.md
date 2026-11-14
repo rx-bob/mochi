@@ -4,6 +4,126 @@ Mochi implements a practical Ruby interface for browser applications. This
 document records supported forms and explicit VM limits. It does not promise
 full MRI, Enumerable, or arbitrary-precision compatibility.
 
+## Optional JSON
+
+```ruby
+require 'json'
+
+record = JSON.parse('{"id":9007199254740993,"values":[true,null,"é"]}')
+text = JSON.generate(record)
+```
+
+Use a standalone, top-level literal `require 'json'`. The compiler resolves
+real local files first, then the optional built-in JSON package. Dependency
+loading happens before the consuming package executes; the compiler removes
+the static import while preserving source positions. Runtime/dynamic require,
+loading return values, parser options, custom object hooks, and the broader
+MRI JSON API are not supported. Helpers can import JSON and pass that dependency
+to their consumers. Direct `JSON` references also select the package.
+
+Supported values are String-keyed Hashes, Arrays, UTF-8 Strings, signed 64-bit
+Integers, finite binary64 Floats, true, false, and nil. Parsed keys are Strings.
+Duplicate object keys use the last value and retain the first insertion position.
+Generation preserves Hash insertion order. Symbols (including keys), component
+instances, and other unsupported objects fail rather than being coerced.
+Objects named `__mochi_number` or `__mochi_bytes` remain ordinary JSON objects;
+the bridge's private transport markers are not interpreted by this API.
+
+Both operations accept at most **48,000 bytes** per document, including input
+whitespace or generated punctuation/escapes. At most **16 nested containers**
+are allowed, counting an empty Array/Hash; scalar roots consume no nesting.
+Existing scratch/state object, slot, and byte capacities still apply and can
+reject a smaller document containing many nodes. No capacity defaults change.
+These are whole-document operations, not a streaming parser or a promise that
+an arbitrarily large file fits in a Ruby String. Use `MochiFiles.read_text` for
+bounded whole-file UTF-8 input; its default limit is also 48,000 bytes.
+
+Input must contain one complete JSON value. Whitespace is space, tab, CR, or LF.
+Trailing input, invalid escapes, lone UTF-16 surrogates, control characters in
+strings, malformed UTF-8 (including overlong encodings), and a UTF-8 BOM fail.
+Escaped surrogate pairs decode to UTF-8. Generation emits Unicode directly,
+escapes quotes, backslashes and controls, and does not escape `/`. Invalid
+UTF-8 Ruby Strings fail. Cycles fail; repeated references without a cycle are
+allowed and generate independent JSON subtrees.
+
+Integer tokens must fit **−9,223,372,036,854,775,808 through
+9,223,372,036,854,775,807**. No JavaScript-number conversion occurs, including
+above 2^53. Decimal/exponent tokens become binary64 Floats: rounding is to the
+supported binary64 representation, subnormals are supported, underflow may
+become zero, and overflow/non-finite values fail. Generation uses round-trip
+float formatting, preserving negative zero; integers remain decimal integers.
+
+Errors identify malformed JSON/UTF-8, byte/nesting limits, cycles, unsupported
+types, non-finite floats, or arena capacity, with Ruby source context. Failed
+operations do not return successful partial values; the next valid event can
+succeed. These are VM errors, not a claim of MRI `JSON::ParserError`/rescue
+compatibility. Parsing and generation are pure and may run in computed getters.
+
+The optional package contains only Ruby entry methods, with no JSON host adapter
+or JavaScript API. Strict decoding and generation reuse VM machinery and add an
+explicit shared WASM cost; see [payload accounting](PAYLOAD_BUDGETS.md).
+The [inspector](../e2e/fixtures/ui_contracts/lib/InspectorRoot.rb) parses a small
+sample and round-trips only its selected record. The
+[file contract](../e2e/fixtures/framework_contracts/lib/JsonFileContract.rb)
+exercises existing bounded file reads without an inspector import workflow.
+
+## Optional wall clock and Unix timestamps
+
+```ruby
+require 'time'                         # optional; direct Time references also resolve it
+instant = Time.at(-1.25)                # Unix seconds
+instant.to_i                           # -2 (floor, including before the epoch)
+instant.to_f                           # -1.25
+instant.utc == instant                 # true
+current = Time.now.utc                 # wall time, not elapsed duration
+MochiFormat.timestamp(current.to_f, "en-GB", "Asia/Tokyo",
+  {"hour" => "2-digit", "minute" => "2-digit", "hour_cycle" => "h23"})
+```
+
+This is a small UTC-instant subset: `Time.now`, `Time.at(seconds)`, `to_i`,
+`to_f`, and `utc`. `Time.at` accepts exactly one Integer or finite Float, in
+**−8,640,000,000,000 through +8,640,000,000,000 Unix seconds**, inclusive.
+Integer inputs stay exact; Float inputs retain their binary64 value without
+millisecond quantization. `to_f` returns seconds, and `to_i` floors seconds.
+`Time.at(value.to_f).to_f` preserves the returned numeric instant. Float
+resolution depends on magnitude; the far ends of this range cannot represent
+every millisecond. This is not arbitrary-precision rational/nanosecond Time.
+
+The host clock returns checked integer **Unix milliseconds**. `Time.now`
+divides by 1,000.0 exactly once to obtain binary64 seconds. Its source has
+millisecond resolution and follows wall-clock changes; it is not monotonic.
+Internal elapsed-duration measurements continue using their existing monotonic
+clock. No timers, scheduling API, calendar arithmetic, timezone database, or
+Date compatibility is added.
+
+These Time values have no mutable local timezone mode. `utc` returns the same
+object and preserves its instant. Calendar constructors (`Time.new`,
+`Time.utc(year, ...)`), subsecond/unit overloads of `Time.at`, parsing,
+`strftime`, local-zone conversion, and other Date/Time methods are unsupported.
+Wrong types, argument counts, non-finite values, range violations, and missing
+methods report Ruby source context; a valid subsequent event can succeed.
+`Time.at` is pure and works in computed getters. `Time.now` is an impure host
+read and is rejected inside computed evaluation.
+
+`MochiFormat.timestamp(seconds, locale, timezone, options)` accepts numeric Unix
+seconds with the same finite range. It converts to milliseconds at the Intl
+boundary; browser Date truncates fractional milliseconds toward zero. Existing
+`MochiFormat.date` continues accepting ISO strings, including its calendar-date
+rules. Explicit locale/timezone determine presentation only. Neither operation
+changes the instant. Use ordinary display bindings for host formatting.
+
+The inspector retains exact integer millisecond timestamps for chronological
+sorting, including its reverse-order toggle. Its Time conversion is only for
+display; switching UTC/Tokyo preserves row order and selected ID. Fixtures use
+fixed timestamps. Adapter tests inject a clock function; browser tests fix
+`Date.now` without freezing timers, including pre-epoch and mount-time reads.
+
+Time's Ruby package and stateless `mochi-time.js` adapter load only for consumers
+and are ready before initialization. Formatting remains a separate optional
+capability. Time objects use existing state roots and GC, without component
+registration or new capacity knobs. A small shared VM constructor and native
+bridges add an explicit [core payload cost](PAYLOAD_BUDGETS.md).
+
 ## Explicit computed values
 
 Declare a pure, zero-argument component method and its dependencies:

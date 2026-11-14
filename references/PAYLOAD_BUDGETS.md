@@ -57,15 +57,54 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 503,961 | 162,503 | 3 |
-| Minimal initial | 507,639 | 164,208 | 7 |
-| Feature initial | 508,451 | 164,395 | 7 |
-| Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 522,687 | 168,996 | 11 |
-| Network initial | 512,774 | 165,706 | 8 |
-| Network total | 512,774 | 165,706 | 8 |
+| Core runtime | 507,654 | 164,239 | 3 |
+| Minimal initial | 511,332 | 165,944 | 7 |
+| Feature initial | 512,144 | 166,131 | 7 |
+| Later feature load | 15,281 | 4,821 | 4 |
+| Feature total | 527,425 | 170,952 | 11 |
+| Network initial | 516,467 | 167,442 | 8 |
+| Network total | 516,467 | 167,442 | 8 |
 
-### Optional owned shortcuts (E5.S3)
+### Optional clock and timestamp formatting (E6.S2)
+
+Core grows **870 raw / 446 gzip bytes** against E6.S1. WASM is now
+**216,643 raw / 98,256 gzip bytes**. Loader and JS glue remain unchanged.
+The shared cost creates a validated Time value through existing state/GC
+machinery and connects clock/timestamp formatting through the existing native
+capability bridge. A narrow constructor keeps Time.at pure without introducing
+general Ruby object construction or a new VM storage type. Capacity defaults,
+memory limits, and lifecycle infrastructure are unchanged.
+
+`mochi-time.js` is **1,219 raw / 585 gzip bytes**; the Time Ruby package is
+**444 / 285**. Combined optional clock code: **1,663 / 870**, excluding consumer
+code and manifest/descriptor metadata. Neither file enters unrelated apps.
+The stateless adapter reads wall time only on request; it retains no timers,
+callbacks, owners, or cache. Formatter loading is independent of clock loading.
+
+Existing optional formatting gains the explicit Unix-seconds timestamp path:
+**766 / 154** adapter bytes and **279 / 66** Ruby-package bytes. The formatting
+feature's later download therefore grows **1,045 / 220**. All ceilings increase
+only by these measured costs; no spare raw-byte headroom is added. See the
+[timestamp contract](RUBY_SURFACE.md#optional-wall-clock-and-unix-timestamps).
+
+### Optional JSON API and shared codec (E6.S1 historical delta)
+
+Core grows **2,823 raw / 1,290 gzip bytes** against E5.S3. WASM is now
+**215,773 raw / 97,810 gzip bytes**. The loader and glue are unchanged.
+This is an explicit core decision: strict JSON runs directly against VM values
+to preserve signed64 integers, reuse existing parsing and escaping, validate
+UTF-8, and reject cycles/unsupported values within byte and depth limits.
+The current VM is one WASM module, so these primitives remain in core even
+when the small Ruby entry package is absent. No JavaScript JSON adapter,
+numeric host round trip, capacity increase, or memory-profile change is added.
+
+The **271 raw / 197 gzip byte** optional Ruby package is selected by top-level `require 'json'` or JSON
+constant reachability; unrelated apps omit it. Package-graph and browser tests
+enforce this boundary. Exact core-containing budgets increase only by the
+measured delta; later feature load is unchanged. See the
+[Ruby JSON contract](RUBY_SURFACE.md#optional-json).
+
+### Optional owned shortcuts (E5.S3 historical delta)
 
 Core grows **206 raw / 43 gzip bytes** against E5.S2. Loader is now
 **227,841 raw / 48,374 gzip bytes**. The shared cost is a mount-guarded
@@ -409,9 +448,9 @@ Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 212,593 | 95,768 |
+| `mochi-gvm.wasm` | 216,643 | 98,256 |
 | `mochi-gvm.js` | 63,170 | 17,609 |
-| `mochi-loader.js` | 216,827 | 46,002 |
+| `mochi-loader.js` | 227,841 | 48,374 |
 
 The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block
@@ -427,7 +466,7 @@ Minimal initial (current measured artifacts):
 | File | Raw | Gzip |
 | --- | ---: | ---: |
 | `index.html` | 170 | 132 |
-| `mochi-manifest.json` | 1,638 | 683 |
+| `mochi-manifest.json` | 1,638 | 682 |
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
@@ -450,10 +489,10 @@ Later feature load:
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-format.js` | 11,196 | 3,148 |
+| `mochi-format.js` | 11,962 | 3,302 |
 | `components/format-badge.chi` | 284 | 235 |
 | `components/format-badge.json` | 662 | 359 |
-| `components/ruby-*.chi` | 2,094 | 859 |
+| `components/ruby-*.chi` | 2,373 | 925 |
 
 The exact Ruby package digest is checkout independent and is asserted by the
 manifest audit.

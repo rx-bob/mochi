@@ -32,11 +32,20 @@ class MochiFormat
   # Formats an ISO date or timestamp. Date-only values are calendar dates and
   # use UTC; a full timestamp honors the timezone.
   def self.date(iso, locale = "en-US", timezone = "UTC", options = {})
+    return Mochi.format_date(iso, MochiFormat.date_options(locale, timezone, options))
+  end
+
+  # Unix seconds, matching Time#to_f. Intl displays at millisecond resolution.
+  def self.timestamp(seconds, locale = "en-US", timezone = "UTC", options = {})
+    return Mochi.format_timestamp(seconds, MochiFormat.date_options(locale, timezone, options))
+  end
+
+  def self.date_options(locale, timezone, options)
     result = MochiFormat.options(locale, options, nil, nil, nil, timezone)
     if !result.key?("date_style") && !result.key?("year") && !result.key?("month") && !result.key?("day") && !result.key?("weekday") && !result.key?("time_style") && !result.key?("hour") && !result.key?("minute") && !result.key?("second") && !result.key?("fractional_second_digits") && !result.key?("time_zone_name") && !result.key?("day_period")
       result["date_style"] = "medium"
     end
-    return Mochi.format_date(iso, result)
+    return result
   end
 
   def self.options(locale, options, style, currency, scale, timezone)

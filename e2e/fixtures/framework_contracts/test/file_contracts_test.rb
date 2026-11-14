@@ -1,4 +1,18 @@
 binary_bytes = (0..255).to_a
+Mochi::Test.test("bounded file text parses JSON without losing signed64 integers") do
+  mount "json-file-contract"
+  document = '{"id":9007199254740993,"values":[null,true,false,"é😀\\n"]}'
+  select_files ".json-file", files: [{ name: "record.json", bytes: document, type: "application/json" }]
+  wait_for_settled
+  assert_text ".json-result", document
+  select_files ".json-file", files: [{ name: "oversized.json", bytes: " " * 48001 }]
+  wait_for_settled
+  assert_text ".json-result", "error:file exceeds configured whole-file read limit"
+  select_files ".json-file", files: [{ name: "next.json", bytes: '{"ok":true}' }]
+  wait_for_settled
+  assert_text ".json-result", '{"ok":true}'
+end
+
 binary_checksum = 0
 binary_bytes.each { |byte| binary_checksum = (binary_checksum * 31 + byte) % 2147483647 }
 large_bytes = "z" * 65537

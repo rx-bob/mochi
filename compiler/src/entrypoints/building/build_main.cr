@@ -12,6 +12,8 @@ require "../../generated/layout_rb"
 require "../../generated/shortcuts_rb"
 require "../../generated/drag_rb"
 require "../../generated/files_rb"
+require "../../generated/json_rb"
+require "../../generated/time_rb"
 require "../../tooling/installation_paths"
 require "../../sorbet/project_typechecker"
 require "./trace_helper"
@@ -127,6 +129,15 @@ class BuildMain
     builder_man.register_generated_ruby_source(
       "#{builder_man.pre_tp_dir}/lib/mochi_builtin_files.rb",
       MochiFilesRbFragment.get_ruby_code
+    )
+
+    builder_man.register_generated_ruby_source(
+      "#{builder_man.pre_tp_dir}/lib/mochi_builtin_json.rb",
+      JSONRbFragment.get_ruby_code
+    )
+    builder_man.register_generated_ruby_source(
+      "#{builder_man.pre_tp_dir}/lib/mochi_builtin_time.rb",
+      TimeRbFragment.get_ruby_code
     )
 
     if prepare_typecheck_tree

@@ -23,6 +23,36 @@ function exact(kind, value) {
   return JSON.stringify({ __mochi_number: kind, value: String(value) });
 }
 
+test("Unix-second timestamps format deterministic instants in explicit zones", () => {
+  const options = { locale: "en-GB", timezone: "UTC", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour_cycle: "h23", fractional_second_digits: 3 };
+  const format = (value, zone = "UTC") => host().format("timestamp", value, JSON.stringify({ ...options, timezone: zone }));
+  assert.equal(format(exact("f64", "1794571200.123")), "13/11/2026, 12:00:00.123");
+  assert.equal(format(exact("f64", "1794571200.123"), "Asia/Tokyo"), "13/11/2026, 21:00:00.123");
+  assert.equal(format(exact("f64", "-1.25")), "31/12/1969, 23:59:58.750");
+  assert.equal(format(exact("i64", "1")), "01/01/1970, 00:00:01.000");
+  assert.equal(format("0"), "01/01/1970, 00:00:00.000");
+  assert.equal(format("0.0001"), "01/01/1970, 00:00:00.000");
+  assert.equal(format("-0.0001"), "01/01/1970, 00:00:00.000");
+  assert.equal(format("1000"), "01/01/1970, 00:16:40.000");
+});
+
+test("timestamp validation rejects nonnumeric, nonfinite, and out-of-range input", () => {
+  const adapter = host();
+  const options = JSON.stringify({ locale: "en-GB", timezone: "UTC" });
+  for (const value of ['"0"', "true", "null", "{}", exact("f64", "NaN"), exact("f64", "Infinity")]) {
+    assert.throws(() => adapter.format("timestamp", value, options), /finite Integer or Float Unix seconds/);
+  }
+  for (const value of ["8640000000001", "-8640000000001", exact("i64", "9223372036854775807")]) {
+    assert.throws(() => adapter.format("timestamp", value, options), /seconds exceed supported range/);
+  }
+  for (const value of ["8640000000000", "-8640000000000"]) {
+    assert.equal(typeof adapter.format("timestamp", value, options), "string");
+  }
+  assert.throws(() => adapter.format("timestamp", "0", '{"timezone":"bad/zone"}'), /invalid date options/);
+  assert.equal(adapter.sync.format('["timestamp",0,{"locale":"en-GB","timezone":"UTC"}]', {cache_entries:32}), "1 Jan 1970");
+});
+
 test("number formatting uses explicit locales and deterministic defaults", () => {
   assert.equal(number(1234567.89, {
     maximum_fraction_digits: 2,

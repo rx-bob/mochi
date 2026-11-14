@@ -1,3 +1,5 @@
+require 'json'
+
 class InspectorRoot
   @tag_name = "inspector-root"
   @records
@@ -6,8 +8,13 @@ class InspectorRoot
   @selected_id
   @next_sequence
   @show_details
+  @json_sample
+  @json_roundtrip
+  @newest_first
+  @display_zone
 
-  computed :filtered_records, depends_on: [:@records, :@query]
+  computed :ordered_records, depends_on: [:@records, :@newest_first]
+  computed :filtered_records, depends_on: [:ordered_records, :@query]
   computed :visible_records, depends_on: [:filtered_records, :@page]
   computed :selected_record, depends_on: [:@records, :@selected_id]
   computed :detail_fields, depends_on: [:selected_record]
@@ -26,10 +33,45 @@ class InspectorRoot
     @selected_id = ""
     @next_sequence = RecordData::COUNT + 1
     @show_details = true
+    @json_sample = ""
+    @json_roundtrip = ""
+    @newest_first = false
+    @display_zone = "UTC"
+  end
+
+  def ordered_records
+    RecordData.ordered(@records, @newest_first)
+  end
+
+  def toggle_order
+    @newest_first = !@newest_first
+    @page = 0
+  end
+
+  def toggle_zone
+    @display_zone = @display_zone == "UTC" ? "Asia/Tokyo" : "UTC"
+  end
+
+  def selected_time
+    record = selected_record
+    record.nil? ? "" : RecordData.display_instant(record, @display_zone)
+  end
+
+  def parse_sample
+    sample = JSON.parse('{"id":9007199254740993,"tags":["ruby",null,true],"meta":{"ok":false}}')
+    @json_sample = "#{sample['id']}:#{sample['tags'][0]}:#{sample['tags'][1].nil?}:#{sample['meta']['ok']}"
+  end
+
+  def roundtrip_selected
+    record = selected_record
+    return if record.nil?
+    encoded = JSON.generate(record)
+    restored = JSON.parse(encoded)
+    @json_roundtrip = "#{restored['id']}:#{restored['details']['timestamp']}:#{JSON.generate(restored) == encoded}"
   end
 
   def filtered_records
-    RecordData.filter(@records, @query)
+    RecordData.filter(ordered_records, @query)
   end
 
   def visible_records
@@ -115,6 +157,13 @@ class InspectorRoot
       <button class="append" onclick="{append_record}">Append record</button>
       <button class="remove-selected" onclick="{remove_selected}">Remove selected</button>
       <button class="toggle-details" onclick="{toggle_details}">Toggle details</button>
+      <button class="toggle-order" onclick="{toggle_order}">Reverse chronological order</button>
+      <button class="toggle-zone" onclick="{toggle_zone}">Switch UTC / Tokyo</button>
+      <span class="display-zone">{@display_zone}</span>
+      <button class="parse-json" onclick="{parse_sample}">Parse JSON sample</button>
+      <button class="roundtrip-json" onclick="{roundtrip_selected}">Round-trip selected record</button>
+      <output class="json-sample">{@json_sample}</output>
+      <output class="json-roundtrip">{@json_roundtrip}</output>
       <table><tbody>
         {each visible_records as record, key: record["id"]}
           <tr class="record" data-id="{record['id']}" onclick="{select_record($event)}">
@@ -128,6 +177,7 @@ class InspectorRoot
         <p class="selected-detail">{selected_detail}</p>
         <p class="selected-message">{selected_message}</p>
         <p class="selected-timestamp">{selected_timestamp}</p>
+        <p class="selected-time">{selected_time}</p>
         <dl>
           {each detail_fields as field, key: field["name"]}
             <div class="detail-field" data-name="{field['name']}"><dt>{field["name"]}</dt><dd>{field["value"]}</dd></div>

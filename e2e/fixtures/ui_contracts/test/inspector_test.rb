@@ -1,3 +1,42 @@
+Mochi::Test.test("inspector sorts instants independently of display timezone") do
+  mount "inspector-root"
+  click "[data-id='record-3'] .message"
+  assert_text ".display-zone", "UTC"
+  assert_text ".selected-time", "13/11/2026, 12:00:00.003"
+  click ".toggle-order"
+  assert_attribute ".record:first-child", "data-id", "record-480"
+  assert_attribute ".record:last-child", "data-id", "record-469"
+  click ".toggle-zone"
+  assert_text ".display-zone", "Asia/Tokyo"
+  assert_text ".selected-time", "13/11/2026, 21:00:00.003"
+  assert_attribute ".record:first-child", "data-id", "record-480"
+  assert_attribute ".record:last-child", "data-id", "record-469"
+  click "[data-id='record-480'] .message"
+  assert_text ".selected-time", "13/11/2026, 21:00:00.480"
+  click ".toggle-order"
+  assert_attribute ".record:first-child", "data-id", "record-1"
+  click ".toggle-zone"
+  assert_text ".selected-time", "13/11/2026, 12:00:00.480"
+  assert_text ".selected-id", "record-480"
+end
+
+Mochi::Test.test("inspector parses small JSON and round-trips only the selected record") do
+  mount "inspector-root"
+  click ".parse-json"
+  assert_text ".json-sample", "9007199254740993:ruby:true:false"
+  click ".roundtrip-json"
+  assert_text ".json-roundtrip", ""
+  click "[data-id='record-3'] .message"
+  click ".roundtrip-json"
+  assert_text ".json-roundtrip", "record-3:1794571200003:true"
+  assert_text ".total", "480"
+  assert_text ".visible-count", "12"
+  click ".next"
+  click "[data-id='record-13'] .message"
+  click ".roundtrip-json"
+  assert_text ".json-roundtrip", "record-13:1794571200013:true"
+end
+
 Mochi::Test.test("inspector mounts 480 structured records with 12 stable first-page IDs") do
   mount "inspector-root"
   assert_text ".total", "480"

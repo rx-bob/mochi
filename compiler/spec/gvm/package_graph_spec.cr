@@ -65,6 +65,80 @@ private def dependency_graph(
 end
 
 describe MochiPackaging::PackageGraph do
+  it "loads Time and its clock only for constant, require, and helper consumers" do
+    root = File.join(Dir.tempdir, "mochi_package_time_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      time = dependency_prelude(root, "lib/mochi_builtin_time.rb", "class Time\nend\n")
+      plain = dependency_component(root, "plain-time", "PlainTime", "class PlainTime\nend\n")
+      required = dependency_component(root, "required-time", "RequiredTime", "require 'time'\nclass RequiredTime\nend\n")
+      direct = dependency_component(root, "direct-time", "DirectTime", "class DirectTime\n def value\n Time.at(0)\n end\nend\n")
+      helper = dependency_helper(root, "time-helper.chi", "lib/time_helper.rb", "class TimeHelper\n def self.value\n Time.now\n end\nend\n")
+      indirect = dependency_component(root, "indirect-time", "IndirectTime", "class IndirectTime\n def value\n TimeHelper.value\n end\nend\n")
+      indirect.manifest.helper_chi = helper.key
+      graph = dependency_graph(root, [plain, required, direct, indirect], [time], [helper])
+      id = "ruby:lib/mochi_builtin_time.rb"
+      plain.manifest.dependencies.should eq([] of String)
+      plain.manifest.capabilities.should eq([] of String)
+      [required, direct].each { |component| component.manifest.dependencies.should contain(id) }
+      [required, direct, indirect].each { |component| component.manifest.capabilities.should eq(["time"]) }
+      graph.package("helper:lib/time_helper.rb").not_nil!.dependencies.should contain(id)
+      graph.capabilities["time"].host.should eq("mochi-time.js")
+      graph.capabilities["time"].operations.map { |operation| {operation.name, operation.mode} }.should eq([{"now", "sync"}])
+      unrelated = dependency_graph(root, [plain], [time])
+      unrelated.ruby_order.should eq([] of MochiPackaging::PackageNode)
+      unrelated.has_capability?("time").should be_false
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
+  it "loads JSON only for requires, constant users, and reachable helpers" do
+    root = File.join(Dir.tempdir, "mochi_package_json_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      json = dependency_prelude(root, "lib/mochi_builtin_json.rb", "module JSON\nend\n")
+      plain = dependency_component(root, "plain-json", "PlainJSON", "class PlainJSON\nend\n")
+      required = dependency_component(root, "required-json", "RequiredJSON", "require 'json'\nclass RequiredJSON\nend\n")
+      direct = dependency_component(root, "direct-json", "DirectJSON", "class DirectJSON\n def value\n JSON.parse('null')\n end\nend\n")
+      helper = dependency_helper(root, "json-helper.chi", "lib/json_helper.rb", "require 'json'\nclass JSONHelper\nend\n")
+      indirect = dependency_component(root, "indirect-json", "IndirectJSON", "class IndirectJSON\n def value\n JSONHelper.new\n end\nend\n")
+      indirect.manifest.helper_chi = helper.key
+      graph = dependency_graph(root, [plain, required, direct, indirect], [json], [helper])
+      id = "ruby:lib/mochi_builtin_json.rb"
+      plain.manifest.dependencies.should eq([] of String)
+      required.manifest.dependencies.should contain(id)
+      direct.manifest.dependencies.should contain(id)
+      graph.package("helper:lib/json_helper.rb").not_nil!.dependencies.should contain(id)
+      indirect.manifest.dependencies.should contain("helper:lib/json_helper.rb")
+      graph.capability_package_ids.should eq(Set(String).new)
+      dependency_graph(root, [plain], [json]).ruby_order.should eq([] of MochiPackaging::PackageNode)
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
+  it "keeps local json files ahead of the builtin and diagnoses missing JSON" do
+    root = File.join(Dir.tempdir, "mochi_package_json_local_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      consumer = dependency_component(root, "json-local", "JSONLocal", "require 'json'\nclass JSONLocal\nend\n")
+      builtin = dependency_prelude(root, "lib/mochi_builtin_json.rb", "module JSON\nend\n")
+      local = dependency_prelude(root, "lib/json.rb", "class LocalJSON\nend\n")
+      dependency_graph(root, [consumer], [builtin, local])
+      consumer.manifest.dependencies.should eq(["ruby:lib/json.rb"])
+      expect_raises(Exception, /missing Ruby dependency 'json'/) do
+        dependency_graph(root, [consumer])
+      end
+      relative = dependency_component(root, "json-relative", "JSONRelative", "require_relative 'json'\nclass JSONRelative\nend\n")
+      expect_raises(Exception, /missing Ruby dependency 'json'/) do
+        dependency_graph(root, [relative], [builtin])
+      end
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "keeps two isolated components independent of each other" do
     root = File.join(Dir.tempdir, "mochi_package_isolated_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

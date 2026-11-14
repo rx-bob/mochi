@@ -222,11 +222,25 @@
     return parsed;
   }
 
-  function formatDate(rawValue, rawOptions, cacheCapacity) {
+  function parseTimestamp(rawValue) {
+    var seconds = decodeValue(rawValue);
+    if (typeof seconds === "bigint") {
+      if (seconds < -8640000000000n || seconds > 8640000000000n) {
+        fail("timestamp seconds exceed supported range");
+      }
+      seconds = Number(seconds);
+    }
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
+      fail("timestamp must be finite Integer or Float Unix seconds");
+    }
+    if (Math.abs(seconds) > 8640000000000) fail("timestamp seconds exceed supported range");
+    return new Date(seconds * 1000);
+  }
+
+  function formatDate(rawValue, rawOptions, cacheCapacity, timestamp) {
     var options = readOptions(rawOptions);
     var locale = readLocale(options);
-    var text = String(rawValue);
-    var date = parseDate(text, options);
+    var date = timestamp ? parseTimestamp(rawValue) : parseDate(String(rawValue), options);
     var intl = intlOptions(options, DATE_OPTIONS, "date");
 
     var timezone = options.time_zone === undefined ? options.timezone : options.time_zone;
@@ -269,6 +283,7 @@
     }
     if (kind === "number") return formatNumber(value, options);
     if (kind === "date") return formatDate(value, options);
+    if (kind === "timestamp") return formatDate(value, options, undefined, true);
     fail("unsupported formatting kind '" + kind + "'");
   }
 
@@ -292,6 +307,7 @@
     }
     if (kind === "number") return formatNumber(value, options, cacheCapacity);
     if (kind === "date") return formatDate(value, options, cacheCapacity);
+    if (kind === "timestamp") return formatDate(value, options, cacheCapacity, true);
     fail("unsupported formatting kind '" + String(kind) + "'");
   }
 
