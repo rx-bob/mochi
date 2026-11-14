@@ -50,6 +50,44 @@ measurement, then changes in width or height, using border-box resize
 observation. Scrolling, position changes, and transform-only changes do not
 promise notifications; use `measure` when fresh position is required.
 
+Choose a stable `ref` whose element exists in the owning component's template.
+Mount that owner before observing it. A lazy descendant can load later and
+change the observed element's size; the initial measurement does not wait for
+descendant descriptors, packages, or styles. In a Ruby behavior test, use
+`wait_for("panel-host")` when the next action needs that named child to be
+interactive. Readiness does not promise a final layout: respond to observed
+size changes instead of sleeping for a fixed interval or assuming that two
+animation frames finish all descendant styling.
+
+For example, a drawing surface can place a marker at its own measured center.
+If a side panel appears, disappears, or the container resizes, the observed
+surface reports its new dimensions and Ruby derives the next coordinates from
+those dimensions:
+
+```ruby
+def mounted
+  MochiLayout.observe("canvas", "on_canvas_size")
+end
+
+def on_canvas_size(result)
+  unless result["ok"]
+    @layout_error = result["error"]
+    return
+  end
+
+  geometry = result["value"]
+  return if geometry["width"] <= 0 || geometry["height"] <= 0
+
+  @marker_x = geometry["width"] / 2.0
+  @marker_y = geometry["height"] / 2.0
+end
+```
+
+The coordinates above are local to the measured surface. They do not depend on
+the panel's assumed width or a reserved CSS class. Render the canvas and its
+`ref="canvas"` in the owning component; the ref is not a descendant-load
+barrier.
+
 Resize notifications coalesce into one scheduled frame. Each dirty element is
 read once per batch, and all reads precede Ruby callbacks. Unchanged dimensions
 are suppressed. A callback that writes a new size can schedule another frame;

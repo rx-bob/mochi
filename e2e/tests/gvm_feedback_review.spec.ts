@@ -476,23 +476,75 @@ test('feedback: removing a conditional child while its descriptor is pending nev
   }, '<review-root></review-root>');
 });
 
-test('feedback: initial layout follows actual DOM while child CSS loads; display contents supports scoped shortcuts', async ({page}) => {
+test('feedback: layout snapshots follow delayed CSS, resize and panel removal; display contents keeps shortcut scope in ancestry', async ({page}) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => release = resolve);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.addInitScript(() => {
+    (window as any).__layoutErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__layoutErrors.push((event as CustomEvent).detail);
+    });
+  });
   await page.route('**/components/slow-panel.json', async route => { await gate; await route.continue(); });
   await withCompiledProject(fixture, async url => {
+    let rootHandle: any;
     try {
       await page.goto(url, {waitUntil:'domcontentloaded'});
-      await expect(page.locator('output')).toHaveText('800');
-      expect(await page.locator('.viewport').evaluate(el => el.getBoundingClientRect().width)).toBe(800);
+      const root = page.locator('layout-root');
+      rootHandle = await root.elementHandle();
+      await expect(root.locator('.geometry')).toHaveText('800');
+      await expect.poll(() => root.locator('.geometry').getAttribute('data-width')).toBe('800');
+      const initial = await root.locator('.viewport').evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        return { width: rect.width, height: rect.height, left: rect.left, top: rect.top };
+      });
+      expect(initial.width).toBe(800);
+      expect(initial.height).toBe(100);
+      expect(Number(await root.locator('.geometry').getAttribute('data-center-x'))).toBeCloseTo(initial.left + initial.width / 2);
+      expect(Number(await root.locator('.geometry').getAttribute('data-center-y'))).toBeCloseTo(initial.top + initial.height / 2);
     } finally { release(); }
-    await expect(page.locator('output')).toHaveText('600');
-    expect(await page.locator('.viewport').evaluate(el => el.getBoundingClientRect().width)).toBe(600);
-    await page.locator('.inside').focus();
+    const root = page.locator('layout-root');
+    const geometry = root.locator('.geometry');
+    const expectMeasuredWidth = async (width: number) => {
+      await expect.poll(async () => Number(await geometry.getAttribute('data-width'))).toBe(width);
+      const rect = await root.locator('.viewport').evaluate(el => {
+        const box = el.getBoundingClientRect();
+        return { width: box.width, height: box.height, left: box.left, top: box.top };
+      });
+      expect(rect.width).toBe(width);
+      expect(Number(await geometry.getAttribute('data-height'))).toBe(rect.height);
+      expect(Number(await geometry.getAttribute('data-center-x'))).toBeCloseTo(rect.left + rect.width / 2);
+      expect(Number(await geometry.getAttribute('data-center-y'))).toBeCloseTo(rect.top + rect.height / 2);
+    };
+    await expect(geometry).toHaveText('600');
+    await expectMeasuredWidth(600);
+
+    await root.locator('.frame').evaluate(el => { (el as HTMLElement).style.width = '1000px'; });
+    await expectMeasuredWidth(800);
+    await root.locator('.remove-panel').click();
+    await expectMeasuredWidth(1000);
+    await root.locator('.frame').evaluate(el => { (el as HTMLElement).style.width = '700px'; });
+    await expectMeasuredWidth(700);
+
+    await root.locator('.inside').focus();
     await page.keyboard.press('h');
-    await expect(page.locator('.keys')).toHaveText('1');
+    await expect(root.locator('.keys')).toHaveText('1');
     await page.locator('#outside').focus();
     await page.keyboard.press('h');
-    await expect(page.locator('.keys')).toHaveText('1');
-  }, '<button id="outside">Outside</button><layout-root></layout-root>');
+    await expect(root.locator('.keys')).toHaveText('1');
+
+    await page.evaluate((element: any) => element.remove(), rootHandle);
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().elements)).toBe(0);
+    await page.evaluate((element: any) => document.body.appendChild(element), rootHandle);
+    await expectMeasuredWidth(600);
+    await root.locator('.frame').evaluate(el => { (el as HTMLElement).style.width = '650px'; });
+    await expectMeasuredWidth(450);
+    await root.locator('.remove-panel').click();
+    await expectMeasuredWidth(650);
+    expect(await page.evaluate(() => (window as any).__layoutErrors)).toEqual([]);
+    expect(errors).toEqual([]);
+  }, '<div class="bridge"><button id="outside">Outside</button></div><layout-root></layout-root>');
 });

@@ -79,6 +79,12 @@ are left alone. An application scope may opt Escape into editable controls.
   when `prevent` is true. An unmatched key retains browser defaults; suppressing
   lower shortcut scopes does not itself prevent the key.
 
+Component scope follows the focused target's composed DOM ancestry, including
+when the owner uses `display: contents`; CSS boxes do not define shortcut scope.
+A sibling wrapper or empty bridge outside that owner's ancestry does not inherit
+its shortcut. Use `scope: "application"` only when the shortcut should work
+outside the owning component as well.
+
 Without `active_ref`, registration activates immediately. With it, a missing or
 disconnected ref deactivates the registration without canceling its token.
 Reappearance or replacement reactivates it with a new precedence order. This
