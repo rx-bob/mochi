@@ -67,7 +67,7 @@ test('feedback: delayed children use latest row props and work on first interact
   }, '<review-root></review-root>');
 });
 
-test('feedback: timers cancel and storage survives reload; raw markup introduces a wrapper', async ({page}) => {
+test('feedback: timers cancel and storage survives reload', async ({page}) => {
   await withCompiledProject(fixture, async url => {
     await page.goto(url);
     await page.locator('.start').click();
@@ -80,11 +80,25 @@ test('feedback: timers cancel and storage survives reload; raw markup introduces
     await page.reload();
     await page.locator('.read').click();
     await expect(page.locator('output')).toHaveText('saved');
-    expect(await page.locator('.icon').evaluate(el => el.parentElement!.tagName)).toBe('SPAN');
     await page.locator('.start').click();
     await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(1);
     await page.locator('review-root').evaluate(el => el.remove());
     await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+  }, '<review-root></review-root>');
+});
+
+test('feedback: removing a conditional child while its descriptor is pending never mounts it later', async ({page}) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => release = resolve);
+  await page.route('**/components/review-child.json', async route => { await gate; await route.continue(); });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url, {waitUntil:'domcontentloaded'});
+    await expect(page.locator('review-child')).toHaveCount(0);
+    await page.locator('.toggle').click();
+    release();
+    await expect(page.locator('review-child')).toHaveCount(0);
+    await page.locator('.toggle').click();
+    await expect(page.locator('[data-row="a"] .action')).toBeVisible();
   }, '<review-root></review-root>');
 });
 

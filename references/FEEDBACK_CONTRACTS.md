@@ -6,6 +6,11 @@ three-engine browser results, and explicit limits on historical claims.
 
 Evidence index for the 17 reports reviewed on 2026-11-12. Status describes Mochi framework evidence; passing a product integration test does not establish a general contract.
 
+Stable composition scenarios from the 2026-11-14 review run through
+`task framework:feedback` and are included in `task framework:e2e`. They use
+the framework-owned fixture in `e2e/fixtures/feedback_review`; research-only
+observations are not treated as desired behavior.
+
 | Report | Framework evidence/status | Owner |
 | --- | --- | --- |
 | 001 Conditional/hash classes in each | Reproduced: conditional class helper compilation failure. Hash-form class still needs a fixture. | E2.S2 |

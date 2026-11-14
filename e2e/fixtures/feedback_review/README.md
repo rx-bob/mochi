@@ -1,7 +1,7 @@
-# Cowboy feedback research fixture
+# Feedback composition regression fixture
 
-Framework-owned Ruby reproductions for the 2026-11-14 feedback review. No Cowboy source or checkout is required. Run `cd e2e && npx playwright test gvm_feedback_review --reporter=line` after `task build`.
+Framework-owned Ruby reproductions promoted from the 2026-11-14 feedback review. No Cowboy source or checkout is required. Run `task framework:feedback`; `task framework:e2e` includes this suite. Playwright runs Chromium, Firefox, and WebKit.
 
-The browser tests cover nested typed children, conditional remounts, raw helpers, row drag events, delayed descriptors, geometry, scoped shortcuts, repeating timers, and persisted String storage. Some assertions record current behavior (notably the raw-markup wrapper); they do not endorse that behavior as a permanent API decision.
+The browser tests cover nested typed children, conditional remounts, multiple typed events, prop replacement and reordering, delayed descriptors, canceled mounts, geometry, scoped shortcuts, repeating timers, and persisted String storage. Synthetic `DataTransfer` checks prove registration and transfer handling; they do not prove native operating-system drag initiation. The raw-markup wrapper observation remains research evidence, not an expected contract.
 
-Compiler and Ruby-surface failures are generated separately by `scripts/research_cowboy_feedback.rb`. See `references/COWBOY_FEEDBACK_REVIEW.md` for conclusions and limits.
+Compiler and Ruby-surface research probes remain separate in `scripts/research_cowboy_feedback.rb`. See `references/COWBOY_FEEDBACK_REVIEW.md` for conclusions and limits.
