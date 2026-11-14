@@ -1833,6 +1833,38 @@ test("helper failures do not borrow an unrelated component method's source", asy
   assert.equal(details[0].source, "lib/counter.rb:12");
 });
 
+test("binding failures preserve authored helper source and include initiating binding context", async () => {
+  const component = {
+    ...COMPONENT,
+    source: { file: "lib/counter.rb", line: 3 },
+    methods: { initialize: 8, increment: 12, normalize: 24 },
+    bindings: [{
+      id: 0, path: [0, 0], kind: "text", attr_name: null,
+      template_text: "{@summary}", getter_sym: "__mochi_bind_0",
+      source: { file: "lib/counter.rb", line: 17, column: 20, end_line: 17, end_column: 29 },
+    }],
+  };
+  const { log } = await setup([component]);
+  const details = [];
+  document.addEventListener("mochi:error", event => details.push(event.detail));
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  log.errorText = "MyCounter#normalize (binding 0): unknown method [missing_helper]";
+  log.failDispatch.add("increment");
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(details.length, 1);
+  assert.equal(details[0].method, "normalize");
+  assert.equal(details[0].source, "lib/counter.rb:24");
+  assert.match(details[0].vmText, /missing_helper/);
+  assert.match(details[0].bindingContext, /binding 0/);
+  assert.match(details[0].bindingContext, /lib\/counter\.rb:17:20/);
+  assert.match(details[0].message, /missing_helper/);
+});
+
 for (const lifecycle of ["initialize", "mounted"]) {
   test(`${lifecycle} helper failures retain lifecycle source after rollback`, async () => {
     const component = {...COMPONENT, source: {file: "lib/counter.rb", line: 3},

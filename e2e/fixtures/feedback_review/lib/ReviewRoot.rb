@@ -6,6 +6,7 @@ class ReviewRoot
     @groups = [{"id" => "group", "rows" => @rows}]
     @result = "idle"
     @ticks = 0
+    @fail_helper = false
   end
   def toggle
     @show = !@show
@@ -42,13 +43,24 @@ class ReviewRoot
   def read
     @result = Mochi.storage_get("mochi-feedback-review", "missing")
   end
+  def fail_helper
+    @fail_helper = true
+  end
+  def recover_helper
+    @fail_helper = false
+  end
+  def diagnostic
+    @rows.first.fetch_missing_value if @fail_helper
+    "ready"
+  end
   def html
     %Q{
       <main>
         <button class="toggle" onclick="{toggle}">Toggle</button><button class="replace" onclick="{replace}">Replace</button>
         <button class="start" onclick="{start}">Start</button><button class="stop" onclick="{stop}">Stop</button>
         <button class="save" onclick="{save}">Save</button><button class="read" onclick="{read}">Read</button>
-        <output>{@result}</output><span class="ticks">{@ticks}</span>
+        <button class="fail-helper" onclick="{fail_helper}">Fail helper</button><button class="recover-helper" onclick="{recover_helper}">Recover helper</button>
+        <output>{@result}</output><span class="ticks">{@ticks}</span><span class="diagnostic">{diagnostic}</span>
         <div class="mixed">Before {Mochi.raw(icon)} after</div>
         {if @show}
           <section class="modal">{Mochi.raw(body)}

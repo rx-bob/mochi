@@ -207,6 +207,14 @@
     return null;
   }
 
+  function bindingForError(element, method, vmText) {
+    var direct = bindingForMethod(element, method);
+    if (direct) return direct;
+    var match = /\(binding (\d+)\)/.exec(vmText || "");
+    if (!match || !element || !element.bindingData) return null;
+    return element.bindingData[match[1]] || null;
+  }
+
   function describeError(component, phase, method, error, module, element) {
     var detail = error && error.message ? error.message : String(error || "");
     var vmText = lastError(module);
@@ -220,16 +228,19 @@
     if (component && component.methods && component.methods[failedMethod]) method = failedMethod;
     var source = component && component.source;
     var line = source && source.line;
+    var methodSource = false;
     if (source && component.methods && method) {
       var mapped = Number(component.methods[method]);
-      if (mapped > 0) line = mapped;
+      if (mapped > 0) { line = mapped; methodSource = true; }
     }
-    // Generated getters are not user methods. Point at the template
-    // expression that produced the getter instead of the class declaration.
-    var binding = bindingForMethod(element, method);
+    // Generated getters are not authored methods. Use their expression span
+    // when no authored method frame is available, while keeping both contexts.
+    var binding = bindingForError(element, method, vmText);
     if (binding && binding.source && binding.source.file) {
-      source = binding.source;
-      line = binding.source.line;
+      if (!methodSource) {
+        source = binding.source;
+        line = binding.source.line;
+      }
     }
     // A declared prop or child event carries its own declaration site. Point
     // the report there instead of at the component class or handler.
@@ -247,12 +258,17 @@
       ? profile.fingerprint
       : "";
     if (capacityProfile) detail += " (capacity profile " + capacityProfile + ")";
+    var bindingDescription = binding ? bindingContext(element, binding, "runtime evaluation") : "";
+    if (bindingDescription && detail.indexOf(bindingDescription) === -1) {
+      detail += " (" + bindingDescription + ")";
+    }
     return {
       phase: phase,
       tagName: component && component.tag_name || "",
       className: component && component.class_name || "",
       method: method || "",
       source: location,
+      bindingContext: bindingDescription,
       capacityProfile: capacityProfile,
       vmText: vmText,
       message: location ? detail + " at " + location : detail

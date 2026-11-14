@@ -30,6 +30,25 @@ test('feedback: nested typed children retain both event connections across updat
   }, '<review-root></review-root>');
 });
 
+test('feedback: binding failures name unsupported helper and preserve binding context for recovery', async ({page}) => {
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    await expect(page.locator('.diagnostic')).toHaveText('ready');
+    const detail = page.evaluate(() => new Promise(resolve => {
+      document.addEventListener('mochi:error', event => resolve((event as CustomEvent).detail), {once:true});
+    }));
+    await page.locator('.fail-helper').click();
+    const failure: any = await detail;
+    expect(failure.method).not.toContain('__mochi_bind');
+    expect(failure.source).toContain('ReviewRoot.rb:');
+    expect(failure.vmText).toContain('fetch_missing_value');
+    expect(failure.bindingContext).toContain('binding');
+    expect(failure.bindingContext).toContain('ReviewRoot.rb:');
+    await page.locator('.recover-helper').click();
+    await expect(page.locator('.diagnostic')).toHaveText('ready');
+  }, '<review-root></review-root>');
+});
+
 test('feedback: dragstart inside conditional keyed rows registers without ancestor listener', async ({page}) => {
   await withCompiledProject(fixture, async url => {
     await page.goto(url);
