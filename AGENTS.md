@@ -996,6 +996,8 @@ event. Other tabs are observed through the browser `storage` event. Equal
 writes produce no notification. Removing a key delivers `value: nil`, and the
 loader also clears the VM copy so `Mochi.storage_get` stays synchronized.
 Unmounting a component removes all of its storage subscriptions.
+A screen hidden with CSS or a conditional style change remains mounted and
+subscribed; removing the component from the tree releases its subscription.
 
 The host seeds existing localStorage entries into the VM before component
 initialization, so a component can read the current value in `initialize` and
@@ -1023,8 +1025,24 @@ MochiStore.clear(store)             # remove and return the default
 It is emitted only when an application mentions `MochiStore`; applications
 that call the core builtins directly do not ship it. `MochiStore` does not
 define a global state framework and keeps one String value per key.
+`MochiStore.write` returns `false` when the requested text already matches the
+VM's current value and `true` when it queues a changed write. The browser
+persists that command after the Ruby entry returns, so `true` is not a durable
+write receipt. Confirm the `storage_subscribe` payload: `ok: true` confirms a
+successful change, while `ok: false` carries the still-persisted value and an
+`error`. `MochiStore.accept` applies that value and keeps the error visible;
+quota and unavailable failures are also sent through `mochi:error` with phase
+`storage`. A later successful payload clears the helper error.
+`MochiStore.clear` queues a removal and returns the local default; use its
+subscription payload to confirm removal or observe failure.
 
-Storage values are emitted in host command lines, so a value must fit the
-loader's bounded host buffer (16 KiB including the command envelope). Store
-small preferences, not documents. Invalid or unexpected text is not repaired
-by the host: normalize it in Ruby and write the corrected value back.
+Storage values travel in bounded host commands. The active capacity profile's
+`host_emit_envelope_bytes` limits the full command, including JSON escaping and
+its envelope; see [capacity limits](docs/fixed-capacities.md) and the
+[capacity failure contract](references/CAPACITY_CONTRACT.md). JSON's own
+document limit does not mean a document fits in one storage command. Store small
+preferences and drafts, not documents. Invalid or unexpected text is not
+repaired by the host: validate its shape in Ruby, use an explicit default, and
+write corrected text back. The
+[storage fixture](e2e/fixtures/feedback_review/lib/StorageRoot.rb) demonstrates
+this with a small JSON preference object.

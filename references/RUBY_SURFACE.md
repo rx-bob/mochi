@@ -82,6 +82,49 @@ sample and round-trips only its selected record. The
 [file contract](../e2e/fixtures/framework_contracts/lib/JsonFileContract.rb)
 exercises existing bounded file reads without an inspector import workflow.
 
+## Storage and subscriptions
+
+`Mochi.storage_get`, `storage_set`, and `storage_remove` persist raw Strings.
+Use the optional `MochiStore` battery for one string-valued preference, then
+use the JSON package when that preference has a small structured shape:
+
+```ruby
+require 'json'
+
+def initialize
+  @store = MochiStore.build("theme_preferences", '{"theme":"light"}')
+  stored = MochiStore.value(@store) # available before initialize finishes
+  # validate stored, then install the Ruby default or decoded preference
+  Mochi.storage_subscribe("theme_preferences", "on_preferences")
+end
+```
+
+Validate stored text and its decoded Hash keys, types, and allowed values before
+using it. This VM does not provide MRI exception rescue for malformed JSON; use
+a bounded, explicit format check before `JSON.parse`, and apply a Ruby default
+when text or shape is unexpected. Write corrected text back when desired. See
+the [runnable preference fixture](../e2e/fixtures/feedback_review/lib/StorageRoot.rb).
+
+`MochiStore.write` returns `false` for a value already present in the VM and
+`true` when it queues a changed storage command. That is not a persistence
+receipt: browser storage runs after the Ruby entry. Apply subscription payloads
+with `MochiStore.accept`; successful payloads confirm the new value, while a
+failed payload restores the previous persisted value and exposes `quota` or
+`unavailable` through `MochiStore.error`. The loader also reports a `storage`
+phase `mochi:error`. Equal writes produce no event. Same-tab writes and removals
+notify directly; other tabs notify through `storage` events; removal supplies
+`nil` and the Ruby default can take effect. Unmount disposes subscriptions, but
+a screen hidden while still mounted remains subscribed.
+`MochiStore.clear` queues a removal and returns the local default; use its
+subscription payload to confirm removal or observe failure.
+
+Each value must fit the active profile's `host_emit_envelope_bytes` command
+limit after escaping and envelope overhead; a JSON document limit does not make
+that whole document fit in one storage command. See [capacity limits](../docs/fixed-capacities.md)
+and [capacity failure behavior](CAPACITY_CONTRACT.md). Keep storage for small
+preferences and drafts, not documents. MochiStore is emitted only when used;
+see [payload accounting](PAYLOAD_BUDGETS.md).
+
 ## Optional wall clock and Unix timestamps
 
 ```ruby

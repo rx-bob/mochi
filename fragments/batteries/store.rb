@@ -29,6 +29,11 @@ class MochiStore
         error = "unavailable"
       end
       store["error"] = error
+      value = payload["value"]
+      if value == nil || value == ""
+        value = store["default"]
+      end
+      store["value"] = value.to_s
       return store["value"]
     end
 
@@ -47,19 +52,16 @@ class MochiStore
     current = Mochi.storage_get(store["key"], nil)
     if current == next_value
       store["value"] = next_value
-      store["error"] = ""
       return false
     end
     Mochi.storage_set(store["key"], next_value)
     store["value"] = next_value
-    store["error"] = ""
     true
   end
 
   def self.clear(store)
     Mochi.storage_remove(store["key"])
     store["value"] = store["default"]
-    store["error"] = ""
     store["default"]
   end
 

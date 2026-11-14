@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { withCompiledProject } from './framework_helpers';
 const fixture = path.resolve(__dirname, '../fixtures/feedback_review');
+const preferenceKey = 'mochi_e4s2_preferences';
 
 test('feedback: 118 authored methods and 140 generated getters stay correct across instances and remounts', async ({page}) => {
   const errors: string[] = [];
@@ -221,6 +222,129 @@ test('feedback: timers cancel and storage survives reload', async ({page}) => {
     await page.locator('review-root').evaluate(el => el.remove());
     await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
   }, '<review-root></review-root>');
+});
+
+test('feedback: structured preferences load before render, follow storage changes, and unsubscribe on disposal', async ({page}) => {
+  const initial = '{"theme":"dark","density":"compact"}';
+  await page.addInitScript(({key, value}) => {
+    if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
+  }, {key: preferenceKey, value: initial});
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator('storage-root');
+    await expect(root.locator('.theme')).toHaveText('dark');
+    await expect(root.locator('.density')).toHaveText('compact');
+    await expect(root.locator('.status')).toHaveText('loaded');
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().storageSubscribers)).toBe(1);
+
+    await root.locator('.save').click();
+    await expect(root.locator('.status')).toHaveText('loaded');
+    await expect(root.locator('.theme')).toHaveText('light');
+    await expect.poll(() => page.evaluate(key => localStorage.getItem(key), preferenceKey))
+      .toBe('{"theme":"light","density":"comfortable"}');
+    await page.reload();
+    await expect(page.locator('storage-root .theme')).toHaveText('light');
+    await expect(page.locator('storage-root .density')).toHaveText('comfortable');
+
+    await page.evaluate(key => {
+      const value = '{"theme":"dark","density":"compact"}';
+      localStorage.setItem(key, value);
+      window.dispatchEvent(new StorageEvent('storage', {
+        key, oldValue: '{"theme":"light","density":"comfortable"}',
+        newValue: value, storageArea: localStorage,
+      }));
+    }, preferenceKey);
+    await expect(page.locator('storage-root .theme')).toHaveText('dark');
+    await page.evaluate(key => {
+      const oldValue = localStorage.getItem(key);
+      localStorage.removeItem(key);
+      window.dispatchEvent(new StorageEvent('storage', {
+        key, oldValue, newValue: null, storageArea: localStorage,
+      }));
+    }, preferenceKey);
+    await expect(page.locator('storage-root .theme')).toHaveText('light');
+    await page.locator('storage-root').evaluate(element => element.remove());
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().storageSubscribers)).toBe(0);
+    await page.evaluate(key => {
+      localStorage.setItem(key, '{"theme":"dark","density":"compact"}');
+      window.dispatchEvent(new StorageEvent('storage', {
+        key, oldValue: null, newValue: localStorage.getItem(key), storageArea: localStorage,
+      }));
+    }, preferenceKey);
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().storageSubscribers)).toBe(0);
+  }, '<storage-root></storage-root>');
+});
+
+test('feedback: malformed stored preferences use validated defaults and repair storage', async ({page}) => {
+  await page.addInitScript(({key}) => localStorage.setItem(key, '{"theme":'), {key: preferenceKey});
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    await expect(page.locator('storage-root .theme')).toHaveText('light');
+    await expect(page.locator('storage-root .density')).toHaveText('comfortable');
+    await expect.poll(() => page.evaluate(key => localStorage.getItem(key), preferenceKey))
+      .toBe('{"theme":"light","density":"comfortable"}');
+  }, '<storage-root></storage-root>');
+});
+
+test('feedback: quota failures restore persisted preferences and remain visible', async ({page}) => {
+  await page.addInitScript(key => {
+    const setItem = Storage.prototype.setItem;
+    (window as any).__rejectPreferenceWrite = false;
+    Storage.prototype.setItem = function(storageKey, value) {
+      if (storageKey === key && (window as any).__rejectPreferenceWrite) {
+        throw new DOMException('storage quota exceeded', 'QuotaExceededError');
+      }
+      return setItem.call(this, storageKey, value);
+    };
+  }, preferenceKey);
+  await page.addInitScript(({key, value}) => localStorage.setItem(key, value), {
+    key: preferenceKey, value: '{"theme":"dark","density":"compact"}',
+  });
+  await page.addInitScript(() => {
+    (window as any).__storageErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__storageErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator('storage-root');
+    await expect(root.locator('.theme')).toHaveText('dark');
+    await page.evaluate(() => (window as any).__rejectPreferenceWrite = true);
+    await root.locator('.save').click();
+    await expect(root.locator('.status')).toHaveText('quota');
+    await expect(root.locator('.theme')).toHaveText('dark');
+    expect(await page.evaluate(key => localStorage.getItem(key), preferenceKey))
+      .toBe('{"theme":"dark","density":"compact"}');
+    await expect.poll(() => page.evaluate(() => (window as any).__storageErrors.length)).toBe(1);
+    expect((await page.evaluate(() => (window as any).__storageErrors))[0].phase).toBe('storage');
+    await root.locator('.save-current').click();
+    await expect(root.locator('.status')).toHaveText('quota');
+
+    await page.evaluate(() => (window as any).__rejectPreferenceWrite = false);
+    await root.locator('.save').click();
+    await expect(root.locator('.status')).toHaveText('loaded');
+    await expect(root.locator('.theme')).toHaveText('light');
+  }, '<storage-root></storage-root>');
+});
+
+test('feedback: inaccessible storage falls back and reports unavailable through subscription', async ({page}) => {
+  await page.addInitScript(({key, value}) => {
+    localStorage.setItem(key, value);
+    const getItem = Storage.prototype.getItem;
+    Storage.prototype.getItem = function(storageKey) {
+      if (storageKey === key) throw new DOMException('storage access denied', 'SecurityError');
+      return getItem.call(this, storageKey);
+    };
+  }, {key: preferenceKey, value: '{"theme":"dark","density":"compact"}'});
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    await expect(page.locator('storage-root .theme')).toHaveText('light');
+    await expect(page.locator('storage-root .density')).toHaveText('comfortable');
+    await expect(page.locator('storage-root .status')).toHaveText('unavailable');
+    await page.locator('storage-root').evaluate(element => element.remove());
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().storageSubscribers)).toBe(0);
+  }, '<storage-root></storage-root>');
 });
 
 test('feedback: mount-owned timers fire once, repeat, cancel, and dispose', async ({page}) => {
