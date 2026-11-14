@@ -2,7 +2,6 @@ require "file_utils"
 require "./generated/builtins/my_counter_rb"
 
 class Initializer
-
   def initialize(project_name : String)
     puts "Init '#{project_name}'"
 
@@ -14,6 +13,8 @@ class Initializer
       Dir.mkdir_p(proj_path)
       src_path = "#{proj_path}/lib"
       Dir.mkdir_p(src_path)
+      test_path = "#{proj_path}/test"
+      Dir.mkdir_p(test_path)
 
       File.write("#{proj_path}/Taskfile.yml", generate_taskfile)
       File.write("#{proj_path}/Gemfile", generate_gemfile)
@@ -21,6 +22,7 @@ class Initializer
       File.write("#{proj_path}/dev_server_config.json", generate_dev_server_config)
       File.write("#{proj_path}/README.md", generate_readme)
       File.write("#{src_path}/MyCounter.rb", generate_my_first_mochi_component)
+      File.write("#{test_path}/counter_test.rb", generate_counter_test)
     end
   end
 
@@ -30,8 +32,17 @@ class Initializer
 
     tasks:
       build:
+        desc: Build this Ruby application with the installed Mochi compiler
         cmds:
           - mochi -i "./" -o "./build"
+      test:
+        desc: Run Ruby component behavior tests in the browser
+        cmds:
+          - mochi test -i "./"
+      dev:
+        desc: Serve the built application at http://127.0.0.1:27490
+        cmds:
+          - mochi dev --config=./dev_server_config.json --root=./
     YML
   end
 
@@ -39,12 +50,8 @@ class Initializer
     <<-'TEXT'
     source "https://rubygems.org"
 
-    gem "opal", "~> 1.8"
-    gem "opal-browser", "~> 0.3.5"
-
     gem 'sorbet', :group => :development
     gem 'sorbet-runtime'
-    gem 'tapioca', require: false, :group => [:development, :test]
     TEXT
   end
 
@@ -52,23 +59,40 @@ class Initializer
     <<-'TEXT'
     # Mochi Starter
 
-    The Official Documentation for Mochi can be found under: https://mochirb.com/docs
+    Build browser applications in Ruby. Application components live in `lib/`; behavior tests live in `test/`.
 
     ## Getting Started
 
-    ### Building the project
-    In order to build the project you can run `mochi -i "./" -o "./build"` alternatively `task build` has already been preconfigured.
+    Install the Mochi development command from a Mochi checkout (see the [Mochi getting-started guide](https://github.com/yampug/mochi#installing-the-development-command)). The install links the command to that checkout and records its compiler and browser runtime locations. Add the printed `bin` directory to `PATH` if needed.
 
-    This will produce the 2 build artifacts:
-    * `./build/bundle.js` - contains your components
-    * `./build/runtime.js` - the opal runtime
+    From this project directory, run:
 
-    ### Starting the Dev Server
-    Mochi ships with a built-in dev server which can be started with
-    ```
+    ```sh
+    mochi -i . -o ./build
+    mochi test -i .
     mochi dev --config=./dev_server_config.json --root=./
     ```
-    by default it is be accessible under: http://127.0.0.1:27490
+
+    Open <http://127.0.0.1:27490>. The starter compiles to a GVM bundle: the loader reads a manifest, then loads each component's descriptor and `.chi` bytecode when it is used. No app-authored JavaScript is needed.
+
+    `mochi test` compiles an isolated test bundle and runs Ruby-authored scenarios in Chromium, Firefox, and WebKit. Test sources and runner files do not enter production output. Tests need Node.js, Mochi's Playwright dependencies, and installed Playwright browser binaries; install those once from the Mochi checkout with `cd e2e && npm ci && npx playwright install chromium firefox webkit`. Use `--browsers=chromium` to select an engine or `--test-file=counter_test.rb` to select a file relative to this project's `test/` directory.
+
+    ```ruby
+    Mochi::Test.test("counter increments") do
+      mount "my-counter"
+      click "button"
+      wait_for_settled
+      assert_text "h1", "Count: 1"
+    end
+    ```
+
+    `assert_text` selectors start in the mounted component's shadow root. Use `>>>` to cross into a child component, for example `"child-counter >>> .value"`.
+
+    Put shared CSS under `lib/styles/`. From `lib/MyCounter.rb`, use a literal `@import "./styles/controls.css";` before local rules in `def css`; paths are component-relative and resolved at build time. Project-root `styles/` is not staged. `public/` assets keep their `public/` output prefix. Static icons come from your project's `icons/` directory; no icon catalog is bundled implicitly.
+
+    See Mochi's [Ruby examples and contracts](https://github.com/yampug/mochi#complete-ruby-examples-and-contracts) for computed dependencies, keyed forms/SVG, and optional mount-owned browser APIs. Replace collection roots to publish nested edits; automatic deep mutation observation is not provided. File reads, JSON documents, and downloads have explicit bounds; no application JavaScript or manual adapter tags are needed.
+
+    `index.html` uses a root asset base so the loader and compiled bundle also resolve when a static host serves a deep link. The dev server maps `/deep/entry` to the entry page for this purpose. If deploying under a URL prefix, set the base URL and loader paths to that prefix and configure the host to serve the entry page for application routes. See the [asset path guide](https://github.com/yampug/mochi#icons).
 
     TEXT
   end
@@ -77,7 +101,8 @@ class Initializer
     <<-'TEXT'
     {
       "routes": {
-        "/": "index.html"
+        "/": "index.html",
+        "/deep/entry": "index.html"
       }
     }
     TEXT
@@ -85,42 +110,38 @@ class Initializer
 
   def generate_index_html : String
     <<-'HTML'
-    <html>
+    <!doctype html>
+    <html lang="en">
         <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Mochi Starter</title>
-            <script
-              src="./build/runtime.js"
-              onload='Opal.require("native"); Opal.require("promise"); Opal.require("browser/setup/full");'></script>
-            <script src="./build/bundle.js"></script>
-            <link rel="preconnect" href="https://fonts.googleapis.com">
-            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-            <link href="https://fonts.googleapis.com/css2?family=Caprasimo&display=swap" rel="stylesheet">
+            <base href="/">
+            <script src="./build/mochi-loader.js" data-mochi-manifest="./mochi-manifest.json"></script>
             <style>
                 body {
-                    background: #24262c;
+                    margin: 0;
+                    background: #f4f1eb;
+                    color: #25231f;
+                    font: 18px system-ui, sans-serif;
                 }
                 .logo-block {
                     display: flex;
                     justify-content: center;
-                    gap: 22px;
-                    align-items: anchor-center;
-                    color: white;
-                    width: 100%;
-                    font-family: "Caprasimo", serif;
-                    font-weight: 400;
-                    font-style: normal;
+                    gap: 16px;
+                    align-items: center;
+                    margin: 12vh auto 0;
                 }
-                .logo { height: 64px; }
+                .mark { color: #c45b36; font-size: 40px; }
+                main { display: grid; justify-items: center; gap: 16px; margin: 40px auto; }
             </style>
         </head>
         <body>
             <div class="logo-block">
-                <img class="logo" src="https://github.com/yampug/mochi/blob/main/devground/mochi.png?raw=true"/>
+                <span class="mark" aria-hidden="true">◆</span>
                 <h1>Hello Mochi</h1>
             </div>
-            <div>
-                <my-counter count="3"></my-counter>
-            </div>
+            <main><my-counter></my-counter></main>
         </body>
     </html>
     HTML
@@ -130,4 +151,14 @@ class Initializer
     return MyCounterRbFragment.get_ruby_code
   end
 
+  def generate_counter_test : String
+    <<-'RUBY'
+    Mochi::Test.test("counter increments") do
+      mount "my-counter"
+      click "button"
+      wait_for_settled
+      assert_text "h1", "Count: 1"
+    end
+    RUBY
+  end
 end

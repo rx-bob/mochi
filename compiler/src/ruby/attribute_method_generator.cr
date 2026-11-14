@@ -1,6 +1,8 @@
 require "../html/conditional_processor"
 require "./inject_utils"
 require "../html/attribute_conditional_extractor"
+require "../html/each_row_template"
+require "html"
 
 class AttributeMethodGenerator
   METHOD_PREFIX   = "__mochi_attr_cond_"
@@ -23,8 +25,11 @@ class AttributeMethodGenerator
     }.join("\n")
   end
 
-  def self.generate_method(cond : ExtractedAttributeConditional) : String
-    method_name = "#{METHOD_PREFIX}#{cond.id}"
+  def self.generate_method(
+    cond : ExtractedAttributeConditional,
+    method_name : String = "#{METHOD_PREFIX}#{cond.id}",
+    scope : Array(EachRowScope) = [] of EachRowScope,
+  ) : String
     attr_string = cond.original_string
 
     blocks = ConditionalProcessor.extract_conditionals(attr_string)
@@ -65,10 +70,26 @@ class AttributeMethodGenerator
 
     body += "    _parts.join\n"
 
+    params = [] of String
+    assignments = [] of String
+    scope.each_with_index do |entry, depth|
+      item_param = "__mochi_scope_#{depth}_item"
+      index_param = "__mochi_scope_#{depth}_index"
+      params << item_param << index_param
+      assignments << "    #{entry.item_name} = #{item_param}"
+      assignments << "    #{entry.index_name} = #{index_param}" unless entry.index_name == entry.item_name
+      unless entry.index_name == "index" || entry.item_name == "index"
+        assignments << "    index = #{index_param}"
+      end
+    end
+    prelude = assignments.join("\n")
+    signature = params.join(", ")
+
     <<-RUBY
 
   # auto-generated attribute conditional method
-  def #{method_name}
+  def #{method_name}(#{signature})
+#{prelude}
 #{body}  end
 
 RUBY
@@ -76,15 +97,19 @@ RUBY
 
   # Convert `{var}` to `\#{var}` or `\#{@var}` to allow Ruby interpolation
   private def self.escape_and_interpolate(text : String) : String
-    # First, escape double quotes so we don't break the generated ruby string literal
-    escaped = text.gsub("\"", "\\\"")
-
-    # Then replace {var} with \#{var}
-    # Note: we need to handle {@var} and {var}
-    # If it's already {@var}, it becomes \#{@var}
-    escaped.gsub(/\{([^}]+)\}/) do |match, m|
-      inner = m[1].strip
-      "\#{#{inner}}"
+    escaped = TemplateExpressionParser.escape_literal_braces(text)
+    String.build do |io|
+      cursor = 0
+      TemplateExpressionParser.new.scan(escaped, "attribute").each do |expression|
+        io << literal_part(escaped.byte_slice(cursor, expression.template_start - cursor))
+        io << "\#{" << expression.source << "}"
+        cursor = expression.template_end
+      end
+      io << literal_part(escaped.byte_slice(cursor))
     end
+  end
+
+  private def self.literal_part(text : String) : String
+    HTML.unescape(text.gsub('\u{E000}', "{").gsub('\u{E001}', "}")).inspect[1...-1]
   end
 end

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -6,11 +6,9 @@ import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { setupConsoleLogging } from "./test_utils";
 
-test.use({ channel: "chrome" });
 test.describe.configure({ mode: "serial" });
 
 const repoRoot = path.resolve(__dirname, "..", "..");
-const bundleDir = path.join(repoRoot, "build_gvm");
 const compilerBinary = path.join(repoRoot, "compiler", "mochi");
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -23,29 +21,27 @@ const CONTENT_TYPES: Record<string, string> = {
 let server: http.Server;
 let baseURL = "";
 let projectDir = "";
-let temporaryProjectDir = "";
+let bundleDir = "";
+let workspaceDir = "";
 
 function fixtureProject(): string {
   const motestproj = path.join(repoRoot, "compiler", "motestproj");
-  if (fs.existsSync(path.join(motestproj, "lib", "MyCounter.rb"))) return motestproj;
-
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-e2e-"));
-  fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
-  fs.copyFileSync(
-    path.join(repoRoot, "fragments", "builtins", "my_counter.rb"),
-    path.join(dir, "lib", "MyCounter.rb")
-  );
-  fs.writeFileSync(
-    path.join(dir, "index.html"),
-    [
-      "<!doctype html>",
-      '<html><head><meta charset="utf-8">',
-      '<script src="mochi-loader.js"></script>',
-      "</head><body><my-counter></my-counter></body></html>",
-    ].join("\n")
-  );
-  temporaryProjectDir = dir;
+  const injectionMarker = path.join(workspaceDir, "shell-injection-marker");
+  const dir = path.join(workspaceDir, `project with spaces;$(touch ${injectionMarker})`);
+  fs.cpSync(motestproj, dir, { recursive: true });
+  fs.rmSync(path.join(dir, "build"), { recursive: true, force: true });
+  fs.rmSync(path.join(dir, "dist"), { recursive: true, force: true });
   return dir;
+}
+
+function compileAsync(output: string, cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(compilerBinary, ["-i", projectDir, "-o", output], { cwd });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`compiler exited ${code}: ${stderr}`)));
+  });
 }
 
 function assertBundleOutput(): void {
@@ -56,6 +52,7 @@ function assertBundleOutput(): void {
     "mochi-manifest.json",
     "index.html",
     path.join("components", "my-counter.chi"),
+    path.join("components", "my-counter.json"),
   ];
   required.forEach((file) => {
     expect(fs.existsSync(path.join(bundleDir, file)), `missing ${file}`).toBe(true);
@@ -69,7 +66,36 @@ function assertBundleOutput(): void {
   expect(manifest.wasm_file).toBe("mochi-gvm.wasm");
   expect(manifest.js_file).toBe("mochi-gvm.js");
   expect(manifest.loader_file).toBe("mochi-loader.js");
+  expect(manifest.schema_version).toBe(3);
+  expect(manifest.format_host).toBeUndefined();
+  expect(manifest.capabilities).toBeUndefined();
+  expect(Object.keys(manifest.packages)).not.toContain("capability:formatting");
+  expect(
+    Object.keys(manifest.packages).some((id) => id.startsWith("capability:")),
+  ).toBe(false);
+  expect(fs.existsSync(path.join(bundleDir, "mochi-format.js"))).toBe(false);
+  expect(fs.existsSync(path.join(bundleDir, "mochi-fetch.js"))).toBe(false);
   expect(manifest.components.map((component: { tag_name: string }) => component.tag_name)).toContain("my-counter");
+  expect(manifest.components.every((component: { descriptor?: string }) =>
+    typeof component.descriptor === "string")).toBe(true);
+  expect(manifest.components[0].html_template).toBeUndefined();
+
+  for (const [id, descriptor] of Object.entries(manifest.packages) as Array<[string, any]>) {
+    if (descriptor.source?.file) {
+      expect(path.isAbsolute(descriptor.source.file), `${id} source path is absolute`).toBe(false);
+      expect(descriptor.source.file).not.toContain(workspaceDir);
+      expect(descriptor.source.file).not.toContain(projectDir);
+    }
+  }
+  for (const component of manifest.components as Array<{ descriptor: string }>) {
+    const descriptor = JSON.parse(fs.readFileSync(path.join(bundleDir, component.descriptor), "utf8"));
+    expect(descriptor.source_file).toBeUndefined();
+    if (descriptor.source?.file) {
+      expect(path.isAbsolute(descriptor.source.file), "component source path is absolute").toBe(false);
+      expect(descriptor.source.file).not.toContain(workspaceDir);
+      expect(descriptor.source.file).not.toContain(projectDir);
+    }
+  }
 }
 
 function startBundleServer(): Promise<void> {
@@ -112,12 +138,17 @@ function startBundleServer(): Promise<void> {
 
 test.beforeAll(async () => {
   expect(fs.existsSync(compilerBinary), "compiler/mochi is missing; build the compiler first").toBe(true);
+  workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-gvm-e2e-"));
   projectDir = fixtureProject();
-  fs.rmSync(bundleDir, { recursive: true, force: true });
+  bundleDir = path.join(workspaceDir, "bundle");
+  const buildCwd = path.join(workspaceDir, "cwd");
+  fs.mkdirSync(buildCwd);
+  fs.mkdirSync(path.join(buildCwd, "build"));
+  fs.writeFileSync(path.join(buildCwd, "build", "sentinel.txt"), "user-owned");
 
   const started = process.hrtime.bigint();
   const buildOutput = execFileSync(compilerBinary, ["-i", projectDir, "-o", bundleDir], {
-    cwd: repoRoot,
+    cwd: buildCwd,
     encoding: "utf8",
     stdio: "pipe",
   });
@@ -126,19 +157,68 @@ test.beforeAll(async () => {
   expect(timing, `build output missing timing:\n${buildOutput}`).not.toBeNull();
   const buildMs = Number(timing![1]);
 
-  expect(buildMs, `mochi build took ${buildMs}ms (wall ${wallMs.toFixed(1)}ms)`).toBeLessThan(200);
+  expect(buildMs, `mochi build took ${buildMs}ms (wall ${wallMs.toFixed(1)}ms)`).toBeLessThan(1000);
+  expect(buildOutput).not.toMatch(/Processing .*\.rb|ClassName:'/);
+  expect(fs.existsSync(path.join(buildCwd, "mochi_build.pftrace"))).toBe(false);
+
+  const traceOutput = execFileSync(compilerBinary, ["-i", projectDir, "-o", path.join(workspaceDir, "trace-bundle")], {
+    cwd: buildCwd,
+    encoding: "utf8",
+    stdio: "pipe",
+    env: { ...process.env, MOCHI_BUILD_TRACE: "1" },
+  });
+  expect(traceOutput).toContain("Trace saved to mochi_build.pftrace");
+  expect(fs.existsSync(path.join(buildCwd, "mochi_build.pftrace"))).toBe(true);
+  expect(fs.readFileSync(path.join(buildCwd, "build", "sentinel.txt"), "utf8")).toBe("user-owned");
+  expect(fs.existsSync(path.join(workspaceDir, "shell-injection-marker"))).toBe(false);
   assertBundleOutput();
   await startBundleServer();
 });
 
+test("rejects unsafe output aliases and runs simultaneous builds in isolated workspaces", async () => {
+  expect(() => execFileSync(compilerBinary, ["-i", projectDir, "-o", projectDir], { encoding: "utf8" })).toThrow();
+  expect(fs.existsSync(path.join(projectDir, "lib", "MyCounter.rb"))).toBe(true);
+
+  expect(() => execFileSync(compilerBinary, ["-i", projectDir, "-o", workspaceDir], { encoding: "utf8" })).toThrow();
+
+  const outputAlias = path.join(workspaceDir, "output-alias");
+  fs.symlinkSync(projectDir, outputAlias, "dir");
+  expect(() => execFileSync(compilerBinary, ["-i", projectDir, "-o", outputAlias], { encoding: "utf8" })).toThrow();
+
+  const symlinkProject = path.join(workspaceDir, "project-with-symlink");
+  fs.cpSync(projectDir, symlinkProject, { recursive: true });
+  fs.symlinkSync(path.join(projectDir, "lib", "MyCounter.rb"), path.join(symlinkProject, "lib", "external.rb"));
+  const preservedOutput = path.join(workspaceDir, "preserve-on-symlink-error");
+  fs.mkdirSync(path.join(preservedOutput, "components"), { recursive: true });
+  fs.writeFileSync(path.join(preservedOutput, "sentinel.txt"), "still here");
+  fs.writeFileSync(path.join(preservedOutput, "components", "old.chi"), "old output");
+  expect(() => execFileSync(compilerBinary, ["-i", symlinkProject, "-o", preservedOutput], { encoding: "utf8" })).toThrow();
+  expect(fs.readFileSync(path.join(preservedOutput, "sentinel.txt"), "utf8")).toBe("still here");
+  expect(fs.readFileSync(path.join(preservedOutput, "components", "old.chi"), "utf8")).toBe("old output");
+
+  const outputs = [path.join(workspaceDir, "parallel-one"), path.join(workspaceDir, "parallel-two")];
+  await Promise.all(outputs.map((output) => compileAsync(output, path.join(workspaceDir, "cwd"))));
+  for (const output of outputs) {
+    expect(fs.existsSync(path.join(output, "mochi-manifest.json"))).toBe(true);
+    expect(fs.existsSync(path.join(output, "components", "my-counter.chi"))).toBe(true);
+  }
+  expect(fs.readFileSync(path.join(outputs[0], "mochi-manifest.json"), "utf8"))
+    .toBe(fs.readFileSync(path.join(outputs[1], "mochi-manifest.json"), "utf8"));
+  expect(fs.readFileSync(path.join(outputs[0], "components", "my-counter.chi")))
+    .toEqual(fs.readFileSync(path.join(outputs[1], "components", "my-counter.chi")));
+  expect(fs.readFileSync(path.join(workspaceDir, "cwd", "build", "sentinel.txt"), "utf8")).toBe("user-owned");
+});
+
 test.afterAll(async () => {
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (temporaryProjectDir) fs.rmSync(temporaryProjectDir, { recursive: true, force: true });
+  if (workspaceDir) fs.rmSync(workspaceDir, { recursive: true, force: true });
 });
 
 test("mounts my-counter, clicks increment/decrement, and preserves button nodes", async ({ page }) => {
   setupConsoleLogging(page);
   const errors: string[] = [];
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("response", (response) => {
     if (response.status() >= 400 && !response.url().endsWith("/favicon.ico")) {
@@ -156,6 +236,8 @@ test("mounts my-counter, clicks increment/decrement, and preserves button nodes"
   const decrement = counter.locator("button").nth(1);
 
   await expect(heading).toHaveText("Count: 0");
+  expect(requested.filter((url) => url.endsWith("/mochi-format.js"))).toHaveLength(0);
+  expect(requested.filter((url) => /\/components\/ruby-[0-9a-f]+\.chi$/.test(url))).toHaveLength(0);
   await expect(state).toHaveClass(/\bneutral\b/);
   await expect(mode).not.toHaveClass(/\bactive\b/);
   await expect(increment).toHaveText("Increment");

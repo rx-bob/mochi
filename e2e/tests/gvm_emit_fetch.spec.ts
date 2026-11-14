@@ -6,7 +6,6 @@ import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { setupConsoleLogging } from "./test_utils";
 
-test.use({ channel: "chrome" });
 test.describe.configure({ mode: "serial" });
 
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -40,7 +39,7 @@ class EmitSource
   def fire
     Mochi.emit("ping")
     Mochi.emit("select", id: "tr_9f2a")
-    Mochi.emit("targeted", id: "tr_7", target: "emit-listener")
+    Mochi.emit("targeted", id: "tr_7")
   end
 end
 `);
@@ -64,6 +63,12 @@ class EmitListener
       <p class="selected">{@selected}</p>
       <p class="targeted">{@targeted}</p>
     }
+  end
+
+  def mounted
+    Mochi.subscribe("ping", :ping)
+    Mochi.subscribe("select", :select)
+    Mochi.subscribe("targeted", :targeted)
   end
 
   def ping
@@ -99,6 +104,58 @@ class OtherListener
 end
 `);
 
+  fs.writeFileSync(path.join(projectDir, "lib", "EventRow.rb"), `
+class EventRow
+  @tag_name = "event-row"
+  event :select, id: Integer, label: String
+
+  def html
+    %Q{
+      <button class="choose" onclick="{choose}">Choose row</button>
+      <button class="bad" onclick="{bad}">Bad row</button>
+    }
+  end
+
+  def choose
+    emit :select, id: 42, label: "row"
+  end
+
+  def bad
+    emit :select, id: "not-a-number", label: "row"
+  end
+end
+`);
+
+  fs.writeFileSync(path.join(projectDir, "lib", "EventBoard.rb"), `
+class EventBoard
+  @tag_name = "event-board"
+  @picked
+  @label
+  @updates
+
+  def initialize
+    @picked = "none"
+    @label = "none"
+    @updates = 0
+  end
+
+  def html
+    %Q{
+      <event-row on:select="{row_selected($event)}"></event-row>
+      <p class="picked">{@picked}</p>
+      <p class="label">{@label}</p>
+      <p class="updates">{@updates}</p>
+    }
+  end
+
+  def row_selected(payload)
+    @picked = payload[:id]
+    @label = payload[:label]
+    @updates = @updates + 1
+  end
+end
+`);
+
   fs.writeFileSync(path.join(projectDir, "lib", "FetchProbe.rb"), `
 class FetchProbe
   @tag_name = "fetch-probe"
@@ -118,6 +175,7 @@ class FetchProbe
     %Q{
       <button class="load" onclick="{load}">Load</button>
       <button class="fail" onclick="{fail}">Fail</button>
+      <button class="callback-fail" onclick="{callback_fail}">Callback fail</button>
       <p class="status">{@status}</p>
       <p class="ok">{@ok}</p>
       <p class="row">{@row}</p>
@@ -131,6 +189,14 @@ class FetchProbe
 
   def fail
     Mochi.fetch("/api/fail", :on_logs)
+  end
+
+  def callback_fail
+    Mochi.fetch("/api/logs", :bad_callback)
+  end
+
+  def bad_callback(res)
+    raise "fetch callback exploded"
   end
 
   def on_logs(res)
@@ -161,6 +227,8 @@ end
     <emit-source></emit-source>
     <emit-listener></emit-listener>
     <other-listener></other-listener>
+    <event-board></event-board>
+    <event-board></event-board>
     <fetch-probe></fetch-probe>
   </body>
 </html>
@@ -232,7 +300,7 @@ test.afterAll(async () => {
   if (projectDir) fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
-test("Mochi.emit delivers plain and Hash payloads and filters target tags", async ({ page }) => {
+test("Mochi.emit reaches explicitly subscribed components only", async ({ page }) => {
   setupConsoleLogging(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -248,7 +316,51 @@ test("Mochi.emit delivers plain and Hash payloads and filters target tags", asyn
   expect(errors).toEqual([]);
 });
 
+test("declared child events stay scoped to their connected parent and preserve types", async ({ page }) => {
+  setupConsoleLogging(page, { expectedMochiErrors: true });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.goto(`${baseURL}/index.html`);
+  const boards = page.locator("event-board");
+  await expect(boards).toHaveCount(2);
+  await expect(boards.nth(0).locator("p.picked")).toHaveText("none");
+  await expect(boards.nth(1).locator("p.picked")).toHaveText("none");
+
+  await page.evaluate(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+
+  await boards.nth(0).locator("event-row").locator("button.choose").click();
+  await expect(boards.nth(0).locator("p.picked")).toHaveText("42");
+  await expect(boards.nth(0).locator("p.label")).toHaveText("row");
+  await expect(boards.nth(0).locator("p.updates")).toHaveText("1");
+  await expect(boards.nth(1).locator("p.picked")).toHaveText("none");
+  await expect(boards.nth(1).locator("p.updates")).toHaveText("0");
+
+  await boards.nth(0).locator("button.bad").click();
+  await expect(boards.nth(0).locator("p.updates")).toHaveText("1");
+  const error = await page.evaluate(() => (window as any).__mochiErrors[0]);
+  expect(error.phase).toBe("event");
+  expect(error.tagName).toBe("event-row");
+  expect(error.event).toBe("select");
+  expect(error.payloadKey).toBe("id");
+  expect(error.eventType).toBe("integer");
+  expect(error.source).toContain("EventRow.rb:4");
+  expect(errors).toEqual([]);
+});
+
 test("Mochi.fetch auto-resolves the component and flushes the callback DOM update", async ({ page }) => {
+  const bundleManifest = JSON.parse(fs.readFileSync(path.join(bundleDir, "mochi-manifest.json"), "utf8"));
+  expect(bundleManifest.capabilities.network).toMatchObject({
+    version: 1,
+    host: "mochi-fetch.js",
+    operations: { fetch: "async", cancel: "sync" },
+  });
+  expect(fs.existsSync(path.join(bundleDir, "mochi-fetch.js"))).toBe(true);
   setupConsoleLogging(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -268,4 +380,25 @@ test("Mochi.fetch auto-resolves the component and flushes the callback DOM updat
   await expect(probe.locator("p.row")).toHaveText("none");
   await expect(probe.locator("p.error")).toContainText("HTTP 500");
   expect(errors).toEqual([]);
+});
+
+test("Mochi.fetch callback failures retain Ruby method and source context", async ({ page }) => {
+  setupConsoleLogging(page, { expectedMochiErrors: true });
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener("mochi:error", (event: Event) => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto(`${baseURL}/index.html`);
+  const probe = page.locator("fetch-probe");
+  await probe.locator("button.callback-fail").click();
+  await expect.poll(async () => page.evaluate(() => (window as any).__mochiErrors.length)).toBe(1);
+  const error = await page.evaluate(() => (window as any).__mochiErrors[0]);
+  expect(error.phase).toBe("fetch");
+  expect(error.message).toContain("FetchProbe#bad_callback");
+  expect(error.source).toMatch(/FetchProbe\.rb:\d+/);
+  expect(pageErrors).toEqual([]);
 });

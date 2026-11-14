@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "capacities": {
+    "state_bytes": 300000,
+    "scratch_bytes": 524288,
+    "host_event_args_bytes": 400000
+  }
+}

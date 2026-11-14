@@ -36,6 +36,7 @@
     fun ts_node_child_by_field_name(node : TSNode, field_name : UInt8*, field_name_length : UInt32) : TSNode
     fun ts_node_start_byte(node : TSNode) : UInt32
     fun ts_node_end_byte(node : TSNode) : UInt32
+    fun ts_node_has_error(node : TSNode) : Bool
     fun ts_node_start_point(node : TSNode) : TSPoint
     fun ts_node_end_point(node : TSNode) : TSPoint
     fun ts_node_string(node : TSNode) : UInt8*

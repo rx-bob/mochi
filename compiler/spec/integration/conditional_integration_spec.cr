@@ -114,7 +114,7 @@ def transpile_test_component(rb_file : String)
       amped_ruby_code = EachMethodGenerator.inject_methods_into_class(
         amped_ruby_code,
         cls_name,
-        web_comp_generator.each_blocks
+        web_comp_generator.each_row_templates
       )
 
       rewritten_ruby_code = web_comp_generator.rewrite_ruby(
@@ -286,10 +286,16 @@ RUBY
         first.bindings.map(&.getter_expr).should contain("__mochi_attr_cond_0")
         first.events.first.method_sym.should eq("save")
         each = first.bindings.find! { |binding| binding.kind == "each" }
-        each.getter_expr.should eq("@items")
+        each.getter_expr.should eq("__mochi_each_0_rows")
         ruby_code.should contain("def __mochi_attr_cond_0")
-        ruby_code.should contain("def __mochi_each_0_items")
-        first.bindings.each { |binding| ruby_code.should contain("def #{binding.getter_sym};") }
+        ruby_code.should contain("def __mochi_each_0_rows")
+        first.bindings.each do |binding|
+          if binding.kind == "each"
+            ruby_code.should contain("def #{binding.getter_sym}")
+          else
+            ruby_code.should contain("def #{binding.getter_sym};")
+          end
+        end
 
         ids = component.manifest.all_bindings.map(&.id)
         ids.uniq.size.should eq(ids.size)

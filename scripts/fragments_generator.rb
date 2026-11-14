@@ -27,10 +27,22 @@ td_router = "/builtins/router"
 # REGISTRY
 # -- BATTERIES
 items = []
+items.push(Item.new("JSON", "#{dir_batteries}/json.rb", td_root, "json_rb.cr"))
+items.push(Item.new("Time", "#{dir_batteries}/time.rb", td_root, "time_rb.cr"))
+items.push(Item.new("MochiDownload", "#{dir_batteries}/download.rb", td_root, "download_rb.cr"))
 items.push(Item.new("Mochi", "#{dir_batteries}/mochi.rb", td_root, "mochi_rb.cr"))
 items.push(Item.new("AppRouter", "#{dir_batteries}/app_router.rb", td_root, "app_router_rb.cr"))
+items.push(Item.new("MochiStore", "#{dir_batteries}/store.rb", td_root, "store_rb.cr"))
 items.push(Item.new("BrowserId", "#{dir_batteries}/browser_id.rb", td_root, "browser_id_rb.cr"))
 items.push(Item.new("Logger", "#{dir_batteries}/logger.rb", td_root, "logger_rb.cr"))
+items.push(Item.new("MochiMoney", "#{dir_batteries}/money.rb", td_root, "money_rb.cr"))
+items.push(Item.new("MochiFormat", "#{dir_batteries}/format.rb", td_root, "format_rb.cr"))
+items.push(Item.new("MochiCollections", "#{dir_batteries}/collections.rb", td_root, "collections_rb.cr"))
+items.push(Item.new("MochiPointer", "#{dir_batteries}/pointer.rb", td_root, "pointer_rb.cr"))
+items.push(Item.new("MochiLayout", "#{dir_batteries}/layout.rb", td_root, "layout_rb.cr"))
+items.push(Item.new("MochiShortcuts", "#{dir_batteries}/shortcuts.rb", td_root, "shortcuts_rb.cr"))
+items.push(Item.new("MochiDrag", "#{dir_batteries}/drag.rb", td_root, "drag_rb.cr"))
+items.push(Item.new("MochiFiles", "#{dir_batteries}/files.rb", td_root, "files_rb.cr"))
 
 # ----- charts
 items.push(Item.new("Charts", "#{dir_charts}/charts.rb", td_charts, "charts_rb.cr"))
@@ -46,6 +58,7 @@ items.push(Item.new("FetchConfig", "#{dir_fetcher}/fetch_config.rb", td_fetcher,
 items.push(Item.new("Fetcher", "#{dir_fetcher}/fetcher.rb", td_fetcher, "fetcher_rb.cr"))
 
 # -- BUILT_IN (BI) Components
+items.push(Item.new("IconBI", "#{dir_builtins}/icon.rb", td_builtins, "icon_rb.cr"))
 items.push(Item.new("FeatherIconBI", "#{dir_builtins}/feather_icon.rb", td_builtins, "feather_icon_rb.cr"))
 items.push(Item.new("RouteBI", "#{dir_router}/route.rb", td_router, "route_rb.cr"))
 items.push(Item.new("MochiRouterBI", "#{dir_router}/mochi_router.rb", td_router, "mochi_router_rb.cr"))

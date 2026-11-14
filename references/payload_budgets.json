@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "compression": {
+    "format": "gzip",
+    "level": 9,
+    "mtime": 1
+  },
+  "gzip_tolerance": {
+    "minimum_bytes": 64,
+    "ratio": 0.01
+  },
+  "baselines": {
+    "core": {
+      "raw": 511067,
+      "gzip": 165293
+    },
+    "minimal_initial": {
+      "raw": 514745,
+      "gzip": 166998
+    },
+    "feature_initial": {
+      "raw": 515557,
+      "gzip": 167185
+    },
+    "feature_later": {
+      "raw": 15281,
+      "gzip": 4821
+    },
+    "feature_total": {
+      "raw": 530838,
+      "gzip": 172006
+    },
+    "network_initial": {
+      "raw": 519880,
+      "gzip": 168496
+    },
+    "network_total": {
+      "raw": 519880,
+      "gzip": 168496
+    }
+  }
+}

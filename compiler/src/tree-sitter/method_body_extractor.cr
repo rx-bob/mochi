@@ -1,5 +1,6 @@
 require "./ruby_parser"
 require "./bindings"
+require "./string_extractor"
 require "../ruby/ruby_def"
 
 module TreeSitter
@@ -7,27 +8,52 @@ module TreeSitter
     def self.extract_method_bodies(source : String, class_name : String) : Hash(String, RubyDef)
       parser = RubyParser.new
       tree = parser.parse(source)
-      root = tree.root_node
+      extract_method_bodies(tree.root_node, class_name, source)
+    end
 
-      methods = {} of String => RubyDef
-
+    def self.extract_method_bodies(root : Node, class_name : String, source : String) : Hash(String, RubyDef)
       class_node = find_class_by_name(root, class_name)
-      return methods unless class_node
+      return {} of String => RubyDef unless class_node
 
-      visit_node_for_methods(class_node, class_name, methods, source)
-      return methods
+      extract_method_bodies_from_class(class_node, class_name, source)
+    end
+
+    # Extracts instance methods directly owned by this class declaration.
+    # Methods on nested helper classes belong to the helper, not the component.
+    def self.extract_method_bodies_from_class(class_node : Node, class_name : String, source : String) : Hash(String, RubyDef)
+      methods = {} of String => RubyDef
+      body = class_node.child_by_field_name("body")
+      return methods unless body
+
+      source_lines = source.lines
+      body.each_named_child do |child|
+        next unless child.type == "method"
+
+        if ruby_def = extract_method_def(child, class_name, source, source_lines)
+          methods[ruby_def.name.not_nil!] = ruby_def
+        end
+      end
+      methods
     end
 
     # Collects the reader names declared with attr_reader / attr_accessor in
     # the component class. Strict bindings treat a bare `{name}` as a method
     # call, and these generated readers count as defined methods.
     def self.extract_attribute_readers(source : String, class_name : String) : Set(String)
-      readers = Set(String).new
       parser = RubyParser.new
       tree = parser.parse(source)
-      class_node = find_class_by_name(tree.root_node, class_name)
-      return readers unless class_node
+      extract_attribute_readers(tree.root_node, class_name)
+    end
 
+    def self.extract_attribute_readers(root : Node, class_name : String) : Set(String)
+      class_node = find_class_by_name(root, class_name)
+      return Set(String).new unless class_node
+
+      extract_attribute_readers_from_class(class_node)
+    end
+
+    def self.extract_attribute_readers_from_class(class_node : Node) : Set(String)
+      readers = Set(String).new
       body = class_node.child_by_field_name("body")
       return readers unless body
 
@@ -68,13 +94,24 @@ module TreeSitter
 
       parser = RubyParser.new
       tree = parser.parse(source)
-      class_node = find_class_by_name(tree.root_node, class_name)
+      remove_methods(tree.root_node, source, class_name, method_names)
+    end
+
+    def self.remove_methods(root : Node, source : String, class_name : String, method_names : Array(String)) : String
+      return source if method_names.empty?
+
+      class_node = find_class_by_name(root, class_name)
       return source unless class_node
 
-      body = class_node.child_by_field_name("body")
-      return source unless body
+      remove_ranges(source, method_ranges_from_class(class_node, method_names))
+    end
 
+    def self.method_ranges_from_class(class_node : Node, method_names : Array(String)) : Array(Tuple(Int32, Int32))
       ranges = [] of Tuple(Int32, Int32)
+
+      body = class_node.child_by_field_name("body")
+      return ranges unless body
+
       body.each_named_child do |child|
         next unless child.type == "method"
 
@@ -84,6 +121,10 @@ module TreeSitter
 
         ranges << {child.start_byte, child.end_byte}
       end
+      ranges
+    end
+
+    def self.remove_ranges(source : String, ranges : Array(Tuple(Int32, Int32))) : String
       return source if ranges.empty?
 
       builder = String::Builder.new
@@ -146,32 +187,26 @@ module TreeSitter
       return parts.join("::")
     end
 
-    private def self.visit_node_for_methods(node : Node, class_name : String, methods : Hash(String, RubyDef), source : String)
-      if node.type == "method"
-        if ruby_def = extract_method_def(node, class_name, source)
-          methods[ruby_def.name.not_nil!] = ruby_def
-        end
-      end
-
-      node.each_named_child do |child|
-        visit_node_for_methods(child, class_name, methods, source)
-      end
-    end
-
-    private def self.extract_method_def(method_node : Node, class_name : String, source : String) : RubyDef?
+    private def self.extract_method_def(method_node : Node, class_name : String, source : String, source_lines : Array(String)) : RubyDef?
       name_node = method_node.child_by_field_name("name")
       return nil unless name_node
 
       method_name = name_node.text
       parameters = extract_parameters(method_node)
-      body = extract_body_as_lines(method_node)
+      body = extract_body_as_lines(method_node, source_lines)
+      raw_string = StringExtractor.extract_string_from_method_node(method_node)
+      raw_range = StringExtractor.string_source_range(method_node)
 
       return RubyDef.new(
         method_name,
         "/todo",
         class_name,
         body,
-        parameters
+        parameters,
+        raw_string,
+        raw_range.try(&.[0]),
+        raw_range.try(&.[1]),
+        method_node.start_point.row.to_i + 1
       )
     end
 
@@ -203,11 +238,10 @@ module TreeSitter
       return parameters
     end
 
-    private def self.extract_body_as_lines(method_node : Node) : Array(String)
+    private def self.extract_body_as_lines(method_node : Node, source_lines : Array(String)) : Array(String)
       start_point = LibTreeSitter.ts_node_start_point(method_node.raw)
       end_point = LibTreeSitter.ts_node_end_point(method_node.raw)
 
-      source_lines = method_node.source.lines
       start_row = start_point.row.to_i
       end_row = end_point.row.to_i
 

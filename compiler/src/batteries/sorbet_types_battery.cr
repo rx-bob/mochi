@@ -1,8 +1,6 @@
 require "file_utils"
 
 class SorbetTypesBat
-
-
   def self.generate(ruby_src_dir : String)
     output_dir = "#{ruby_src_dir}/lib/sorbet-types"
     if !Dir.exists?(output_dir)
@@ -120,7 +118,43 @@ class SorbetTypesBat
           end
         end
       end
+
+      # Mochi component prop declaration. The compiler reads this metadata and
+      # removes the call before mrbc; the stub exists only for Sorbet.
+      class Class
+        def prop(name, type, required: false, default: nil)
+        end
+
+        def event(name, **payload)
+        end
+      end
+
+      # Generated child-event emitters call this bridge. The loader owns the
+      # payload contract, so the Sorbet stub accepts any Hash.
+      module Mochi
+        def self.subscribe(event_name, callback)
+        end
+
+        def self.unsubscribe(event_name, callback)
+        end
+
+        def self.emit(event_name, payload = {})
+        end
+
+        def self.emit_child(name, payload = {})
+        end
+
+        def self.focus(name)
+        end
+
+        def self.restore_focus
+        end
+      end
+
+      module MochiIcons
+        def self.icon(name)
+        end
+      end
     RUBY
   end
-
 end

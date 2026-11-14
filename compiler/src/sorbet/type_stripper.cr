@@ -3,6 +3,8 @@ class SorbetTypeStripper
   TYPE_ALIAS_TOKEN = "T.type_alias"
 
   def self.strip(source : String) : String
+    return source unless source.includes?("T.") || source.includes?("T::") || source.includes?("sig") || source.includes?("typed:")
+
     code = remove_magic_comments_and_sig_extends(source)
     code = remove_braced_statements(code, SIG_TOKEN)
     code = remove_braced_statements(code, TYPE_ALIAS_TOKEN)

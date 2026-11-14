@@ -1,3 +1,4 @@
+require "../generated/builtins/icon_rb"
 require "../generated/builtins/feather_icon_rb"
 require "../generated/builtins/router/route_rb"
 require "../generated/builtins/router/mochi_router_rb"
@@ -53,6 +54,10 @@ class RubyRewriter
     rb_code += "Mochi.new\n"
 
     rb_code
+  end
+
+  def gen_builtin_icon() : String
+    return IconBIRbFragment.get_ruby_code
   end
 
   def gen_builtin_component_feather_icon() : String

@@ -26,8 +26,51 @@ RUBY
     ],
     [] of EventDescriptor
   )
+  child_row = EachRowTemplate.new(
+    1,
+    "item[:children]",
+    "child",
+    "ci",
+    nil,
+    "<b>{child}</b>",
+    [EachRowBindingDescriptor.new(0, "text", nil, "child")],
+    [] of EachRowEventDescriptor,
+    [] of EachRowTemplate,
+    [EachRowScope.new("item", "index"), EachRowScope.new("child", "ci")]
+  )
+  each_row = EachRowTemplate.new(
+    0,
+    "@items",
+    "item",
+    "index",
+    nil,
+    "<span>{item[:name]}</span><!--mochi-each-1-->",
+    [
+      EachRowBindingDescriptor.new(0, "text", nil, "item[:name]"),
+      EachRowBindingDescriptor.new(1, "attr", "hidden", "item[:hidden]", nil, false, "boolean"),
+    ],
+    [] of EachRowEventDescriptor,
+    [child_row],
+    [EachRowScope.new("item", "index")],
+    %Q{item[:id]},
+    TemplateSourceSpan.new("lib/my_counter.rb", 20, 7, 20, 13, 6)
+  )
   bindings = [
-    BindingDescriptor.new(0, [0, 0], "text", "__mochi_bind_0", nil, "Count: {count}", "@count"),
+    BindingDescriptor.new(
+      0,
+      [0, 0],
+      "text",
+      "__mochi_bind_0",
+      nil,
+      "Count: {count}",
+      "@count",
+      [] of ConditionalBranchDescriptor,
+      nil,
+      8,
+      21,
+      [] of String,
+      TemplateSourceSpan.new("lib/my_counter.rb", 12, 9, 12, 22, 13)
+    ),
     BindingDescriptor.new(
       1,
       [2],
@@ -37,6 +80,41 @@ RUBY
       "<p>High</p>",
       "__mochi_cond_0",
       [branch]
+    ),
+    BindingDescriptor.new(
+      3,
+      [1],
+      "expr",
+      "__mochi_bind_3",
+      nil,
+      "@query",
+      "@query"
+    ),
+    BindingDescriptor.new(
+      4,
+      [3],
+      "each",
+      "__mochi_each_0_rows",
+      "item,index",
+      "<span>{item[:name]}</span>",
+      nil,
+      [] of ConditionalBranchDescriptor,
+      nil,
+      nil,
+      nil,
+      [] of String,
+      nil,
+      each_row
+    ),
+    BindingDescriptor.new(
+      5,
+      [4],
+      "attr",
+      "__mochi_bind_5",
+      "disabled",
+      "{@disabled}",
+      "@disabled",
+      attr_kind: "boolean"
     ),
   ]
   events = [
@@ -55,6 +133,21 @@ RUBY
     bindings,
     events
   )
+  manifest.source_file = "lib/my_counter.rb"
+  manifest.source_line = 7
+  manifest.method_lines = {"initialize" => 14, "increment" => 18}
+  manifest.props = [
+    PropDescriptor.new("label", "string", required: true, source_file: "lib/my_counter.rb", source_line: 8),
+    PropDescriptor.new("count", "integer", default: true, default_code: "0", source_file: "lib/my_counter.rb", source_line: 9),
+  ]
+  manifest.emits = [
+    ComponentEventDescriptor.new(
+      "select",
+      [EventPayloadDescriptor.new("id", "integer")],
+      "lib/my_counter.rb",
+      10
+    ),
+  ]
 
   MochiComponent.new(
     File.join(dir, "my_counter.rb"),
@@ -63,11 +156,16 @@ RUBY
     ruby_source,
     manifest,
     manifest.html_template,
-    manifest.css
+    manifest.css,
+    7,
+    "lib/my_counter.rb",
+    10
   )
 end
 
 private def write_fake_mrbc(path : String, log_path : String)
+  # A real minimal RITE record keeps the compiler double subject to verification.
+  fixture = File.expand_path("../fixtures/gvm/minimal.mrb", __DIR__)
   script = <<-SH
 #!/bin/sh
 out=""
@@ -79,7 +177,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 cp "$input" "#{log_path}"
-{ printf 'RITE0400'; printf '\\000\\000'; printf 'RUBYBYTECODE'; } > "$out"
+cp "#{fixture}" "$out"
 SH
 
   File.write(path, script)
@@ -101,6 +199,7 @@ describe MrbcCompiler do
 
       write_fake_mrbc(mrbc, stripped_source_path)
       File.write(wasm, "WASM")
+      File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
       File.write(js, "JS")
       File.write(loader, "LOADER")
 
@@ -109,7 +208,7 @@ describe MrbcCompiler do
       compiler.compile([component], output)
 
       chi_path = File.join(output, "components", "my-counter.chi")
-      File.read(chi_path).should eq("RUBYBYTECODE")
+      File.read(chi_path).should eq(File.read(File.expand_path("../fixtures/gvm/minimal.mrb", __DIR__)).byte_slice(10))
       File.read(File.join(output, "mochi-gvm.wasm")).should eq("WASM")
       File.read(File.join(output, "mochi-gvm.js")).should eq("JS")
       File.read(File.join(output, "mochi-loader.js")).should eq("LOADER")
@@ -122,23 +221,75 @@ describe MrbcCompiler do
       stripped_source.should contain("@count = 0")
 
       json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+      json["schema_version"].as_i.should eq(3)
+      profile = json["capacity_profile"].as_h
+      profile["fingerprint"].as_s.should eq(CapacityConfig.default.fingerprint)
+      profile["capacities"]["state_objects"].as_i.should eq(32_768)
+      json["entry_packages"].as_a.map(&.as_s).should eq(["component:my-counter"])
+      packages = json["packages"].as_h
+      packages.size.should eq(1)
+      packages["component:my-counter"].as_h["kind"].as_s.should eq("component")
+      packages["component:my-counter"].as_h["file"].as_s.should eq("components/my-counter.chi")
       json["wasm_file"].as_s.should eq("mochi-gvm.wasm")
       json["js_file"].as_s.should eq("mochi-gvm.js")
       json["loader_file"].as_s.should eq("mochi-loader.js")
 
       components = json["components"].as_a
       components.size.should eq(1)
-      component_json = components.first.as_h
+      component_index = components.first.as_h
+      component_index["tag_name"].as_s.should eq("my-counter")
+      component_index["class_name"].as_s.should eq("MyCounter")
+      component_index["descriptor"].as_s.should eq("components/my-counter.json")
+      component_index["package"].as_s.should eq("component:my-counter")
+      component_index.has_key?("html_template").should be_false
+      component_index.has_key?("css").should be_false
+      component_index.has_key?("bindings").should be_false
+
+      component_json = JSON.parse(
+        File.read(File.join(output, "components", "my-counter.json"))
+      ).as_h
+      component_json["schema_version"].as_i.should eq(3)
       component_json["tag_name"].as_s.should eq("my-counter")
       component_json["class_name"].as_s.should eq("MyCounter")
       component_json["chi_file"].as_s.should eq("my-counter.chi")
+      component_json["package"].as_s.should eq("component:my-counter")
+      component_json.has_key?("dependencies").should be_false
+      component_json.has_key?("capabilities").should be_false
       component_json["html_template"].as_s.should contain("Count: {count}")
       component_json["css"].as_s.should eq("h1 { color: red; }")
+      component_json["source"].as_h["file"].as_s.should eq("lib/my_counter.rb")
+      component_json["source"].as_h["line"].as_i.should eq(7)
+      component_json["methods"].as_h["initialize"].as_i.should eq(14)
+      component_json["methods"].as_h["increment"].as_i.should eq(18)
+
+      props = component_json["props"].as_a
+      props.size.should eq(2)
+      props[0].as_h["name"].as_s.should eq("label")
+      props[0].as_h["type"].as_s.should eq("string")
+      props[0].as_h["required"].as_bool.should be_true
+      props[0].as_h["source"].as_h["line"].as_i.should eq(8)
+      props[0].as_h.has_key?("default_code").should be_false
+      props[1].as_h["name"].as_s.should eq("count")
+      props[1].as_h["default"].as_bool.should be_true
+      props[1].as_h["source"].as_h["file"].as_s.should eq("lib/my_counter.rb")
+
+      emits = component_json["emits"].as_a
+      emits.size.should eq(1)
+      emits[0].as_h["name"].as_s.should eq("select")
+      emits[0].as_h["payload"].as_a[0].as_h["name"].as_s.should eq("id")
+      emits[0].as_h["payload"].as_a[0].as_h["type"].as_s.should eq("integer")
+      emits[0].as_h["source"].as_h["line"].as_i.should eq(10)
 
       bindings = component_json["bindings"].as_a
       bindings.first.as_h["id"].as_i.should eq(0)
       bindings.first.as_h["path"].as_a.map(&.as_i).should eq([0, 0])
       bindings.first.as_h["getter_sym"].as_s.should eq("__mochi_bind_0")
+      bindings.first.as_h["template_start"].as_i.should eq(8)
+      bindings.first.as_h["template_end"].as_i.should eq(21)
+      source = bindings.first.as_h["source"].as_h
+      source["file"].as_s.should eq("lib/my_counter.rb")
+      source["line"].as_i.should eq(12)
+      source["column"].as_i.should eq(9)
 
       cond = bindings.find { |entry| entry.as_h["kind"].as_s == "cond" }.not_nil!
       cond.as_h["getter_sym"].as_s.should eq("__mochi_bind_1")
@@ -148,6 +299,30 @@ describe MrbcCompiler do
       branch_bindings = branches.first.as_h["bindings"].as_a
       branch_bindings.first.as_h["id"].as_i.should eq(2)
       branch_bindings.first.as_h["getter_sym"].as_s.should eq("__mochi_bind_2")
+
+      expr = bindings.find { |entry| entry.as_h["kind"].as_s == "expr" }.not_nil!
+      expr.as_h["getter_expr"].as_s.should eq("@query")
+      attr = bindings.find { |entry| entry.as_h["kind"].as_s == "attr" }.not_nil!
+      attr.as_h["attr_name"].as_s.should eq("disabled")
+      attr.as_h["attr_kind"].as_s.should eq("boolean")
+
+      each = bindings.find { |entry| entry.as_h["kind"].as_s == "each" }.not_nil!
+      each.as_h["getter_sym"].as_s.should eq("__mochi_each_0_rows")
+      rows = each.as_h["each_rows"].as_h
+      rows["id"].as_i.should eq(0)
+      rows["keyed"].as_bool.should be_true
+      row_source = rows["source"].as_h
+      row_source["file"].as_s.should eq("lib/my_counter.rb")
+      row_source["line"].as_i.should eq(20)
+      rows["bindings"].as_a.first.as_h["slot"].as_i.should eq(0)
+      row_attr = rows["bindings"].as_a.find { |entry| entry.as_h["attr_name"].as_s? == "hidden" }.not_nil!
+      row_attr.as_h["attr_kind"].as_s.should eq("boolean")
+      rows["children"].as_a.size.should eq(1)
+      child = rows["children"].as_a.first.as_h
+      child["id"].as_i.should eq(1)
+      child["template"].as_s.should eq("<b>{child}</b>")
+      child.has_key?("each_rows").should be_false
+      child.has_key?("keyed").should be_false
 
       events = component_json["events"].as_a
       events.first.as_h["event"].as_s.should eq("click")
@@ -165,7 +340,152 @@ describe MrbcCompiler do
     end
   end
 
-  if real_mrbc = MrbcCompiler.find_mrbc
+  it "writes lazy component descriptors and style resource files outside the entry manifest" do
+    dir = File.join(Dir.tempdir, "mochi_mrbc_lazy_spec_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(dir)
+
+    begin
+      mrbc = File.join(dir, "fake_mrbc")
+      wasm = File.join(dir, "source.wasm")
+      js = File.join(dir, "source.js")
+      loader = File.join(dir, "mochi-loader.js")
+      stripped_source_path = File.join(dir, "stripped.rb")
+      output = File.join(dir, "out")
+
+      write_fake_mrbc(mrbc, stripped_source_path)
+      File.write(wasm, "WASM")
+      File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
+      File.write(js, "JS")
+      File.write(loader, "LOADER")
+
+      shared_style = PackageResource.new("css-shared", "style", text: ".shared { color: red; }")
+      component = build_mrbc_fixture(dir)
+      component.manifest.style_resources = [shared_style]
+
+      stale_descriptor = File.join(output, "components", "stale.json")
+      Dir.mkdir_p(File.dirname(stale_descriptor))
+      File.write(stale_descriptor, "{}")
+
+      compiler = MrbcCompiler.new(mrbc_path: mrbc, wasm_source: wasm, loader_source: loader)
+      compiler.compile([component], output)
+
+      manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+      index = manifest["components"].as_a.first.as_h
+      index["tag_name"].as_s.should eq("my-counter")
+      index["descriptor"].as_s.should eq("components/my-counter.json")
+      index.has_key?("html_template").should be_false
+      index.has_key?("css").should be_false
+      index.has_key?("bindings").should be_false
+      File.exists?(stale_descriptor).should be_false
+
+      descriptor = JSON.parse(File.read(File.join(output, "components", "my-counter.json"))).as_h
+      descriptor["schema_version"].as_i.should eq(3)
+      descriptor["style_resources"].as_a.map(&.as_s).should eq(["css-shared"])
+      descriptor["html_template"].as_s.should contain("Count: {count}")
+
+      resource = manifest["resources"].as_h["css-shared"].as_h
+      resource.has_key?("text").should be_false
+      resource["file"].as_s.should start_with("components/styles/")
+      File.read(File.join(output, resource["file"].as_s)).should eq(".shared { color: red; }")
+
+      package = manifest["packages"].as_h["component:my-counter"].as_h
+      package["resources"].as_a.map(&.as_s).should eq(["css-shared"])
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  it "omits unused Ruby packages and optional capabilities from the manifest" do
+    dir = File.join(Dir.tempdir, "mochi_mrbc_package_spec_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(dir)
+
+    begin
+      mrbc = File.join(dir, "fake_mrbc")
+      wasm = File.join(dir, "source.wasm")
+      js = File.join(dir, "source.js")
+      loader = File.join(dir, "mochi-loader.js")
+      stripped_source_path = File.join(dir, "stripped.rb")
+      output = File.join(dir, "out")
+
+      write_fake_mrbc(mrbc, stripped_source_path)
+      File.write(wasm, "WASM")
+      File.write(wasm.sub(/\.wasm\z/, ".capacity.json"), CapacityConfig.default.profile_json)
+      File.write(js, "JS")
+      File.write(loader, "LOADER")
+
+      unused_path = File.join(dir, "lib", "mochi_router.rb")
+      Dir.mkdir_p(File.dirname(unused_path))
+      File.write(unused_path, "class MochiRouter\nend\n")
+      unused = PreludeSource.new(
+        unused_path,
+        "lib/mochi_router.rb",
+        "class MochiRouter\nend\n"
+      )
+      component = build_mrbc_fixture(dir)
+      compiler = MrbcCompiler.new(mrbc_path: mrbc, wasm_source: wasm, loader_source: loader)
+      compiler.compile_graph(
+        [component],
+        output,
+        [unused],
+        [] of HelperUnit,
+        [] of PackageResource,
+        false,
+        [dir],
+        dir
+      )
+
+      json = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+      packages = json["packages"].as_h
+      packages.keys.should eq(["component:my-counter"])
+      json["capabilities"]?.should be_nil
+      json["format_host"]?.should be_nil
+      File.exists?(File.join(output, "components", "ruby-#{Digest::SHA1.hexdigest("ruby:lib/mochi_router.rb")[0, 12]}.chi")).should be_false
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  it "maps mrbc tempfile lines back to the original Ruby file" do
+    dir = File.join(Dir.tempdir, "mochi_mrbc_error_spec_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(dir)
+
+    begin
+      mrbc = File.join(dir, "failing_mrbc")
+      script = <<-SH
+#!/bin/sh
+input=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2;;
+    *) input="$1"; shift;;
+  esac
+done
+echo "$input:5: syntax error, unexpected end" >&2
+exit 1
+SH
+      File.write(mrbc, script)
+      File.chmod(mrbc, File::Permissions.new(0o755))
+
+      component = build_mrbc_fixture(dir)
+      compiler = MrbcCompiler.new(mrbc_path: mrbc)
+      output = File.join(dir, "out")
+      Dir.mkdir_p(output)
+      File.write(File.join(output, "mochi-manifest.json"), "stale manifest")
+      error = expect_raises(Exception) do
+        compiler.compile([component], output)
+      end
+      message = error.message.to_s
+      message.should contain("lib/my_counter.rb:14")
+      message.should_not contain("mochi-my-counter")
+      message.should contain("syntax error")
+      File.exists?(File.join(output, "mochi-manifest.json")).should be_false
+      File.exists?(File.join(output, "components", "my-counter.chi")).should be_false
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  if real_mrbc = ENV["MRBC"]? || MrbcCompiler.find_mrbc
     it "emits valid mrbc bytecode under 1 KB" do
       dir = File.join(Dir.tempdir, "mochi_real_mrbc_spec_#{Random.rand(1_000_000)}")
       Dir.mkdir_p(dir)
@@ -186,6 +506,114 @@ describe MrbcCompiler do
         File.size(chi_path).should be < 1024
         File.read(chi_path).includes?("MATZ").should be_true
         compiler.warnings.size.should eq(3)
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
+
+    it "walks int64, float, and bigint pool entries without losing alignment" do
+      dir = File.join(Dir.tempdir, "mochi_numeric_mrbc_spec_#{Random.rand(1_000_000)}")
+      Dir.mkdir_p(dir)
+
+      begin
+        source_path = File.join(dir, "numeric.rb")
+        bytecode_path = File.join(dir, "numeric.mrb")
+        File.write(source_path, <<-RUBY)
+class NumericPool
+  def values
+    [2147483648, 9007199254740993, 9223372036854775807, -9223372036854775808, 0.5]
+  end
+end
+RUBY
+
+        output = IO::Memory.new
+        status = Process.run(real_mrbc, ["-o", bytecode_path, source_path], output: output, error: output)
+        status.success?.should be_true
+        RiteVerifier.verify!(File.read(bytecode_path).to_slice, "numeric.rb")
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
+
+    it "compiles the optional money helper as prelude bytecode" do
+      dir = File.join(Dir.tempdir, "mochi_money_mrbc_spec_#{Random.rand(1_000_000)}")
+      Dir.mkdir_p(dir)
+
+      begin
+        money_source = File.read(File.join(__DIR__, "../../../fragments/batteries/money.rb"))
+        compiler = MrbcCompiler.new(
+          mrbc_path: real_mrbc,
+          wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
+          loader_source: File.join(dir, "missing.js")
+        )
+        compiler.compile([] of MochiComponent, File.join(dir, "out"), money_source)
+
+        prelude = compiler.prelude_path
+        prelude.should_not be_nil
+        File.exists?(prelude.not_nil!).should be_true
+        File.read(prelude.not_nil!).includes?("MATZ").should be_true
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
+
+    it "ships and marks the optional formatting host only when requested" do
+      dir = File.join(Dir.tempdir, "mochi_format_mrbc_spec_#{Random.rand(1_000_000)}")
+      Dir.mkdir_p(dir)
+
+      begin
+        format_source = File.read(File.join(__DIR__, "../../../fragments/batteries/format.rb"))
+        host_source = File.join(dir, "format-host.js")
+        File.write(host_source, "MochiHostAdapter.register({name: 'formatting', version: 1, sync: {format: function () { return '1'; }}});\n")
+        component = build_mrbc_fixture(dir)
+        component.manifest.formatting = true
+        output = File.join(dir, "out")
+        compiler = MrbcCompiler.new(
+          mrbc_path: real_mrbc,
+          wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
+          loader_source: File.join(dir, "missing.js"),
+          format_host_source: host_source
+        )
+
+        compiler.compile(
+          [component],
+          output,
+          format_source,
+          [] of HelperUnit,
+          [] of PackageResource,
+          true
+        )
+
+        compiler.format_host_path.should_not be_nil
+        File.exists?(File.join(output, "mochi-format.js")).should be_true
+        manifest = JSON.parse(File.read(File.join(output, "mochi-manifest.json")))
+        manifest["format_host"].as_s.should eq("mochi-format.js")
+        manifest["capabilities"]["formatting"]["version"].as_i.should eq(1)
+        manifest["capabilities"]["formatting"]["operations"]["format"].as_s.should eq("sync")
+        manifest["capabilities"]["formatting"]["limits"]["cache_entries"].as_i
+          .should eq(CapacityConfig.default["host_format_cache_entries"])
+        compiler.host_adapter_paths.keys.should eq(["mochi-format.js"])
+        descriptor = JSON.parse(
+          File.read(File.join(output, manifest["components"][0]["descriptor"].as_s))
+        )
+        descriptor["formatting"].as_bool.should be_true
+
+        plain_output = File.join(dir, "plain")
+        plain = MrbcCompiler.new(
+          mrbc_path: real_mrbc,
+          wasm_source: File.join(dir, "missing.wasm"),
+          js_source: File.join(dir, "missing-gvm.js"),
+          loader_source: File.join(dir, "missing.js")
+        )
+        plain.compile([component], plain_output)
+        plain.format_host_path.should be_nil
+        plain_manifest = JSON.parse(File.read(File.join(plain_output, "mochi-manifest.json")))
+        plain_manifest["format_host"]?.should be_nil
+        File.write(File.join(plain_output, "mochi-format.js"), "stale")
+        plain.compile([component], plain_output)
+        File.exists?(File.join(plain_output, "mochi-format.js")).should be_false
       ensure
         FileUtils.rm_rf(dir)
       end

@@ -24,6 +24,7 @@ require "./entrypoints/typechecker"
 require "./batteries/core_battery"
 require "./sorbet/sorbet"
 require "./tooling/dev_server"
+require "./tooling/ruby_test_runner"
 
 def self.get_attr(component, name) : String
   return `#{component}.element.getAttribute(#{name})`
@@ -72,7 +73,11 @@ is_dev_server = false
 dev_server_root = ""
 dev_server_config_path = ""
 is_standalone_typecheck = false
+is_ruby_test = false
+test_browsers = "chromium,firefox,webkit"
+test_file : String? = nil
 keep_granular_build_artifacts = false
+capacity_config_path : String? = nil
 
 desc_dev_server = "Launch dev server"
 
@@ -100,8 +105,24 @@ OptionParser.parse do |p|
     is_standalone_typecheck = true
   end
 
+  p.on("test", "Run Ruby-authored component behavior tests in GVM") do
+    is_ruby_test = true
+  end
+
+  p.on("--browsers=BROWSERS", "Browsers for mochi test: chromium,firefox,webkit or all") do |value|
+    test_browsers = value
+  end
+
+  p.on("--test-file=PATH", "Run one Ruby *_test.rb file relative to the project's test/ directory") do |value|
+    test_file = value
+  end
+
   p.on("--keep_granular_build_artifacts", "Preserves all granular build artifacts (meant for developers working on Mochi)") do
     keep_granular_build_artifacts = true
+  end
+
+  p.on("--capacity-config=PATH", "Build with fixed VM capacities from a versioned JSON file") do |path|
+    capacity_config_path = path
   end
 
   p.on("--experimental-new-engine", "Use the new experimental rendering engine") do
@@ -146,7 +167,9 @@ OptionParser.parse do |p|
   parser = p
 end
 
-if is_dev_server
+if is_ruby_test
+  exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir, test_browsers, test_file)
+elsif is_dev_server
   if dev_server_config_path.size < 1 || dev_server_root.size < 1
     puts "No arguments provided, intended usage:".colorize(:red)
     puts "  mochi dev --config=</path/to/dev_server_config.json> --root=</path/to/ruby/src>"
@@ -176,6 +199,7 @@ else
       output_dir,
       with_tc,
       keep_granular_build_artifacts,
+      capacity_config_path,
     )
   end
 end

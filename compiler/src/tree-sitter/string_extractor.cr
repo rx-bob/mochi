@@ -29,6 +29,42 @@ module TreeSitter
       return extract_string_content(string_node)
     end
 
+    # Returns the byte range of the literal's contents (without Ruby quote or
+    # percent delimiters) in the original source. Callers use this to map
+    # template spans back to the user's file.
+    def self.string_source_range(method_node : Node) : Tuple(Int32, Int32)?
+      return nil unless method_node.type == "method"
+
+      body_node = method_node.child_by_field_name("body")
+      return nil unless body_node
+
+      string_node = find_string_in_body(body_node)
+      return nil unless string_node
+
+      text = string_node.text
+      start_byte = string_node.start_byte
+      end_byte = string_node.end_byte
+
+      if text.starts_with?("%Q") || text.starts_with?("%q")
+        return nil if text.bytesize < 4
+        delimiter = text.byte_at(2)
+        closing = case delimiter
+                  when 123_u8 then 125_u8
+                  when 91_u8 then 93_u8
+                  when 40_u8 then 41_u8
+                  when 60_u8 then 62_u8
+                  else delimiter
+                  end
+        return {start_byte + 3, end_byte - 1} if text.byte_at(text.bytesize - 1) == closing
+      elsif text.starts_with?('"') || text.starts_with?('\'')
+        return {start_byte + 1, end_byte - 1}
+      elsif string_node.type.starts_with?("heredoc")
+        return {start_byte, end_byte}
+      end
+
+      nil
+    end
+
     private def self.find_method_node(node : Node) : Node?
       return node if node.type == "method"
 

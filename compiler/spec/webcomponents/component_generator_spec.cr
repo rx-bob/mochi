@@ -6,6 +6,53 @@ require "../../src/ruby/ruby_understander"
 require "../code_test_utils"
 
 describe ComponentGenerator do
+  it "preserves conditional binding anchors when fragment contains only root comments" do
+    source = %({if @open}<div>Visible</div>{elsif @other}<span>Other</span>{else}<i>Closed</i>{end})
+    conditionals = ConditionalProcessor.extract_conditionals(source)
+    processed = ConditionalProcessor.process(source).html
+
+    manifest = ComponentGenerator.new.generate(
+      "ConditionalRoot",
+      "conditional-root",
+      "",
+      processed,
+      "[]",
+      {} of String => String,
+      conditionals
+    )
+
+    manifest.html_template.should contain("<!--if-anchor-0-->")
+    binding = manifest.bindings.find! { |item| item.kind == "cond" }
+    binding.path.should eq([0])
+    binding.branches.size.should eq(3)
+    binding.branches[0].html_template.should contain("Visible")
+    binding.branches[1].html_template.should contain("Other")
+    binding.branches[2].html_template.should contain("Closed")
+  end
+
+  it "captures the DOM context for table, select, and SVG row anchors" do
+    source = %q(
+      <table><tbody>{each @rows as row}<tr><td>{row["label"]}</td></tr>{end}</tbody></table>
+      <select>{each @rows as option}<option>{option["label"]}</option>{end}</select>
+      <svg><g>{each @rows as shape}<path fill="{shape["color"]}"></path>{end}</g></svg>
+    )
+    result = EachProcessor.process(source)
+    generator = ComponentGenerator.new
+    manifest = generator.generate(
+      "ContextRows",
+      "context-rows",
+      "",
+      result.html,
+      each_blocks: result.each_blocks
+    )
+
+    generator.each_row_templates.map(&.context_tag).should eq(["tbody", "select", "g"])
+    generator.each_row_templates.map(&.context_namespace).should eq(["html", "html", "svg"])
+    manifest.html_template.should contain("<!--each-anchor-0-->")
+    manifest.html_template.should contain("<!--each-anchor-1-->")
+    manifest.html_template.should contain("<!--each-anchor-2-->")
+  end
+
   it "builds a static manifest with child-node paths and event attributes" do
     html = %(<h1>Count: {@count}</h1><button onclick="{increment}">Increment</button>)
     gen = ComponentGenerator.new
@@ -34,6 +81,50 @@ describe ComponentGenerator do
     event.path.should eq([1])
     event.event.should eq("click")
     event.method_sym.should eq("increment")
+  end
+
+  it "keeps nested calls, hashes, and quoted braces in one text binding" do
+    html = %q(<p>{format(@h["key"], {a: 1, b: "}"})}</p>)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    binding = manifest.bindings.first
+    binding.kind.should eq("text")
+    binding.getter_expr.should eq(%q(format(@h["key"], {a: 1, b: "}"})))
+    binding.template_start.should eq(0)
+    binding.template_end.should eq(binding.template_text.not_nil!.bytesize)
+    manifest.html_template.should contain(html)
+  end
+
+  it "records placeholder ranges without consuming literal double braces" do
+    html = %q(<p>{{literal}} {@count}</p>)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    binding = manifest.bindings.first
+    binding.getter_expr.should eq("@count")
+    start = binding.template_start.not_nil!
+    finish = binding.template_end.not_nil!
+    binding.template_text.not_nil!.byte_slice(start, finish - start).should eq("{@count}")
+    manifest.html_template.should contain("{literal}")
+  end
+
+  it "uses the same parser for nested event arguments" do
+    html = EventArgumentExtractor.process(
+      %q(<button onclick="{select({a: 1}, "}", format(1, 2))}">Pick</button>)
+    )
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      html,
+      method_names: ["select"]
+    )
+
+    event = manifest.events.first
+    event.args.size.should eq(3)
+    event.args[0].kind.should eq("expr")
+    event.args[0].value.should eq(%q({a: 1}))
+    event.args[1].value.should eq("}")
+    event.args[2].value.should eq("format(1, 2)")
   end
 
   it "records structured event arguments from the template" do
@@ -76,6 +167,13 @@ describe ComponentGenerator do
     expression.path.should eq([0])
   end
 
+  it "keeps event expression bindings even when text or attributes use the same Ruby" do
+    html = EventArgumentExtractor.process(%q(<p title="{@field["label"]}">{@field["label"]}</p><button onclick="{pick(@field["label"])}">Pick</button>))
+    manifest = ComponentGenerator.new.generate("Form", "form-root", "", html, method_names: ["pick"])
+    manifest.bindings.map(&.kind).should eq(["attr", "text", "expr"])
+    manifest.bindings.last.getter_expr.should eq(%q(@field["label"]))
+  end
+
   it "generates two-way property bindings and setters for bind:value and bind:checked" do
     html = %Q(<input bind:value="{@query}"><input type="checkbox" bind:checked="{@enabled}">)
     manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
@@ -100,6 +198,27 @@ describe ComponentGenerator do
     manifest.events.map(&.method_sym).should eq(["__mochi_set_query", "__mochi_set_enabled"])
   end
 
+  it "classifies boolean and textual attribute bindings" do
+    html = %Q(<button class="box {box_class}" disabled="{@disabled}" aria-expanded="{@expanded}" data-count="{@count}" checked="{@checked}">Go</button>)
+    manifest = ComponentGenerator.new.generate("TestCmp", "test-cmp", "", html)
+
+    kind_for = ->(name : String) do
+      manifest.bindings.find! { |binding| binding.kind == "attr" && binding.attr_name == name }.attr_kind
+    end
+
+    kind_for.call("class").should eq("text")
+    kind_for.call("disabled").should eq("boolean")
+    kind_for.call("aria-expanded").should eq("text")
+    kind_for.call("data-count").should eq("text")
+    kind_for.call("checked").should eq("boolean")
+
+    value_binding = ComponentGenerator.new.generate(
+      "TestCmp", "test-cmp", "", %Q(<input bind:value="{@query}">)
+    ).bindings.first
+    value_binding.kind.should eq("prop")
+    value_binding.attr_kind.should be_nil
+  end
+
   it "rejects bind:value without an ivar placeholder" do
     expect_raises(Exception, "bind:value requires an instance variable") do
       ComponentGenerator.new.generate(
@@ -111,7 +230,7 @@ describe ComponentGenerator do
     end
   end
 
-  it "uses method calls for bare text bindings" do
+  it "uses method calls for bare text bindings and keeps them textual" do
     manifest = ComponentGenerator.new.generate(
       "TestCmp",
       "test-cmp",
@@ -120,7 +239,8 @@ describe ComponentGenerator do
     )
 
     binding = manifest.bindings.first
-    binding.kind.should eq("html")
+    binding.kind.should eq("text")
+    binding.trusted_markup.should be_false
     binding.path.should eq([0, 0])
     binding.getter_expr.should eq("rendered_svg")
   end
@@ -134,8 +254,58 @@ describe ComponentGenerator do
     )
 
     binding = manifest.bindings.first
-    binding.kind.should eq("html")
+    binding.kind.should eq("text")
+    binding.trusted_markup.should be_false
     binding.getter_expr.should eq("@rendered_svg")
+  end
+
+  it "marks only explicit Mochi.raw calls as trusted markup" do
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      %(<div>{Mochi.raw(@rendered_svg)}</div><p>{Mochi.raw(rendered_svg)}</p>)
+    )
+
+    standalone = manifest.bindings[0]
+    standalone.kind.should eq("html")
+    standalone.trusted_markup.should be_true
+    standalone.getter_expr.should eq("@rendered_svg")
+
+    method = manifest.bindings[1]
+    method.kind.should eq("html")
+    method.trusted_markup.should be_true
+    method.getter_expr.should eq("rendered_svg")
+  end
+
+  it "keeps mixed trusted and ordinary text in one escaped node" do
+    manifest = ComponentGenerator.new.generate(
+      "TestCmp",
+      "test-cmp",
+      "",
+      %(<div>Status {Mochi.raw(icon)} and {message}</div>)
+    )
+
+    trusted = manifest.bindings[0]
+    trusted.kind.should eq("text_html")
+    trusted.trusted_markup.should be_true
+    trusted.getter_expr.should eq("icon")
+
+    ordinary = manifest.bindings[1]
+    ordinary.kind.should eq("text_html")
+    ordinary.trusted_markup.should be_false
+    ordinary.getter_expr.should eq("message")
+  end
+
+  it "rejects Mochi.raw in attribute values" do
+    expect_raises(Exception, "Mochi.raw is only supported in text content") do
+      ComponentGenerator.new.generate(
+        "TestCmp",
+        "test-cmp",
+        "",
+        %(<div title="{Mochi.raw(label)}">Box</div>)
+      )
+    end
   end
 
   it "uses method calls for bare attribute bindings" do
@@ -195,7 +365,7 @@ describe ComponentGenerator do
     cond.branches.first.html_template.should contain("<p>On</p>")
 
     each = manifest.bindings.find! { |binding| binding.kind == "each" }
-    each.getter_expr.should eq("@items")
+    each.getter_expr.should eq("__mochi_each_0_rows")
     each.template_text.not_nil!.should contain("<li>")
   end
 
@@ -261,7 +431,7 @@ describe ComponentGenerator do
     branch.html_template.should contain("<!--each-anchor-0-->")
 
     each = branch.bindings.find! { |binding| binding.kind == "each" }
-    each.getter_expr.should eq("@items")
+    each.getter_expr.should eq("__mochi_each_0_rows")
     generator.each_blocks.size.should eq(1)
     generator.each_blocks.first.loop_def.array_name.should eq("@items")
   end

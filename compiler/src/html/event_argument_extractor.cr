@@ -1,58 +1,136 @@
 require "./event_argument"
+require "./template_expression"
+require "./template_attributes"
+
+# One event attribute discovered in a template. The replacement callback in
+# `rewrite` decides whether the DOM receives a plain handler name or a compiled
+# row wrapper symbol.
+struct EventCall
+  MODIFIERS = ["prevent", "stop", "self"]
+
+  getter event_name : String
+  getter method_name : String
+  getter arguments : Array(String)
+  getter span : TemplateSourceSpan?
+  getter modifiers : Array(String)
+
+  def initialize(
+    @event_name : String,
+    @method_name : String,
+    @arguments : Array(String),
+    @span : TemplateSourceSpan? = nil,
+  )
+    suffix = @event_name.split('.', 2)[1]?
+    @modifiers = suffix ? suffix.split('.') : [] of String
+  end
+
+  def event : String
+    raw = if event_name.starts_with?("on:")
+            event_name[3..]
+          elsif event_name.starts_with?("on")
+            event_name[2..]
+          else
+            event_name
+          end
+    raw.split('.', 2).first
+  end
+
+  # `on:<event>` is a compiled parent/child connection. `on<event>` retains
+  # the native DOM event behavior.
+  def component? : Bool
+    event_name.starts_with?("on:")
+  end
+end
 
 class EventArgumentExtractor
-  EVENT_START = /(on[a-z]+)\s*=\s*(["'])?\{/
+  EVENT_NAME = /\Aon:?[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*\z/
 
   # Rewrites event attributes with call arguments into a plain method name plus
   # a JSON descriptor list. Keeping the descriptors on the element lets the
   # loader pass typed values to the VM without evaluating Ruby in JavaScript.
-  def self.process(html : String) : String
-    String.build do |io|
-      cursor = 0
-
-      while match = EVENT_START.match(html, cursor)
-        start = match.begin(0)
-        io << html[cursor...start]
-
-        event_name = match[1].downcase
-        quote = match[2]?
-        content_start = match.end(0)
-        close = find_closing_brace(html, content_start)
-
-        unless close
-          io << html[start...]
-          cursor = html.size
-          break
-        end
-
-        content = html[content_start...close].strip
-        attribute_end = close + 1
-        if quote && attribute_end < html.size && html[attribute_end] == quote[0]
-          attribute_end += 1
-        end
-
-        io << render_event_attribute(event_name, content)
-        cursor = attribute_end
-      end
-
-      io << html[cursor...]
+  def self.process(
+    html : String,
+    locator : TemplateSourceLocator? = nil,
+    parser : TemplateExpressionParser? = nil,
+  ) : String
+    rewritten, _calls = rewrite(html, locator, parser) do |call|
+      render_event_attribute(call)
     end
+    rewritten
   end
 
-  private def self.render_event_attribute(event_name : String, content : String) : String
-    method_name, arguments = parse_call(content)
-    event = event_name.starts_with?("on") ? event_name[2..] : event_name
+  # Rewrites every event attribute and returns the calls that were found.
+  # List rows use this to replace the attribute with a generated Ruby wrapper
+  # symbol instead of shipping argument expressions to the browser.
+  def self.rewrite(
+    html : String,
+    locator : TemplateSourceLocator? = nil,
+    parser : TemplateExpressionParser? = nil,
+    &replacement : EventCall -> String
+  ) : Tuple(String, Array(EventCall))
+    expression_parser = parser || TemplateExpressionParser.new(locator)
+    calls = [] of EventCall
+    result = TemplateAttributes.rewrite(html, expression_parser) do |attribute|
+      event_name = attribute.name.downcase
+      next nil unless EVENT_NAME.matches?(event_name)
+      value = attribute.value(html).strip
+      next nil unless value.starts_with?("{")
+      expressions = expression_parser.scan(value, "event", validate: false)
+      next nil unless expressions.size == 1 && expressions.first.full_text(value) == value
+      content = expressions.first.source
+      method_name, arguments = expression_parser.parse_call(content)
+      validate_arguments(expression_parser, arguments)
+      call = EventCall.new(event_name, method_name, arguments, locator.try(&.locate(content)))
+      validate_modifiers(call)
+      calls << call
+      replacement.call(call)
+    end
+    {result, calls}
+  end
 
+  # The loader reads modifiers from the same element as the event handler so
+  # list rows and conditional branches keep their exact synchronous behavior.
+  def self.render_modifiers(call : EventCall) : String
+    return "" if call.modifiers.empty?
+    %( data-mochi-modifiers-#{call.event}="#{call.modifiers.join(",")}")
+  end
+
+  private def self.render_event_attribute(call : EventCall) : String
     String.build do |io|
-      io << event_name << "=\"{"
-      io << method_name << "}\""
+      io << call.event_name << "=\"{"
+      io << call.method_name << "}\""
 
-      unless arguments.empty?
-        descriptors = arguments.map { |argument| EventArgumentDescriptor.parse(argument) }
-        io << " data-mochi-args-" << event << "=\""
+      unless call.arguments.empty?
+        descriptors = call.arguments.map { |argument| EventArgumentDescriptor.parse(argument) }
+        io << " data-mochi-args-" << call.event << "=\""
         io << escape_attribute(EventArgumentDescriptor.array_json(descriptors))
         io << "\""
       end
+      io << render_modifiers(call)
+    end
+  end
+
+  private def self.validate_modifiers(call : EventCall)
+    unknown = call.modifiers.reject { |modifier| EventCall::MODIFIERS.includes?(modifier) }
+    unless unknown.empty?
+      raise TemplateExpressionError.new(
+        "unknown event modifier #{unknown.first.inspect} on #{call.event_name.inspect}; " \
+        "expected #{EventCall::MODIFIERS.join(", ")}",
+        call.span
+      )
+    end
+    if call.modifiers.uniq.size != call.modifiers.size
+      raise TemplateExpressionError.new(
+        "duplicate event modifier on #{call.event_name.inspect}",
+        call.span
+      )
+    end
+  end
+
+  private def self.validate_arguments(parser : TemplateExpressionParser, arguments : Array(String))
+    arguments.each do |argument|
+      next if argument == "$event" || argument == "event" || argument == "$element" || argument == "element"
+      parser.validate_source!(argument, "event argument")
     end
   end
 
@@ -61,153 +139,7 @@ class EventArgumentExtractor
       .gsub('"', "&quot;")
       .gsub('<', "&lt;")
       .gsub('>', "&gt;")
-  end
-
-  private def self.parse_call(content : String) : Tuple(String, Array(String))
-    text = content.strip
-    open = find_unquoted(text, '(')
-    return {text, [] of String} unless open
-
-    close = matching_paren(text, open)
-    return {text, [] of String} unless close == text.size - 1
-
-    method_name = text[0...open].strip
-    return {text, [] of String} if method_name.empty?
-
-    arguments = split_arguments(text[(open + 1)...close])
-    {method_name, arguments}
-  end
-
-  private def self.find_unquoted(text : String, needle : Char) : Int32?
-    quote = nil
-    escaped = false
-
-    text.each_char_with_index do |char, index|
-      if current = quote
-        if escaped
-          escaped = false
-        elsif char == '\\'
-          escaped = true
-        elsif char == current
-          quote = nil
-        end
-      elsif char == '\'' || char == '"'
-        quote = char
-      elsif char == needle
-        return index
-      end
-    end
-
-    nil
-  end
-
-  private def self.matching_paren(text : String, open : Int32) : Int32?
-    depth = 0
-    quote = nil
-    escaped = false
-    index = open
-
-    while index < text.size
-      char = text[index]
-      if current = quote
-        if escaped
-          escaped = false
-        elsif char == '\\'
-          escaped = true
-        elsif char == current
-          quote = nil
-        end
-      elsif char == '\'' || char == '"'
-        quote = char
-      elsif char == '('
-        depth += 1
-      elsif char == ')'
-        depth -= 1
-        return index if depth == 0
-      end
-      index += 1
-    end
-
-    nil
-  end
-
-  # Splits on top-level commas and keeps commas inside strings, calls, arrays,
-  # and hashes attached to their argument.
-  private def self.split_arguments(text : String) : Array(String)
-    arguments = [] of String
-    current = ""
-    depth = 0
-    quote = nil
-    escaped = false
-
-    text.each_char do |char|
-      if current_quote = quote
-        current += char
-        if escaped
-          escaped = false
-        elsif char == '\\'
-          escaped = true
-        elsif char == current_quote
-          quote = nil
-        end
-        next
-      end
-
-      case char
-      when '\'', '"'
-        quote = char
-        current += char
-      when '(', '[', '{'
-        depth += 1
-        current += char
-      when ')', ']', '}'
-        depth -= 1 if depth > 0
-        current += char
-      when ','
-        if depth == 0
-          argument = current.strip
-          arguments << argument unless argument.empty?
-          current = ""
-        else
-          current += char
-        end
-      else
-        current += char
-      end
-    end
-
-    argument = current.strip
-    arguments << argument unless argument.empty?
-    arguments
-  end
-
-  private def self.find_closing_brace(html : String, start : Int32) : Int32?
-    depth = 0
-    quote = nil
-    escaped = false
-    index = start
-
-    while index < html.size
-      char = html[index]
-      if current = quote
-        if escaped
-          escaped = false
-        elsif char == '\\'
-          escaped = true
-        elsif char == current
-          quote = nil
-        end
-      elsif char == '\'' || char == '"'
-        quote = char
-      elsif char == '{'
-        depth += 1
-      elsif char == '}'
-        return index if depth == 0
-        depth -= 1
-      end
-      index += 1
-    end
-
-    nil
+      .gsub('{', "&#123;")
+      .gsub('}', "&#125;")
   end
 end

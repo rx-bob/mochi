@@ -1,4 +1,6 @@
 require "../html/event_argument"
+require "../html/each_row_template"
+require "../html/template_expression"
 require "../ruby/inject_utils"
 require "../ruby/ruby_def"
 require "../tree-sitter/method_body_extractor"
@@ -8,11 +10,19 @@ struct BindingDescriptor
   property path : Array(Int32)
   property kind : String
   property attr_name : String?
+  # `text` or `boolean` for attribute bindings; nil for every other kind.
+  property attr_kind : String?
   property template_text : String?
   property getter_sym : String
   property getter_expr : String?
   property branches : Array(ConditionalBranchDescriptor)
   property setter_sym : String?
+  property template_start : Int32?
+  property template_end : Int32?
+  property scope : Array(String)
+  property span : TemplateSourceSpan?
+  property each_rows : EachRowTemplate?
+  property trusted_markup : Bool
 
   def initialize(
     @id : Int32,
@@ -24,6 +34,13 @@ struct BindingDescriptor
     @getter_expr : String? = nil,
     @branches : Array(ConditionalBranchDescriptor) = [] of ConditionalBranchDescriptor,
     @setter_sym : String? = nil,
+    @template_start : Int32? = nil,
+    @template_end : Int32? = nil,
+    @scope : Array(String) = [] of String,
+    @span : TemplateSourceSpan? = nil,
+    @each_rows : EachRowTemplate? = nil,
+    @trusted_markup : Bool = false,
+    @attr_kind : String? = nil,
   )
   end
 end
@@ -32,11 +49,17 @@ struct ConditionalBranchDescriptor
   property html_template : String
   property bindings : Array(BindingDescriptor)
   property events : Array(EventDescriptor)
+  property context_tag : String
+  property context_namespace : String
+  property span : TemplateSourceSpan?
 
   def initialize(
     @html_template : String,
     @bindings : Array(BindingDescriptor) = [] of BindingDescriptor,
     @events : Array(EventDescriptor) = [] of EventDescriptor,
+    @context_tag : String = "body",
+    @context_namespace : String = "html",
+    @span : TemplateSourceSpan? = nil,
   )
   end
 end
@@ -46,17 +69,85 @@ struct EventDescriptor
   property event : String
   property method_sym : String
   property args : Array(EventArgumentDescriptor)
+  # True for a parent binding written as `on:<event>`. The compiled output is
+  # still an ordinary delegated DOM event, but the marker records that this
+  # connection targets a child component event instead of a native browser
+  # event.
+  property component : Bool
+  # Synchronous native-event modifiers declared on the template attribute.
+  # The loader reads the same list from `data-mochi-modifiers-<event>` so
+  # branch and list-row nodes behave exactly like top-level nodes.
+  property modifiers : Array(String)
+  property actions : Array(EventAction)
 
   def initialize(
     @path : Array(Int32),
     @event : String,
     @method_sym : String,
     @args : Array(EventArgumentDescriptor) = [] of EventArgumentDescriptor,
+    @component : Bool = false,
+    @modifiers : Array(String) = [] of String,
+    @actions : Array(EventAction) = [] of EventAction,
   )
   end
 
   def method_name : String
     method_sym
+  end
+end
+
+# One field in a declared child-event payload. The type names match the prop
+# schema so the loader can validate values before they reach the parent.
+struct EventPayloadDescriptor
+  property name : String
+  property type : String
+
+  def initialize(@name : String, @type : String)
+  end
+end
+
+require "./resource_manifest"
+
+# Compact runtime schema for a Ruby-declared child event. Only the event name,
+# payload contract, and source location travel in the manifest.
+struct ComponentEventDescriptor
+  property name : String
+  property payload : Array(EventPayloadDescriptor)
+  property source_file : String?
+  property source_line : Int32
+
+  def initialize(
+    @name : String,
+    @payload : Array(EventPayloadDescriptor) = [] of EventPayloadDescriptor,
+    @source_file : String? = nil,
+    @source_line : Int32 = 0,
+  )
+  end
+end
+
+# Compact runtime validation data for one declared Ruby prop. Only the value
+# type, required flag, default presence, and source location travel in the
+# manifest; the default expression itself stays in the component's Ruby code.
+struct PropDescriptor
+  property name : String
+  property type : String
+  property required : Bool
+  property default : Bool
+  # Ruby source for the default expression. It stays out of the manifest JSON
+  # and is only used when generating `__mochi_apply_props`.
+  property default_code : String?
+  property source_file : String?
+  property source_line : Int32
+
+  def initialize(
+    @name : String,
+    @type : String,
+    @required : Bool = false,
+    @default : Bool = false,
+    @default_code : String? = nil,
+    @source_file : String? = nil,
+    @source_line : Int32 = 0,
+  )
   end
 end
 
@@ -68,6 +159,26 @@ class ComponentManifest
   property css : String
   property bindings : Array(BindingDescriptor)
   property events : Array(EventDescriptor)
+  property helper_chi : String?
+  property source_file : String?
+  property source_line : Int32
+  property method_lines : Hash(String, Int32)
+  property props : Array(PropDescriptor)
+  property emits : Array(ComponentEventDescriptor)
+  # Shared build-time style resources, applied before the component-local css.
+  # The manifest serializes only their stable IDs.
+  property style_resources : Array(PackageResource)
+  # Stable identity in the top-level package graph. The compiler sets this when
+  # it resolves dependencies; component manifests built directly in specs leave
+  # it empty.
+  property package_id : String?
+  # Ruby/component package IDs this component needs before its bytecode runs.
+  property dependencies : Array(String)
+  # Optional host capabilities owned by this component's dependency closure.
+  property capabilities : Array(String)
+  # True when this component's Ruby mentions MochiFormat. The loader only
+  # requests the optional formatting host for components that need it.
+  property formatting : Bool
 
   def initialize(
     @tag_name : String,
@@ -77,7 +188,22 @@ class ComponentManifest
     @css : String,
     @bindings : Array(BindingDescriptor),
     @events : Array(EventDescriptor) = [] of EventDescriptor,
+    @helper_chi : String? = nil,
+    @source_file : String? = nil,
+    @source_line : Int32 = 0,
+    @method_lines : Hash(String, Int32) = {} of String => Int32,
+    @props : Array(PropDescriptor) = [] of PropDescriptor,
+    @emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
+    @style_resources : Array(PackageResource) = [] of PackageResource,
+    @capabilities : Array(String) = [] of String,
+    @package_id : String? = nil,
+    @dependencies : Array(String) = [] of String,
+    @formatting : Bool = false,
   )
+  end
+
+  def style_resource_ids : Array(String)
+    style_resources.map(&.id)
   end
 
   def binding_ids : Array(Int32)
@@ -130,6 +256,10 @@ class RubyBindingRewriter
       setters = [] of String
 
       all_bindings.each do |binding|
+        # List rows own a generated rows getter; injecting `__mochi_bind_N`
+        # would either duplicate work or recurse through the same symbol.
+        next if binding.kind == "each" && binding.getter_sym.starts_with?("__mochi_each_")
+
         expression = expression_for(binding)
         io << "\n  def " << binding.getter_sym << "; " << expression << "; end\n"
 

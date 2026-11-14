@@ -1,6 +1,7 @@
 require "file_utils"
 require "../generated/mochi_rb"
 require "../generated/app_router_rb"
+require "../generated/store_rb"
 require "../generated/browser_id_rb"
 require "../generated/logger_rb"
 
@@ -16,7 +17,6 @@ require "../generated/fetcher/fetch_config_rb"
 require "../generated/fetcher/fetcher_rb"
 
 class CoreBattery
-
   def self.generate(ruby_src_dir : String)
     output_dir = "#{ruby_src_dir}/lib"
     if !Dir.exists?(output_dir)
@@ -36,6 +36,7 @@ class CoreBattery
     fragments = [
       MochiRbFragment,
       AppRouterRbFragment,
+      MochiStoreRbFragment,
       BrowserIdRbFragment,
       LoggerRbFragment,
       # charts
@@ -48,7 +49,7 @@ class CoreBattery
       HttpResponseRbFragment,
       FetchConfigBuilderRbFragment,
       FetchConfigRbFragment,
-      FetcherRbFragment
+      FetcherRbFragment,
     ].map { |fragment_class| fragment_class.get_ruby_code }.join("\n")
 
     return "#{result}\n#{fragments}"

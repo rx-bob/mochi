@@ -108,6 +108,19 @@ describe RubyUnderstander do
       result.should be_nil
     end
 
+    it "reads the tag from the requested class instead of an earlier sibling" do
+      code = <<-RUBY
+      class First
+        @tag_name = "first-component"
+      end
+
+      class Second
+        @tag_name = "second-component"
+      end
+      RUBY
+      RubyUnderstander.get_cmp_name(code, "Second").should eq "second-component"
+    end
+
     it "returns first match when multiple @tag_name exist" do
       code = <<-RUBY
       class MyComponent

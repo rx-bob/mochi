@@ -3,19 +3,17 @@ class FeatherIcon
 
   @tag_name = "feather-icon"
   @icon
-  @rendered_svg
 
   attr_accessor :icon
-  
+
   def initialize
     @icon = ""
-    @rendered_svg = ""
   end
 
   def html
     %Q{
       <div class="feather-icon">
-        {@rendered_svg}
+        {Mochi.raw(MochiIcons.icon(@icon))}
       </div>
     }
   end
@@ -23,15 +21,8 @@ class FeatherIcon
   def css
     %Q{
       .feather-icon {
+        display: inline-flex;
       }
     }
-  end
-
-  def mounted
-    @rendered_svg = `feather.icons[#{@icon}].toSvg([])`
-    `#{@element}.syncAttributes()`
-  end
-
-  def unmounted
   end
 end

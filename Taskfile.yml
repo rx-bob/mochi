@@ -31,6 +31,8 @@ tasks:
     desc: Build the Crystal compiler binary
     sources:
       - compiler/src/**/*.cr
+      - runtime/test/mochi_test_recorder.rb
+      - e2e/mochi_test_runner.cjs
       - compiler/shard.yml
       - compiler/shard.lock
       - fragments/**/*
@@ -47,6 +49,32 @@ tasks:
             install_name_tool -change /usr/local/lib/libtree-sitter.0.27.dylib "{{.ROOT_DIR}}/fragments/libs/libtree-sitter.dylib" mochi
           fi
         fi
+
+  install:dev:
+    desc: Install or update a source-checkout-backed mochi launcher under ~/.local
+    deps:
+      - build
+    cmds:
+      - ruby scripts/install_dev.rb install
+
+  install:dev:update:
+    desc: Update an existing owned development launcher and resource record
+    deps:
+      - build
+    cmds:
+      - ruby scripts/install_dev.rb update
+
+  install:dev:remove:
+    desc: Remove only the launcher and record owned by a development install
+    cmds:
+      - ruby scripts/install_dev.rb remove
+
+  install:dev:test:
+    desc: Test temporary-prefix install, update, launcher use, and ownership-safe removal
+    deps:
+      - build
+    cmds:
+      - ruby scripts/install_dev_test.rb
 
   specs:
     desc: Run Crystal compiler specs
@@ -86,18 +114,104 @@ tasks:
       - '{{.FRAG_CONFIG}} && {{.COMPILER}} dev --config={{.ROOT_DIR}}/config/dev_server_config.json --root={{.BUNDLE_DIR}}'
 
   e2e:
-    desc: Run the GVM Playwright end-to-end tests
+    desc: Run the explicit Cowboy application browser integration suite
+    cmds:
+      - task: app:e2e
+
+  framework:e2e:
+    desc: Run portable framework browser regressions without Cowboy
     deps:
       - build
     cmds:
-      - 'cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts --reporter=line'
+      - cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts tests/gvm_row_capacity.spec.ts tests/gvm_framework_standalone.spec.ts tests/gvm_drag_file_contracts.spec.ts tests/gvm_pointer_contracts.spec.ts tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts tests/gvm_test_workflow.spec.ts tests/gvm_capacity_boundaries.spec.ts --reporter=line
+      - cd e2e && npx playwright test tests/gvm_asset_paths.spec.ts tests/gvm_install_workflow.spec.ts tests/gvm_evolved_features.spec.ts --grep-invert "Cowboy integration" --reporter=line
+
+  framework:ui:
+    desc: Run all shared UI fixture scenarios and feedback evidence in all browsers
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts tests/gvm_test_workflow.spec.ts tests/gvm_capacity_boundaries.spec.ts --reporter=line
+
+  framework:ui:inspector:
+    desc: Run inspector Ruby scenarios and related feedback evidence
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts --grep '@ui-inspector' --reporter=line
+
+  framework:ui:graph:
+    desc: Run graph Ruby scenarios, SVG insertion/identity checks, and related evidence
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts --grep '@ui-graph' --reporter=line
+
+  framework:ui:form:
+    desc: Run nested form Ruby scenarios, lifecycle checks, and related feedback evidence
+    deps: [build]
+    cmds:
+      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts --grep '@ui-form' --reporter=line
+
+  app:e2e:
+    desc: Build the Cowboy frontend and run its GVM Playwright integration suite
+    deps:
+      - build
+    cmds:
+      - |
+        frontend_dir="${MOCHI_FRONTEND_DIR:-$(find "{{.ROOT_DIR}}/.." -mindepth 3 -maxdepth 3 -type f -path '*/frontend-mochi/Taskfile.yml' -print -quit | sed 's|/Taskfile.yml$||')}"
+        test -f "$frontend_dir/Taskfile.yml"
+        task --dir "$frontend_dir" check
+        cd e2e
+        MOCHI_FRONTEND_DIR="$frontend_dir" npx playwright test tests/gvm_evolved_features.spec.ts --grep "Cowboy integration" --reporter=line
+
+  compile-time:test:
+    desc: Verify the compile-time gate rejects an over-limit compiler invocation
+    cmds:
+      - node --test scripts/compile_time_gate.test.cjs
+
+  compile-time:
+    desc: Gate representative cold, warm, and edited application builds below one second
+    deps:
+      - build
+    cmds:
+      - node scripts/compile_time_gate.cjs
 
   check:
-    desc: Run compiler specs, GVM tests, and GVM E2E
+    desc: Run compile-time gate, then compiler, payload, runtime, GVM, browser, and app checks
     cmds:
+      - task: compile-time:test
+      - task: compile-time:framework
+      - task: runtime:test
       - task: specs
+      - task: payload
       - task: gvm:test
-      - task: e2e
+      - task: framework:e2e
+
+  app:check:
+    desc: Run complete Cowboy compile-time and browser integration gates
+    deps:
+      - build
+    cmds:
+      - task: compile-time
+      - task: app:e2e
+
+  compile-time:framework:
+    desc: Gate the portable minimal app below one second
+    deps:
+      - build
+    cmds:
+      - node scripts/compile_time_gate.cjs --fixture minimal
+
+  payload:
+    desc: Check deterministic bundle membership and payload ceilings
+    deps:
+      - build
+    cmds:
+      - ruby scripts/payload_check.rb
+
+  runtime:test:
+    desc: Run the loader and host adapter runtime tests
+    dir: runtime
+    cmds:
+      - npm test
 
   gvm:test:
     desc: Run the mochi-gvm Goose test suite

@@ -5,21 +5,32 @@ require "../sorbet/project_typechecker"
 class Typechecker
   def typecheck(input_dir : String)
     builder_man = BuilderMan.new(input_dir)
-    # steps 2-4
-    BuildMain.new.setup(builder_man)
+    begin
+      # steps 2-4
+      BuildMain.new.setup(builder_man)
 
-    root_dir = builder_man.ruby_src_dir
-    files = Dir.glob(File.join(root_dir, "**", "*.rb"))
-    if files.size < 1
-      STDERR.puts "Error: Cannot run typechecks, no ruby files found"
-      exit 1
+      root_dir = builder_man.ruby_src_dir
+      files = Dir.glob(File.join(root_dir, "**", "*.rb"))
+      if files.size < 1
+        STDERR.puts "Error: Cannot run typechecks, no ruby files found"
+        exit 1
+      end
+
+      # Keep the legacy standalone typechecker's dependency setup; the build
+      # pipeline skips this network step and typechecks the prepared tree.
+      status = Process.run(
+        "bundle",
+        ["install"],
+        chdir: root_dir,
+        output: IO::Memory.new,
+        error: IO::Memory.new
+      )
+      raise "bundle install failed with exit code #{status.exit_code}" unless status.success?
+
+      success = ProjectTypechecker.new(root_dir).typecheck
+      exit 1 unless success
+    ensure
+      builder_man.cleanup
     end
-
-    # Keep the legacy standalone typechecker's dependency setup; the build
-    # pipeline skips this network step and typechecks the prepared tree.
-    `cd #{root_dir} && bundle install > /dev/null 2>&1`
-
-    success = ProjectTypechecker.new(root_dir).typecheck
-    exit 1 unless success
   end
 end

@@ -1,5 +1,6 @@
 require "colorize"
 require "./sorbet"
+require "./component_source_preparer"
 
 # Runs the in-process Sorbet LSP session over an already prepared Ruby source
 # tree. BuildMain uses it after copying components into `build/src`; the
@@ -16,13 +17,14 @@ class ProjectTypechecker
     end
 
     puts "Typechecking #{files.size} files..."
+    prepared = files.to_h { |file| {file, ComponentTypecheckSource.prepare_with_map(File.read(file), file)} }
     session = Sorbet::Session.new(
       root_dir: @root_dir,
       multi_threaded: false
     )
 
     begin
-      result = session.typecheck_files(files)
+      result = session.typecheck_files(prepared.transform_values(&.code))
     ensure
       session.close
     end
@@ -35,7 +37,8 @@ class ProjectTypechecker
     puts "✗ Found errors:".colorize(:red)
     result.errors.each_with_index do |error, index|
       trimmed_file_path = error.file[@root_dir.size, error.file.size]
-      location = "#{trimmed_file_path}@#{error.line}:#{error.column}"
+      column = prepared[error.file]?.try(&.authored_column(error.line, error.column)) || error.column
+      location = "#{trimmed_file_path}@#{error.line + 1}:#{column + 1}"
       puts "  [Error ##{index + 1}]  #{error.message.colorize(:red)} [#{location.colorize(:yellow)}]"
     end
     false
