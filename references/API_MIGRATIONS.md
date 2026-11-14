@@ -98,7 +98,7 @@ cents = MochiMoney.round_half_up(ledger)
 MochiFormat.currency(cents, "USD", "en-US", 2)
 ```
 
-See [money contracts](MONEY_CONTRACT.md) for exact accumulation and display
+See [money contracts](../README.md#money-helpers) for exact accumulation and display
 rounding, and [Ruby surface](RUBY_SURFACE.md) for supported numeric and
 collection methods.
 
@@ -116,3 +116,37 @@ JavaScript script tags to use them; require or call the Ruby surface documented
 in [pointer contracts](POINTER_CONTRACT.md) and
 [drag and file contracts](DRAG_FILE_CONTRACT.md). File APIs retain opaque
 mount-owned handles, stream in bounded chunks, and cap whole-file reads.
+
+## Three UI fixtures: current contracts
+
+These contracts replace application workarounds; they do not require JavaScript.
+The [fixture guide](../e2e/fixtures/ui_contracts/README.md) contains complete
+buildable Ruby sources and authored browser scenarios. The
+[new feedback inventory](UI_FIXTURE_CONTRACTS.md) is separately numbered from
+the older [feedback inventory](FEEDBACK_CONTRACTS.md).
+
+| Previous assumption/workaround | Current supported form |
+| --- | --- |
+| Manual scalar loops for pagination | `rows.slice(start, length)` and `rows[start, length]` return fresh shallow arrays with Ruby boundary behavior; [slice contract](RUBY_SURFACE.md#array-indexing-and-slicing). |
+| Inline helper data to avoid qualified lookup | Top-level helper constants/singleton calls and local block `next` work across initializer, method, event and template contexts; [helper contract](RUBY_SURFACE.md#helper-constants-receivers-and-block-control-flow). |
+| Manual cache/epoch to share a derived projection | Declare pure zero-argument `computed` methods with explicit root/computed dependencies; replace owning collection roots to publish edits. Same-handle assignment and hidden deep mutations do not invalidate; [computed contract](RUBY_SURFACE.md#explicit-computed-values). |
+| Duplicate setter calls inside an input handler | Binding synchronizes first for the same native event, then evaluates arguments and invokes the explicit handler once, regardless of attribute order; [binding contract](RUBY_SURFACE.md#bound-controls-and-explicit-handlers). |
+| Assume `dataset` identifies a clicked row's handler | `dataset` and `target_dataset` retain target semantics. Use `event["current_target_dataset"]["id"]` for bound-row identity, including descendant clicks; [event contract](RUBY_SURFACE.md#native-event-identity). |
+| Treat required/defaulted Boolean props as Strings | Use `prop :required, Boolean, required: true` and `prop :disabled, Boolean, default: false`; build/typecheck and typed child-event validation agree; [Boolean contract](RUBY_SURFACE.md#boolean-props-child-events-and-form-controls). |
+| Import a project-root CSS directory | Keep shared fragments under `lib/styles/`; a `lib/MyCounter.rb` imports `./styles/controls.css`. Root `styles/` is not staged. Public assets retain `public/`; icons are project assets, not a built-in catalog. |
+
+Optional [layout](LAYOUT_CONTRACT.md), [wheel](WHEEL_CONTRACT.md), and
+[shortcut](SHORTCUT_CONTRACT.md) APIs own registrations, batching and cleanup.
+[JSON](RUBY_SURFACE.md#optional-json) preserves signed64 integers within document
+bounds. [Time](RUBY_SURFACE.md#optional-wall-clock-and-unix-timestamps) uses Unix
+seconds; inspector source timestamps remain milliseconds and convert explicitly.
+[Downloads](DOWNLOAD_CONTRACT.md) start synchronously during user activation;
+capabilities are ready before controls render. Accepted URL leases survive
+unmount until bounded expiry, unlike canceled mount-owned callbacks/readers.
+
+Do not infer full MRI/Regexp/Date/Math, slots, SVG custom-element composition,
+automatic deep observation, arbitrary DOM access, save pickers/streaming output,
+or a graph/form library from these fixtures. Bounded file streaming already
+exists; general import/export products remain deferred. Failures discard pending
+DOM/host work, not prior Ruby state mutations. Recovery and each retained
+limitation have explicit evidence in the inventory.

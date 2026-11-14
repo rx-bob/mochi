@@ -4,6 +4,12 @@ Mochi implements a practical Ruby interface for browser applications. This
 document records supported forms and explicit VM limits. It does not promise
 full MRI, Enumerable, or arbitrary-precision compatibility.
 
+The [three-fixture guide](../e2e/fixtures/ui_contracts/README.md) links complete
+buildable/typechecked examples and Ruby-authored tests. Labeled fixture excerpts
+below belong to their linked complete classes/modules, not standalone components. The
+[current feedback inventory](UI_FIXTURE_CONTRACTS.md) distinguishes supported,
+intentional and deferred outcomes from historical observations.
+
 ## Optional downloads
 
 `MochiDownload.save(filename, content_type, content)` hands a bounded String or
@@ -182,6 +188,26 @@ GC; invalidation and unmount release their retained references. See the
 [computed probe](../e2e/fixtures/ui_contracts/probes/12-computed/lib/ProbeRoot.rb)
 and [capacity contract](CAPACITY_CONTRACT.md).
 
+The inspector's complete class declares `ordered_records` as well as these
+shared filtering/page projections:
+
+```ruby
+computed :filtered_records, depends_on: [:ordered_records, :@query]
+computed :visible_records, depends_on: [:filtered_records, :@page]
+
+def filtered_records
+  RecordData.filter(ordered_records, @query)
+end
+
+def visible_records
+  filtered_records.slice(@page * RecordData::PAGE_SIZE, RecordData::PAGE_SIZE)
+end
+```
+
+See [InspectorRoot](../e2e/fixtures/ui_contracts/lib/InspectorRoot.rb) and
+[projection reuse tests](../e2e/tests/gvm_computed.spec.ts). Paging reuses
+filtering; unrelated selection/display state does not invalidate either method.
+
 ## Template loops and conditional branches
 
 `{each ... as item, index, key: ...}` and `{if ...}` / `{elsif ...}` /
@@ -237,6 +263,18 @@ events deliver their declared payload without added native event metadata.
 Snapshots are taken before queued Ruby delivery; removing the bound element
 before delivery drops that event. Dataset values share the existing bounded
 [argument envelope and recovery contract](CAPACITY_CONTRACT.md).
+
+From [InspectorRoot](../e2e/fixtures/ui_contracts/lib/InspectorRoot.rb), whose
+keyed row has `data-id="{record['id']}" onclick="{select_record($event)}"`:
+
+```ruby
+def select_record(event)
+  @selected_id = event["current_target_dataset"]["id"]
+end
+```
+
+[Event scenarios](../e2e/fixtures/ui_contracts/probes/08-event-dataset/test)
+cover surfaces, descendants, shadow retargeting and payload-limit recovery.
 
 ## Boolean props, child events, and form controls
 
@@ -382,6 +420,52 @@ This contract does not add arbitrary nested class/module registration,
 constant inheritance/`const_missing`, or full Ruby exception and nonlocal
 unwinding semantics. Essential scoped constant dispatch remains in the VM;
 helpers continue to load as dependency-selected Ruby bytecode.
+
+The inspector's [RecordData](../e2e/fixtures/ui_contracts/lib/RecordData.rb)
+module supplies a filtering helper called by `RecordData.filter`:
+
+```ruby
+def self.filter(records, query)
+  matches = []
+  records.each do |record|
+    next if !record["message"].include?(query)
+    matches << record
+  end
+  matches
+end
+```
+
+[Helper scenarios](../e2e/fixtures/ui_contracts/probes/03-helper-contexts/test/helper_test.rb)
+also check nested loops and `map` with `next value` against native Ruby results.
+
+## Browser capability ownership
+
+Capability packages and adapters load before their consuming component becomes
+interactive. Registration APIs use static refs and Ruby callback names, not DOM
+objects. From [EditableGraphRoot](../e2e/fixtures/ui_contracts/lib/EditableGraphRoot.rb):
+
+```ruby
+# Excerpt from mounted; the full class implements on_viewport and shortcut_undo.
+MochiLayout.observe("viewport", "on_viewport")
+MochiShortcuts.register("z", "shortcut_undo", {"ctrl" => true, "prevent" => true})
+```
+
+Its `stop_layout` method calls `MochiLayout.cancel("viewport")`; disposal cleans
+up owned registrations automatically. The form registers Escape with
+`scope: "application", active_ref: "dialog", allow_editable: true` so a removed
+dialog cannot leave an active modal shortcut scope.
+
+| Capability | Ownership and limit |
+| --- | --- |
+| [Pointer](POINTER_CONTRACT.md) | Captured bound targets belong to a component mount; capture loss/cancel/unmount clear gesture work. |
+| [Layout](LAYOUT_CONTRACT.md) / [wheel](WHEEL_CONTRACT.md) | Static-ref measurement/observation and frame-batched input reject stale mounts and reconcile removed targets. No arbitrary DOM access or dynamic row refs. |
+| [Shortcuts](SHORTCUT_CONTRACT.md) | Registrations follow focus/application scope and active refs; disposal removes them. Editable controls keep native behavior unless explicitly allowed. |
+| [Files](DRAG_FILE_CONTRACT.md) | Handles/readers belong to one mount; close/cancel/unmount release resources and suppress late callbacks. Read one bounded chunk before requesting another. |
+| [Downloads](DOWNLOAD_CONTRACT.md) | One bounded synchronous user-activation handoff. Accepted URL leases survive disposal until expiry; failures release immediately. Disk completion is not observable through this API. |
+
+All callbacks and transport values follow their linked contracts. Registration
+bounds do not make callbacks transactional: failed entries discard pending
+patches/host commands but do not roll back prior Ruby state changes.
 
 ## Numeric rounding
 

@@ -1,189 +1,178 @@
 # Shared UI contract fixtures
 
-This is one Mochi project: Ruby components in `lib/`, authored browser scenarios in `test/`, and isolated feedback probes in `probes/`. No external application checkout or network service is required. Compilation and browser servers use temporary directories; checked-in build artifacts are not modified.
+One portable Mochi project contains three Ruby applications. Components and
+helpers live in `lib/`, authored browser scenarios in `test/`, and isolated
+feedback probes in `probes/`. No external application checkout, backend, or
+application JavaScript is required. Builds and browser servers use temporary
+directories; intentional failures in probes cannot break the shared build.
 
-The inspector retains 480 structured records with 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. E2.S1 supplies the nested form described below. E3.S1 adds the editable graph geometry slice described below.
-
-Inspector JSONL and CSV buttons export the entire current filtered set in its
-current order. Empty selections, Unicode, and CSV quoting are covered by
-`test/download_test.rb`, using Ruby `download` and `assert_download` steps.
-The optional capability is ready before controls render; each action retains
-user activation and hands one bounded file to the browser. See the
-[download contract](../../../references/DOWNLOAD_CONTRACT.md) for byte limits,
-filename rules, and disposal-safe temporary URL cleanup.
-
-E4.S2 separates computed filtered records, visible page, selected record, and
-detail fields. All detail bindings share the selected-record lookup. Paging
-reuses the filtered array; toggling details does not scan records. Initialization
-publishes each completed record before constructing the next, keeping temporary
-scratch small. Deterministic append replaces the root and keeps the newest 480
-records. Filtering retains selection; removal or retention eviction clears it.
-Nested attributes remain Ruby arrays/hashes. Tests visit all forty pages and
-check append, eviction, removal, page clamping, and detail values.
-
-Graph paths use one computed projection of node/edge roots. Model edits,
-dragging, undo, and redo replace roots; pan, selection, and open/close reuse
-geometry. Test-only VM counters verify projection evaluation counts without
-adding shipped instrumentation. No manual cache, epoch, feed timer, index,
-virtualization layer, or serialized record representation is involved.
-
-E4.S3 runs the real three fixtures through 100 interaction cycles and another
-100 complete mount/disposal cycles under a smaller compiled profile. Inspector
-filtering/paging/appends, graph history trimming and replay, form editor drafts,
-route subscriptions, and released state capacity are checked on every cycle.
-`probes/13-capacity-lifecycle/lib/CapacityComputedRoot.rb` is copied into the
-standalone capacity-boundary project to force scratch, computed-cache, and
-persistent-byte failures. Failed flushes leave rendered values unchanged and
-discard queued storage commands; later recovery reveals prior Ruby mutations.
-No rollback or increased default capacity is implied. `framework:ui` and
-`framework:e2e` include both suites; individual UI targets include the shared
-100-cycle case.
-
-E1.S2 pages with ordinary `Array#slice`. The inspector target also runs
-`probes/02-array-contexts/test/array_slice_test.rb`: native Ruby boundary
-oracles, initialization/helper/handler/template execution, invalid arguments,
-and bounded exhaustion followed by a successful smaller slice. Source and
-capacity diagnostics are checked by the framework suite on each engine.
-
-E1.S3 moves record generation and filtering into `lib/RecordData.rb` and uses
-qualified constants for page size. The inspector target also runs
-`probes/03-helper-contexts/test/helper_test.rb`, comparing helper results with
-native Ruby across initializer, method, event, and template calls. It checks
-separate module constants, nested `next`, map values, missing references, and
-recovery. Unsupported rescue/ensure is a build-diagnostic probe.
-
-E2.S1 adds `NestedFormRoot` with two keyed groups and four keyed fields.
-`FieldEditor` declares String props and a typed edit event; each mounted editor
-copies its current initial value into a local draft. Reordering groups/fields
-or inserting/removing a neighbor preserves that draft and DOM identity.
-Disabling a group or closing the form removes its editors and their route
-subscriptions. Reopening creates fresh editors from current props. Help,
-validation, and fallback branches exercise nested conditions in row scope.
-The `01-structural-contexts` probe covers table/select/SVG/foreignObject,
-shadowed loop locals, and inactive branches that must not evaluate.
-
-E2.S2 adds mixed attribute quotes, nested Ruby interpolation, and an action
-that puts quotes, angle brackets, ampersands, entities, and braces into every
-field label. Ruby scenarios check static/conditional/row attributes, typed
-child props, and event arguments. Framework assertions verify these values
-create no extra elements. The original report 05 probes now render normally.
-E2.S3 binds editor drafts before validation and inspector queries before a
-pagination reset. `BindingActionsRoot` and `test/binding_actions_test.rb` cover
-text, select, and checkbox controls in both attribute orders, current row
-arguments after keyed moves, property resets, branch recreation, and remount.
-The existing Ruby `fill` operation selects a value on a select and dispatches
-its native input/change sequence; `click` toggles a checkbox. The framework
-capacity probe fails the actual VM setter before its callback, then verifies
-recovery on a smaller input. E2.S4 adds required/defaulted Boolean props, native required validation,
-typed save/cancel events, and keyboard/focus acceptance. `BooleanPropsRoot`
-checks static and conditional children; repeated editors use the same contract.
-Save updates the parent's saved field value. Cancel closes the form and returns
-focus to the toggle; reopening discards unsaved local drafts. Both ordinary
-builds and `--typecheck` are covered. `probes/11-boolean-contracts` rejects a
-string-valued Boolean event field and then delivers a valid Boolean payload.
-
-E3.S1 adds `EditableGraphRoot`: four keyed nodes and three keyed paths using
-native SVG and local Ruby hashes. Move replaces node state and updates only
-the two adjacent paths. Reorder preserves node identity; remove/restore uses
-stable edge IDs. Pan exercises a compound transform. Closing/reopening and
-fresh component mounts verify current geometry, marker references, and branch
-lifetime. Ruby scenarios cover initially open/closed branches; framework checks
-observe geometry synchronously before insertion and count actual path writes.
-
-E3.S2 selects graph nodes and inspector table rows through
-`event["current_target_dataset"]`. Native node surfaces, nested labels, row
-cells, and keyboard-activated row buttons resolve the same bound identity.
-`probes/08-event-dataset` checks legacy target semantics, explicit target and
-handler datasets, oversized target/handler data, and subsequent recovery.
-The Ruby `click` operation also activates SVG elements through a bubbling click
-event when the element has no native `.click()` method; framework tests separately
-exercise native browser hit testing. No application JavaScript is required.
-
-E3.S3 adds deterministic node add/remove, captured dragging, and undo/redo.
-History keeps at most **40 snapshots combined** across its two stacks; current
-state and a temporary active-drag rollback snapshot are separate. Snapshots
-copy the node/edge arrays and hashes, selection, ID counter, and edge ordering.
-A new committed edit clears redo. Removing a node removes its incident edges.
-Pan and open/closed viewport state remain outside model history.
-
-Drag starts on a keyed SVG group and captures that group even when the press
-hits its circle or text. Movement can continue outside the graph; release
-commits once. Cancel, capture loss, and closing the branch restore the starting
-model without changing history. No-op drags add no entry. Unmount releases
-capture and clears transient gesture state. E5.S1 adds optional static-ref measurement and resize observation. Fit graph
-uses the actual viewport with 24-pixel padding; dragging inverts the fit scale.
-Zero/hidden, too-small, and empty graphs report explicit states. Stop resize
-observation cancels the subscription while one-shot fitting remains available.
-E5.S2 adds pointer-anchored wheel zoom, clamped to 0.25–4. Pixel units pass
-through, lines count as 16 pixels, and pages use measured viewport height.
-Wheel batches retain their latest anchor and use one geometry read. Native
-scrolling is prevented only over the SVG region. See [layout contracts](../../../references/LAYOUT_CONTRACT.md)
-and [wheel contracts](../../../references/WHEEL_CONTRACT.md).
-The existing pointer capability loads only when the graph mounts.
-
-E5.S3 adds optional Ctrl/Meta+Z undo and Ctrl/Meta+Shift+Z redo while the graph
-has focus. Its note input keeps native editing behavior. Open forms own an
-application shortcut scope: Escape cancels through nested editor inputs while
-graph shortcuts remain inactive. User-opened dialogs restore opener focus on
-close. A static `active_ref` tied to the dialog makes local and parent-driven `open`
-changes deactivate/reactivate the same owned scope. See
-[shortcut contracts](../../../references/SHORTCUT_CONTRACT.md).
-
-
-`editable_graph_test.rb` performs 45 edits, checks all 40 undo and redo steps,
-branches after undo, and exercises node/edge restoration, cancellation, loss,
-branch removal, and unmount. Browser tests compare complete rendered snapshots
-and inspect capture ownership, queue cleanup, and lazy adapter requests. The
-Ruby runner resolves the actual capture owner instead of assuming it is the
-original pointerdown descendant.
+## Run and typecheck
 
 From the Mochi repository root:
 
 ```sh
-task framework:ui            # all UI scenarios, evidence, and runner regressions
-task framework:ui:inspector  # inspector Ruby scenarios and related evidence
-task framework:ui:graph      # graph geometry, identity, history, pointer lifecycle, SVG/wheel evidence
-task framework:ui:form       # nested form, lifecycle, contexts, and remaining form evidence
+task build
+task framework:ui            # all UI scenarios and contract evidence, all engines
+task framework:ui:inspector
+task framework:ui:graph
+task framework:ui:form
+task framework:e2e           # complete portable framework and asset/install suite
+compiler/mochi --typecheck -i e2e/fixtures/ui_contracts -o /tmp/mochi-ui-docs
+compiler/mochi test -i e2e/fixtures/ui_contracts --browsers=chromium,firefox,webkit
+compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=download_test.rb --browsers=chromium
 ```
 
-These tasks build the compiler and use the existing Chromium, Firefox, and WebKit matrix. The full `task framework:e2e` workflow includes the complete UI suite and runner regressions. Nothing is skipped when a probe demonstrates a current defect: it asserts that precise observation, names its owning story, and must become a normal acceptance assertion when repaired. See [the evidence inventory](../../../references/UI_FIXTURE_CONTRACTS.md) for expected behavior, current results, and limitations.
+Playwright prerequisites belong to Mochi's `e2e/` directory: run
+`cd e2e && npm ci && npx playwright install chromium firefox webkit` from the
+checkout once. `--test-file` selects an existing `*_test.rb` path relative to
+`test/`; an unknown selection fails. Omit it to run all Ruby scenarios. The
+framework discovers new Ruby test files automatically and includes the whole
+fixture suite in `framework:e2e`. `task e2e` is the separate application
+integration, not the portable fixture command.
 
-Use Mochi's Ruby workflow directly for authored scenarios:
+## Paginated inspector
 
-```sh
-compiler/mochi test -i e2e/fixtures/ui_contracts
-compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=inspector_test.rb --browsers=chromium
-compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=nested_form_test.rb --browsers=chromium
-compiler/mochi test -i e2e/fixtures/ui_contracts --test-file=editable_graph_test.rb --browsers=chromium
-```
+[InspectorRoot](lib/InspectorRoot.rb) retains 480 structured records and renders
+12 per page. [RecordData](lib/RecordData.rb) supplies stable string IDs,
+severities, Unicode messages, nested source/sequence/millisecond timestamps,
+and nested attribute arrays. Filtering is a literal substring operation.
+Selection survives filtering and clears on selected-record removal or retention
+eviction. Append retains the newest 480 records and clamps page bounds.
 
-`--test-file` selects one existing `*_test.rb` path relative to `test/`; an unknown selection fails instead of running zero tests. Omit it to run all Ruby files. Framework workflow discovers new Ruby files automatically. `editable_graph_test.rb` runs through the graph target. Each selected suite compiles the shared project and mounts only the roots its Ruby scenarios request.
-
-Ruby test and scenario failures include the authored file and line. The runner records console errors, page exceptions, and `mochi:error` before navigation and checks every step, including initial mount and final rendering. Native driver errors are also labeled with the Ruby step. No JavaScript is needed to author scenarios.
-
-For an intentional failure, give a nonempty message substring before the operation that should emit it:
+Computed ordering, filtering, paging, selection and details share their results.
+Paging does not refilter; toggling details does not rescan records. Initialization
+publishes each completed record before building the next to bound scratch work.
+The following excerpt is compiled as part of the complete InspectorRoot class:
 
 ```ruby
-expect_error "expected diagnostic"
-click ".invalid-action"
-assert_text ".status", "ready"
+computed :filtered_records, depends_on: [:ordered_records, :@query]
+computed :visible_records, depends_on: [:filtered_records, :@page]
+
+def filtered_records
+  RecordData.filter(ordered_records, @query)
+end
+
+def visible_records
+  filtered_records.slice(@page * RecordData::PAGE_SIZE, RecordData::PAGE_SIZE)
+end
 ```
 
-The expectation applies to the next operation and must observe an error. Every diagnostic in that operation must match; a matching Mochi error cannot hide an unrelated console error or exception. Consumed errors do not affect subsequent valid steps. Dangling or replaced expectations fail. Asynchronous scenarios can use the existing `wait_for_settled` operation; no timers are assumed to complete merely because a synchronous assertion ran.
+`ordered_records` is another declared computed method in that class. Collection
+edits replace the owning root; assigning the same handle or mutating a hidden
+nested hash does not promise invalidation. Cached collections are read-only
+inputs. See [computed and array contracts](../../../references/RUBY_SURFACE.md).
 
-Ruby mount/input scenarios live in `inspector_test.rb`, `nested_form_test.rb`,
-`binding_actions_test.rb`, and `editable_graph_test.rb`.
-Use `wait_for_settled` after inserting lazy child components; it waits for their
-mounts as well as pending host work. Use `>>>` to cross a child shadow boundary,
-for example `[data-field='a'] field-editor >>> .draft`. Pointer lifecycle
-coverage continues through the shared runner in
-`framework_contracts/test/pointer_contracts_test.rb`. Later capability stories
-extend the DSL when they need new operations.
+Timestamps sort by original integer milliseconds; `RecordData.instant` converts
+explicitly to `Time.at(milliseconds / 1000.0)`. UTC/Tokyo display changes preserve
+ordering and selection. JSONL/CSV buttons export **all currently filtered rows
+in current order**, including off-page rows. JSONL generates one record per
+line; CSV quotes fields and doubles quotes. Empty selections produce empty
+JSONL/header-only CSV. [Download rules](../../../references/DOWNLOAD_CONTRACT.md)
+define byte/MIME/filename bounds and disposal-safe URL leases.
 
-Ruby keyboard scenarios use `focus "selector"`, `press "Tab"` or `press "Enter"`,
-and `assert_focused "selector"`. Focus selectors support the same `>>>` child
-shadow boundaries as other assertions. `press` drives the browser keyboard,
-including native focus traversal, form validation, and submit behavior. These
-operations are test-only and add no shipped adapter. Typecheck's supported
-scope and default-value limits are documented in
-[the Ruby surface](../../../references/RUBY_SURFACE.md#boolean-props-child-events-and-form-controls).
+Tests: [inspector_test.rb](test/inspector_test.rb) visits all forty pages,
+filter/empty/recovery/append/eviction/selection/time cases;
+[download_test.rb](test/download_test.rb) compares actual filenames and bytes
+against MRI JSON/CSV oracles, including Unicode, commas, quotes and newlines.
+
+## Nested form
+
+[NestedFormRoot](lib/NestedFormRoot.rb) has two keyed groups and four keyed
+fields. Each [FieldEditor](lib/FieldEditor.rb) copies current props into a local
+draft on mount and declares String/Boolean props plus typed edit/save/cancel
+events. Reorder or neighbor insertion/removal preserves draft and DOM identity.
+Disabling a group or closing the form disposes its editors and subscriptions;
+reopening creates fresh drafts from current props. Saving updates parent values;
+cancel discards unsaved drafts and restores opener focus.
+
+The editor input uses `bind:value="{@draft}" oninput="{edit}"`. Its handler
+sees the updated value regardless of HTML attribute order. Required validation,
+Boolean `required`/`disabled`, quoted labels and nested branch scope are tested.
+Open dialogs own Escape through nested inputs and suppress graph shortcuts;
+`active_ref: "dialog"` also covers parent-driven open/close changes.
+
+Tests: [nested_form_test.rb](test/nested_form_test.rb),
+[binding_actions_test.rb](test/binding_actions_test.rb), and
+[Boolean mismatch/recovery](probes/11-boolean-contracts/test/boolean_test.rb).
+Both shared form and Boolean probes build with `--typecheck`. Browser checks
+verify keyed identity and that adversarial labels create no extra elements.
+
+## Editable graph
+
+[EditableGraphRoot](lib/EditableGraphRoot.rb) starts with four keyed nodes and
+three native SVG paths. Node/edge roots feed one computed geometry projection.
+Moving one node updates only adjacent paths; reorder preserves node identity.
+Synchronous browser audits check valid geometry before insertion, namespace/case,
+markers, exact path writes, and branch recreation. It does not compose custom
+component children inside SVG.
+
+Add/remove/drag edits retain at most **40 undo/redo snapshots combined**. Current
+model and one active-drag rollback snapshot are separate. Snapshots copy
+node/edge arrays and hashes, selection, ID counter and ordering. A new edit
+clears redo; removing a node removes incident edges. Pan and viewport open state
+stay outside model history. No-op drags add no entry. Cancel, capture loss or
+branch closure restores the starting model without committing history.
+
+Pointer capture belongs to the keyed SVG group, including presses on its circle
+or label. Fit uses the measured viewport with 24-pixel padding; drag inverts its
+scale. Zero/hidden, too-small and empty graph states are explicit. Wheel zoom
+keeps the pointer anchor and clamps to 0.25–4; line units use 16 pixels and page
+units use measured height. Scrolling is prevented only over the graph region.
+Ctrl/Meta+Z and Shift+Z act while graph focus is active; its note input retains
+native text editing. A form's active application scope takes precedence.
+
+Tests: [editable_graph_test.rb](test/editable_graph_test.rb) performs 45 edits,
+all 40 undo/redo steps, branch-after-undo, restoration and drag cancellation.
+[Browser contracts](../../tests/gvm_ui_contracts.spec.ts) inspect capture,
+geometry, layout/zoom/keyboard behavior and optional adapter requests.
+
+## Ownership, failures and Ruby test operations
+
+| Facility | Lifetime and evidence |
+| --- | --- |
+| [Computed values](../../../references/RUBY_SURFACE.md#explicit-computed-values) | Per-instance cache, invalidated by declared roots; GC/unmount release results. Helpers must stay pure. [Projection tests](../../tests/gvm_computed.spec.ts). |
+| [Pointer](../../../references/POINTER_CONTRACT.md), [layout](../../../references/LAYOUT_CONTRACT.md), [wheel](../../../references/WHEEL_CONTRACT.md) | Mount-owned capture/observers/queued work; cancellation, branch reconciliation and disposal prevent stale delivery. Wheel/layout coalesce frame work. |
+| [Shortcuts](../../../references/SHORTCUT_CONTRACT.md) | Owned registrations with focus/application scope and static active refs; disposal removes registrations. |
+| [Files](../../../references/DRAG_FILE_CONTRACT.md) | Opaque mount-owned handles/readers; cancellation/disposal closes readers and suppresses callbacks. Whole reads default to 48,000 bytes, chunks to 8,192. |
+| [Downloads](../../../references/DOWNLOAD_CONTRACT.md) | Ready before controls render; start during user activation. Failure releases URLs immediately; accepted URLs survive disposal until bounded 30-second expiry. |
+
+[Capacity boundaries](../../tests/gvm_capacity_boundaries.spec.ts) force scratch,
+computed-cache and persistent failures. Failed entries preserve rendered values
+and discard queued host work; earlier Ruby mutations are not rolled back.
+[Lifecycle coverage](../../tests/gvm_ui_capacity_lifecycle.spec.ts) runs 100
+interactions plus 100 mount/disposal cycles under a constrained profile, checking
+released state, routes, editor drafts and graph history. Defaults are not raised.
+
+Ruby selectors begin inside the mounted root. Use `>>>` to cross a child shadow
+boundary, such as `[data-field='a'] field-editor >>> .draft`. `fill` handles text
+and selects; `click` handles controls/SVG. `focus`, `press` and `assert_focused`
+drive native keyboard behavior. `wait_for_settled` waits for lazy child mounts
+and pending host work. Download scenarios use trusted clicks and real artifacts:
+
+```ruby
+# From test/download_test.rb, where jsonl and records are MRI-built expectations.
+download ".export-jsonl"
+assert_download filename: "records.jsonl", bytes: jsonl.call(records)
+```
+
+Negative scenarios place `expect_error "diagnostic substring"` immediately before
+the failing action. Every diagnostic in that operation must match; missing,
+unrelated or dangling expectations fail. Console/page/runtime capture starts
+before navigation. Errors include the authored Ruby test file and line. See
+[the current inventory](../../../references/UI_FIXTURE_CONTRACTS.md) for exact
+negative probes; none are skipped as a substitute for evidence.
+
+## Supported scope and deferrals
+
+These are bounded examples, not reusable graph/form libraries or complete
+import/export products. Full MRI/Regexp/Date/Math, Range slicing, nonlocal block
+return/break, rescue/ensure, redo, slots, SVG custom-element composition,
+automatic deep mutation observation, arbitrary DOM/window access and dynamic
+row refs remain unsupported. Streaming file reads already exist; streaming
+output, save pickers and filesystem writes are deferred.
+
+Public assets keep their `public/` output path. Shared CSS belongs under `lib/`
+(for example `lib/styles/`), with component-relative imports; project-root
+`styles/` is not staged. Icons are selected project assets under `icons/`, not
+an implicit Lucide catalog. [Asset probes](probes/12-assets-css) and the retained
+[root-style diagnostic](probes/12-root-css) define those boundaries.

@@ -11,6 +11,10 @@ limits your application needs, then pass the file to the compiler:
 mochi -i ./app -o ./dist --capacity-config ./mochi-capacities.json
 ```
 
+The published example is the current default profile (40 Goose regions,
+96 MiB maximum WASM memory); a compiler spec reads the actual file and verifies
+its normalized fingerprint. Copy it as `mochi-capacities.json` before editing.
+
 The versioned `capacities` object sets tick scratch bytes, objects, ivars, and
 slots; persistent state classes, objects, ivars, slots, bytes, and component
 registrations; promotion depth; reactive bindings; ABI bytecode bytes and call
@@ -20,6 +24,8 @@ It also sets host fetch, emit, event, drag, formatting-cache, and file
 handle/reader/chunk/whole-read limits. Only the subset used by a declared host
 capability is copied into that capability's manifest entry and passed to its
 adapter. Adapters cannot select a larger limit at runtime.
+Layout requests and shortcut registrations each use `bindings` as their
+adapter bound; their counters are separate from the VM binding table.
 The default Goose binary has 40 stack regions and a fixed 1 MiB guard per
 region; the compiler rejects attempts to change those implementation bounds.
 Smaller profiles may compile to fewer regions; accounting retains the default
@@ -68,3 +74,20 @@ mismatch before runtime initialization.
 The configured capacities are hard bounds. Pools do not expand adaptively.
 Ruby-facing exhaustion diagnostics and recovery behavior are described with
 the capacity failure contract in the runtime documentation.
+
+The shared inspector demonstrates 480 bounded structured records with 12 visible
+rows, not a guarantee that any 480 records fit. Whole-file reads default to
+48,000 bytes; `read_next` consumes 8,192-byte chunks without assembling a whole
+file. JSON has a separate 48,000-byte document limit. Downloads use
+`host_file_buffer_bytes` for one output (262,144 bytes),
+`host_event_queue_bytes` for retained download bytes (2,097,152), and
+`host_file_handles` for pending URLs (128); these are separate adapter counters.
+See [file reads](../references/DRAG_FILE_CONTRACT.md),
+[JSON](../references/RUBY_SURFACE.md#optional-json), and
+[downloads](../references/DOWNLOAD_CONTRACT.md) before raising limits.
+
+On a failed VM entry, pending DOM patches and host commands are discarded;
+earlier Ruby state mutations are not rolled back. Later valid entries can
+recover. [Capacity boundaries](../e2e/tests/gvm_capacity_boundaries.spec.ts)
+force each resource failure, and [fixture lifecycle tests](../e2e/tests/gvm_ui_capacity_lifecycle.spec.ts)
+exercise 100 interactions and 100 mount/disposal cycles with constrained profiles.

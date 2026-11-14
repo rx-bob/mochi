@@ -6,6 +6,12 @@ require "../../src/gvm/capacity_config"
 require "../../src/gvm/capacity_artifact_builder"
 
 describe CapacityConfig do
+  it "accepts the published example as the current default profile" do
+    example = CapacityConfig.read(File.expand_path("../../../docs/capacity.example.json", __DIR__))
+    example.values.should eq(CapacityConfig.default.values)
+    example.fingerprint.should eq(CapacityConfig.default.fingerprint)
+  end
+
   it "preserves current arena bounds as the reproducible default profile" do
     first = CapacityConfig.default
     second = CapacityConfig.new(CapacityConfig::DEFAULTS.dup)

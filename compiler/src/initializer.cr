@@ -75,7 +75,7 @@ class Initializer
 
     Open <http://127.0.0.1:27490>. The starter compiles to a GVM bundle: the loader reads a manifest, then loads each component's descriptor and `.chi` bytecode when it is used. No app-authored JavaScript is needed.
 
-    `mochi test` compiles an isolated test bundle and runs Ruby-authored scenarios in Chromium, Firefox, and WebKit. Test sources and runner files do not enter production output. Tests need Node.js, Mochi's Playwright dependencies, and installed Playwright browser binaries; install those once from the Mochi checkout with `npx playwright install chromium firefox webkit`.
+    `mochi test` compiles an isolated test bundle and runs Ruby-authored scenarios in Chromium, Firefox, and WebKit. Test sources and runner files do not enter production output. Tests need Node.js, Mochi's Playwright dependencies, and installed Playwright browser binaries; install those once from the Mochi checkout with `cd e2e && npm ci && npx playwright install chromium firefox webkit`. Use `--browsers=chromium` to select an engine or `--test-file=counter_test.rb` to select a file relative to this project's `test/` directory.
 
     ```ruby
     Mochi::Test.test("counter increments") do
@@ -87,6 +87,10 @@ class Initializer
     ```
 
     `assert_text` selectors start in the mounted component's shadow root. Use `>>>` to cross into a child component, for example `"child-counter >>> .value"`.
+
+    Put shared CSS under `lib/styles/`. From `lib/MyCounter.rb`, use a literal `@import "./styles/controls.css";` before local rules in `def css`; paths are component-relative and resolved at build time. Project-root `styles/` is not staged. `public/` assets keep their `public/` output prefix. Static icons come from your project's `icons/` directory; no icon catalog is bundled implicitly.
+
+    See Mochi's [Ruby examples and contracts](https://github.com/yampug/mochi#complete-ruby-examples-and-contracts) for computed dependencies, keyed forms/SVG, and optional mount-owned browser APIs. Replace collection roots to publish nested edits; automatic deep mutation observation is not provided. File reads, JSON documents, and downloads have explicit bounds; no application JavaScript or manual adapter tags are needed.
 
     `index.html` uses a root asset base so the loader and compiled bundle also resolve when a static host serves a deep link. The dev server maps `/deep/entry` to the entry page for this purpose. If deploying under a URL prefix, set the base URL and loader paths to that prefix and configure the host to serve the entry page for application routes. See the [asset path guide](https://github.com/yampug/mochi#icons).
 

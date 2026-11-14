@@ -29,8 +29,8 @@ prebuilt libraries in `fragments/libs`, and compatible Mochi GVM runtime and
 `mrbc` artifacts. See [build prerequisites](docs/BUILD_INSTRUCTIONS_EXT_LIBS.md)
 and [development installation](#installing-the-development-command). Ruby
 browser tests also need Mochi's Playwright dependencies and browser binaries;
-install the binaries from this checkout with
-`npx playwright install chromium firefox webkit`.
+install them from this checkout with
+`cd e2e && npm ci && npx playwright install chromium firefox webkit`.
 
 ### Create, build, test, and serve a project
 
@@ -113,6 +113,38 @@ count. `mochi test` compiles the project, runs the browser scenario, and reports
 failures at the Ruby test line. No app-authored JavaScript or manual script
 setup is needed.
 
+### Complete Ruby examples and contracts
+
+The [shared UI fixtures](e2e/fixtures/ui_contracts/README.md) provide three
+portable applications: a 480-record paginated inspector with filtered JSONL/CSV
+downloads, a keyed SVG graph with drag/zoom/undo, and a nested form with local
+drafts, Boolean props, typed events, and keyboard dialog behavior. Their authored
+scenarios use `mochi test`; no application JavaScript or external service is needed.
+
+Run `task framework:ui` for all three engines, or `task framework:ui:inspector`,
+`task framework:ui:graph`, and `task framework:ui:form` for one slice. See the
+[current evidence inventory](references/UI_FIXTURE_CONTRACTS.md) for each
+feedback report's supported behavior or explicit limitation.
+
+[Ruby surface](references/RUBY_SURFACE.md) documents array slicing, qualified
+helpers and block `next`, explicit computed dependencies and root replacement,
+binding-before-handler order, and target versus handler datasets. Optional
+[layout](references/LAYOUT_CONTRACT.md), [wheel](references/WHEEL_CONTRACT.md),
+[shortcuts](references/SHORTCUT_CONTRACT.md), and
+[downloads](references/DOWNLOAD_CONTRACT.md) retain owned lifetimes. They load
+before their component becomes interactive and are omitted when unused.
+
+[Files](references/DRAG_FILE_CONTRACT.md#bounded-byte-streaming) support bounded
+whole reads (48,000 bytes by default) and one-at-a-time binary chunks (8,192
+bytes). Larger files do not imply a larger whole-file Ruby String. Handles and
+readers belong to their mount; cancellation/disposal releases them and suppresses
+stale callbacks. [Capacity configuration](docs/fixed-capacities.md) explains
+fixed bounds and failure/recovery without promising state rollback.
+
+Full MRI/Regexp/Date/Math coverage, slots, SVG custom-element composition,
+automatic deep mutation observation, arbitrary DOM access, general import/export
+products, and reusable graph/form libraries remain outside these examples.
+
 ### Shared component styles
 
 A component `css` body still starts as one literal string. It may reference
@@ -121,14 +153,17 @@ shared CSS files with build-time `@import` rules:
 ```ruby
 def css
   %Q{
-    @import "../styles/reset.css";
-    @import "../styles/controls.css";
+    @import "./styles/reset.css";
+    @import "./styles/controls.css";
     :host { display: block; }
     .btn { padding: 9px 14px; }
   }
 end
 ```
 
+For `lib/MyCounter.rb`, place these fragments in `lib/styles/`. A component in
+`lib/nested/` would import `../styles/reset.css`. The build stages `lib/`,
+`public/`, and `icons/`; project-root `styles/` is not a supported source root.
 Imports resolve relative to the component file, recursively, depth-first in
 source order. `@import` rules must come before local CSS. The component's own
 rules are applied last, so a local override wins. A shared fragment is emitted
@@ -139,15 +174,26 @@ shared fragment only when a component that owns it first mounts.
 
 The compiler rejects missing fragments, import cycles, unclosed blocks,
 unclosed strings or comments, invalid import syntax, and `#{...}`
-interpolation with the component or fragment path and line. CSS is never
-executed or fetched at runtime. Shadow roots use constructable stylesheets when
+interpolation with the component or fragment path and line. Source imports are
+resolved at build time; emitted shared CSS files are fetched lazily at runtime.
+Shadow roots use constructable stylesheets when
 available and an ordered `<style>` fallback otherwise. CSS custom properties
 still inherit from the document into both paths.
+
+### Public assets
+
+`public/` is copied as `public/` in the output, not flattened into its root.
+For a root-served bundle, `public/logo.svg` is served at `/public/logo.svg`.
+Use paths appropriate to your deployment prefix for ordinary image/document
+URLs; the loader's manifest-relative resolution applies to framework resources,
+not arbitrary HTML URLs. The [asset probe](e2e/fixtures/ui_contracts/probes/12-assets-css)
+and [asset-path tests](e2e/tests/gvm_asset_paths.spec.ts) exercise both contracts.
 
 ### Icons
 
 Put only the SVG assets the app may use in an `icons/` directory at the project
-root. Each file is a normal SVG with `id="mochi-icon"`. Render it from Ruby:
+root. No Lucide/Feather catalog is bundled implicitly. Each file is a normal
+SVG with `id="mochi-icon"`. Render it from Ruby:
 
 ```ruby
 def html
@@ -998,7 +1044,7 @@ task build
 task install:dev
 ```
 
-The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes one local JavaScript adapter per host capability that a reachable package declares; today that is `mochi-format.js` only when a reachable package uses `MochiFormat`. It does not generate component-specific JavaScript.
+The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes a local adapter for each reachable host capability: formatting, time, network, layout, shortcuts, pointer, drag, files, or download. Pure Ruby/VM capabilities such as JSON need no host adapter. Unused optional packages and adapters are omitted. It does not generate component-specific JavaScript.
 
 `mochi-manifest.json` is the compact entry index for the bundle. It records a `schema_version` for the bundle format and lists each component's identity, dependency package, and descriptor location. Templates, local styles, bindings, props, and events live in the per-component descriptor instead of the entry manifest. A loader that does not support the bundle schema fails before it runs Ruby bytecode, and a descriptor whose schema does not match the entry manifest fails with the component name. Each component descriptor names its dependency package, and every package records the Ruby files, shared helpers, styles, and optional capabilities it owns. An optional capability is a versioned record with a local adapter location and an explicit table of synchronous or asynchronous operations. The compiler builds this graph from literal `require` and `require_relative` calls, component tags used in templates, and the package that exports each referenced Ruby constant. Dynamic loading such as `load`, `autoload`, or an interpolated require path stops the build with the Ruby source location. Missing and duplicate dependencies also stop the build. Dependency order is sorted and reproducible, and package identities do not contain checkout paths.
 
@@ -1014,7 +1060,9 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task build` | Build the `compiler/mochi` binary |
 | `task specs` | Run the Crystal compiler specs |
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
-| `task e2e` | Run the GVM Playwright end-to-end tests |
+| `task framework:e2e` | Run portable framework browser regressions, including all UI fixtures |
+| `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
+| `task e2e` / `task app:e2e` | Run the separate Cowboy application integration (requires that checkout) |
 | `task dev` | Build motestproj and serve `build_gvm` on port 27490 |
 | `task gvm:test` | Run the `mochi-gvm` Goose test suite |
 | `task gvm:fmt` | Check `mochi-gvm` Goose formatting |
@@ -1022,7 +1070,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task generate-batteries` | Regenerate the built-in battery sources |
 | `task runtime:test` | Run the loader and host adapter Node tests |
 | `task payload` | Check deterministic bundle membership and payload ceilings |
-| `task check` | Run runtime tests, compiler specs, payload checks, GVM tests, and the GVM end-to-end test |
+| `task check` | Run compile-time gates, runtime tests, compiler specs, payload checks, GVM tests, and portable framework browser tests |
 
 ### CLI reference
 
@@ -1061,7 +1109,7 @@ build-time profile format and custom artifact workflow.
 
 * `mochi --initialize=PROJECT` creates the generated Ruby project.
 * `mochi -i INPUT -o OUTPUT [--typecheck]` builds an application bundle.
-* `mochi test -i PROJECT [--browsers=chromium,firefox,webkit|all]` runs Ruby behavior tests.
+* `mochi test -i PROJECT [--browsers=chromium,firefox,webkit|all] [--test-file=FILE]` runs Ruby behavior tests; `FILE` is an existing `*_test.rb` path relative to `test/`.
 * `mochi dev --config=FILE --root=DIR` serves a local project.
 
 The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from the

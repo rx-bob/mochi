@@ -34,7 +34,7 @@
     "host_file_whole_read_bytes": 48000,
     "host_file_buffer_bytes": 262144,
     "goose_stack_bytes": 65536,
-    "goose_stack_regions": 50,
+    "goose_stack_regions": 40,
     "goose_guard_bytes": 1048576,
     "wasm_stack_bytes": 1048576,
     "memory_bytes": 100663296
