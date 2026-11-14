@@ -7,7 +7,7 @@ class ProbeRoot
     @delta = "initial"
   end
   def zoom(event)
-    @delta = "#{event["delta_x"]}:#{event["delta_y"]}"
+    @delta = "#{event["delta_x"]}:#{event["delta_y"]}:#{event["delta_z"]}:#{event["delta_mode"]}"
   end
 
   def html

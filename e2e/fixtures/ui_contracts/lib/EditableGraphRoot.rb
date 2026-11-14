@@ -25,6 +25,12 @@ class EditableGraphRoot
   @scale
   @fit_enabled
   @layout_status
+  @wheel_pending
+  @wheel_pixels
+  @wheel_lines
+  @wheel_pages
+  @wheel_x
+  @wheel_y
 
   computed :rendered_edges, depends_on: [:@nodes, :@edges]
 
@@ -58,6 +64,7 @@ class EditableGraphRoot
     @scale = 1
     @fit_enabled = false
     @layout_status = "ready"
+    clear_wheel
   end
 
   def mounted
@@ -82,12 +89,14 @@ class EditableGraphRoot
   end
 
   def fit_view
+    clear_wheel
     cancel_gesture("fit")
     @fit_enabled = true
     MochiLayout.measure("viewport", "on_viewport")
   end
 
   def stop_layout
+    clear_wheel
     MochiLayout.cancel("viewport")
     @layout_status = "stopped"
   end
@@ -130,6 +139,62 @@ class EditableGraphRoot
     @offset_x = (@width - (right - left) * @scale) / 2 - left * @scale
     @offset_y = (@height - (bottom - top) * @scale) / 2 - top * @scale
     @layout_status = "fitted"
+  end
+
+  def clear_wheel
+    @wheel_pending = false
+    @wheel_pixels = 0
+    @wheel_lines = 0
+    @wheel_pages = 0
+    @wheel_x = 0
+    @wheel_y = 0
+  end
+
+  def wheel_zoom(event)
+    return unless @open
+    mode = event["delta_mode"]
+    return if mode < 0 || mode > 2 || event["delta_y"] == 0
+    cancel_gesture("wheel")
+    @fit_enabled = false
+    @wheel_pixels += event["delta_y"] if mode == 0
+    @wheel_lines += event["delta_y"] if mode == 1
+    @wheel_pages += event["delta_y"] if mode == 2
+    @wheel_x = event["client_x"]
+    @wheel_y = event["client_y"]
+    unless @wheel_pending
+      @wheel_pending = true
+      MochiLayout.measure("viewport", "on_wheel_viewport")
+    end
+  end
+
+  def on_wheel_viewport(result)
+    return unless @wheel_pending
+    unless result["ok"]
+      @layout_status = result["error"]
+      clear_wheel
+      return
+    end
+    bounds = result["value"]
+    if !@open || bounds["width"] <= 0 || bounds["height"] <= 0
+      @layout_status = "hidden"
+      clear_wheel
+      return
+    end
+    delta = @wheel_pixels + @wheel_lines * 16 + @wheel_pages * bounds["height"]
+    x = @wheel_x - bounds["left"]
+    y = @wheel_y - bounds["top"]
+    model_x = (x - @offset_x) / @scale
+    model_y = (y - @offset_y) / @scale
+    scale = @scale - delta / 500.0
+    scale = 0.25 if scale < 0.25
+    scale = 4 if scale > 4
+    @offset_x = x - model_x * scale
+    @offset_y = y - model_y * scale
+    @scale = scale
+    @width = bounds["width"]
+    @height = bounds["height"]
+    @layout_status = "zoomed"
+    clear_wheel
   end
 
   def edge(id, from, to, order)
@@ -281,6 +346,7 @@ class EditableGraphRoot
     id = event["current_target_dataset"]["node"]
     node = node_for(id)
     return if node.nil?
+    clear_wheel
     @selected_id = id
     @drag_before = snapshot
     @drag_node = id
@@ -340,6 +406,7 @@ class EditableGraphRoot
   end
 
   def unmounted
+    clear_wheel
     # The loader releases capture before invoking this hook.
     clear_gesture("unmount")
   end
@@ -355,6 +422,7 @@ class EditableGraphRoot
   end
 
   def toggle
+    clear_wheel
     cancel_gesture("closed")
     @open = !@open
   end
@@ -382,7 +450,7 @@ class EditableGraphRoot
       <div class="viewport" ref="viewport" style="width:400px;height:220px;max-width:100%;display:{@open ? 'block' : 'none'}">
       {if @open}
         <svg class="canvas" viewBox="0 0 {@width} {@height}" width="100%" height="100%" role="img" aria-label="Editable workflow" style="touch-action: none;font:14px monospace"
-             onpointermove="{move_drag($event)}" onpointerup="{finish_drag($event)}"
+             onwheel.prevent="{wheel_zoom($event)}" onpointermove="{move_drag($event)}" onpointerup="{finish_drag($event)}"
              onpointercancel="{finish_drag($event)}" onlostpointercapture="{finish_drag($event)}">
           <defs><marker id="arrowhead" viewBox="0 0 8 8" refX="{@arrow_size}" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 Z" fill="currentColor"></path></marker></defs>
           <g class="scene" transform="translate({@offset_x} {@offset_y})">

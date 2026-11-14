@@ -10,6 +10,118 @@ const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
+test("wheel zoom preserves measured pointer anchor, units, limits, and drag @ui-graph", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator("editable-graph-root");
+    await expect(root.locator(".node")).toHaveCount(4);
+    const state = () => root.evaluate(el => {
+      const scene = el.shadowRoot!.querySelector(".scene") as SVGGElement;
+      const scaled = el.shadowRoot!.querySelector(".scaled") as SVGGElement;
+      const matrix = scaled.getScreenCTM()!;
+      return { scale: scaled.transform.baseVal.getItem(0).matrix.a,
+        x: scene.transform.baseVal.getItem(0).matrix.e, y: scene.transform.baseVal.getItem(0).matrix.f,
+        a: matrix.a, d: matrix.d, e: matrix.e, f: matrix.f };
+    });
+    const wheel = async (mode: number, delta: number, x: number, y: number) => {
+      const before = await state();
+      const model = { x: (x - before.e) / before.a, y: (y - before.f) / before.d };
+      await root.locator(".canvas").dispatchEvent("wheel", { deltaMode: mode, deltaY: delta, clientX: x, clientY: y, cancelable: true });
+      await expect.poll(async () => (await state()).scale).not.toBe(before.scale);
+      const after = await state();
+      expect(Math.abs(model.x * after.a + after.e - x)).toBeLessThan(0.02);
+      expect(Math.abs(model.y * after.d + after.f - y)).toBeLessThan(0.02);
+      return after.scale;
+    };
+    const viewport = await root.locator(".viewport").boundingBox();
+    const x = Math.floor(viewport!.x + 150), y = Math.floor(viewport!.y + 80);
+    expect(await wheel(0, 16, x, y)).toBeCloseTo(0.968, 5);
+    expect(await wheel(1, -1, x, y)).toBeCloseTo(1, 5);
+    expect(await wheel(2, 0.5, x, y)).toBeCloseTo(0.78, 5);
+    expect(await wheel(0, -110, x, y)).toBeCloseTo(1, 5);
+
+    // Mixed-mode burst uses one geometry read and the last pointer anchor.
+    const before = await state();
+    await root.locator(".canvas").evaluate((canvas, anchor) => {
+      const viewport = canvas.parentElement!;
+      const read = viewport.getBoundingClientRect.bind(viewport);
+      (window as any).__wheelReads = 0;
+      viewport.getBoundingClientRect = () => { (window as any).__wheelReads++; return read(); };
+      for (let index = 0; index < 20; index++) canvas.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true, cancelable: true, deltaY: 1, deltaMode: index % 2, clientX: anchor.x - 30 + index, clientY: anchor.y
+      }));
+    }, { x, y });
+    await expect.poll(async () => (await state()).scale).toBeCloseTo(0.66, 5);
+    const burst = await state(), anchorX = x - 11;
+    expect(Math.abs((anchorX - before.e) / before.a * burst.a + burst.e - anchorX)).toBeLessThan(0.02);
+    expect(await page.evaluate(() => (window as any).__wheelReads)).toBe(1);
+    expect(await wheel(0, 10000, x, y)).toBeCloseTo(0.25, 5);
+    expect(await wheel(0, -10000, x, y)).toBeCloseTo(4, 5);
+    await wheel(0, 1500, x, y); // back to scale 1
+
+    const node = root.locator("[data-node='b'] circle");
+    const start = await node.boundingBox();
+    const startViewport = await root.locator(".viewport").boundingBox();
+    await page.mouse.move(start!.x + start!.width / 2, start!.y + start!.height / 2);
+    // A new drag wins over a zoom whose geometry read is still pending.
+    await page.evaluate(() => {
+      const original = requestAnimationFrame, cancel = cancelAnimationFrame;
+      const pending = new Map<number, FrameRequestCallback>(); let next = 1000000;
+      (window as any).__heldFrames = pending;
+      (window as any).__restoreFrames = () => { window.requestAnimationFrame = original; window.cancelAnimationFrame = cancel; };
+      window.requestAnimationFrame = callback => { pending.set(++next, callback); return next; };
+      window.cancelAnimationFrame = id => { if (!pending.delete(id)) cancel(id); };
+    });
+    await root.locator(".canvas").dispatchEvent("wheel", { deltaY: 100, clientX: x, clientY: y });
+    await page.evaluate(() => {
+      const pending = (window as any).__heldFrames as Map<number, FrameRequestCallback>;
+      const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn(performance.now()));
+    }); // wheel handler now waits for its layout frame
+    await page.mouse.down();
+    await page.evaluate(() => {
+      (window as any).__restoreFrames();
+      const pending = (window as any).__heldFrames as Map<number, FrameRequestCallback>;
+      const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn(performance.now()));
+    });
+    expect((await state()).scale).toBeCloseTo(1, 5);
+    await page.mouse.move(start!.x + start!.width / 2 + 20, start!.y + start!.height / 2 + 10); await page.mouse.up();
+
+    const end = await node.boundingBox(), endViewport = await root.locator(".viewport").boundingBox();
+    expect(end!.x - start!.x).toBeCloseTo(20, 0);
+    expect((end!.y - endViewport!.y) - (start!.y - startViewport!.y)).toBeCloseTo(10, 0);
+    await expect(root.locator(".undo-count")).toHaveText("1");
+    expect(errors).toEqual([]);
+  }, "<editable-graph-root></editable-graph-root>");
+});
+
+test("wheel prevention is confined to graph and anchor follows page scrolling @ui-graph", async ({ page }) => {
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator("editable-graph-root");
+    await expect(root.locator(".node")).toHaveCount(4);
+    await root.evaluate(async el => { await (el as any)._mochiReady; });
+    await page.evaluate(() => scrollTo(0, 200));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const bounds = await root.locator(".viewport").boundingBox();
+    const x = Math.floor(bounds!.x + 120), y = Math.floor(bounds!.y + 70);
+    const modelPoint = () => root.locator(".scaled").evaluate((el, p) => {
+      const m = (el as SVGGraphicsElement).getScreenCTM()!;
+      return { x: (p.x - m.e) / m.a, y: (p.y - m.f) / m.d };
+    }, { x, y });
+    const before = await modelPoint(), scroll = await page.evaluate(() => scrollY);
+    await page.mouse.move(x, y); await page.mouse.wheel(0, 50);
+
+    await expect(root.locator(".layout-status")).toHaveText("zoomed");
+    const after = await modelPoint();
+    expect(after.x).toBeCloseTo(before.x, 2); expect(after.y).toBeCloseTo(before.y, 2);
+    expect(await page.evaluate(() => scrollY)).toBe(scroll);
+    await page.mouse.move(900, 300); await page.mouse.wheel(0, 200);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scroll);
+  }, '<div style="height:300px">before</div><editable-graph-root></editable-graph-root><div style="height:2000px">outside</div>');
+});
+
 test("optional layout fits real resized graph bounds and stops observation @ui-graph", async ({ page }) => {
   const failures: string[] = [];
   page.on("pageerror", error => failures.push(error.message));
@@ -389,7 +501,7 @@ for (const name of runtimeProbes) {
         await expect(root.locator(".current")).toHaveText("log-001");
       } else if (name === "09-wheel") {
         await root.locator("div").dispatchEvent("wheel", { deltaX: 4, deltaY: 12 });
-        await expect(root.locator("output")).toHaveText(":"); // E5.S2 oracle: 4:12
+        await expect(root.locator("output")).toHaveText("4:12:0:0");
       } else if (name === "12-assets-css") {
         await expect(root.locator(".shared")).toHaveCSS("color", "rgb(12, 34, 56)");
         await expect(root.locator("img")).toHaveJSProperty("naturalWidth", 1);

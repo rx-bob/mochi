@@ -1384,6 +1384,57 @@
     });
   }
 
+  function discardWheel(element) {
+    if (element._mochiWheelFrame != null) {
+      if (typeof global.cancelAnimationFrame === "function") global.cancelAnimationFrame(element._mochiWheelFrame);
+      else global.clearTimeout(element._mochiWheelFrame);
+    }
+    element._mochiWheelFrame = null;
+    element._mochiWheelPending = null;
+  }
+
+  function queueWheel(element, target, event) {
+    var payload = eventPayload(target, event);
+    // Native wheel modes are pixels, lines, and pages. Unknown synthetic
+    // modes still reach Ruby unchanged, but never create unbounded buckets.
+    if (![0, 1, 2].includes(payload.delta_mode)) {
+      element._dispatch(target, event, true, payload);
+      return;
+    }
+    var pending = element._mochiWheelPending || (element._mochiWheelPending = new Map());
+    var entry = pending.get(target);
+    if (!entry) {
+      entry = { deltas: [null, null, null] };
+      pending.set(target, entry);
+    }
+    entry.event = event;
+    entry.source = event.target;
+    entry.payload = payload;
+    var delta = entry.deltas[payload.delta_mode] || (entry.deltas[payload.delta_mode] = [0, 0, 0]);
+    delta[0] += payload.delta_x;
+    delta[1] += payload.delta_y;
+    delta[2] += payload.delta_z;
+    if (element._mochiWheelFrame != null) return;
+    var token = element._mochiMountToken;
+    var schedule = global.requestAnimationFrame || function (callback) { return global.setTimeout(callback, 16); };
+    element._mochiWheelFrame = schedule.call(global, function () {
+      if (element._mochiMountToken !== token || element._mochiWheelPending !== pending) return;
+      element._mochiWheelFrame = null;
+      element._mochiWheelPending = null;
+      pending.forEach(function (entry, target) {
+        entry.deltas.forEach(function (delta, mode) {
+          if (!delta || element._mochiUnmounted || !element.isConnected ||
+              element._mochiMountToken !== token || !element.shadowRoot.contains(target)) return;
+          var payload = Object.assign({}, entry.payload, {
+            delta_x: delta[0], delta_y: delta[1], delta_z: delta[2], delta_mode: mode
+          });
+          state.lastEventTarget = entry.source;
+          element._dispatch(target, entry.event, true, payload);
+        });
+      });
+    });
+  }
+
   function pointerReason(event) {
     if (!event) return "";
     if (event.type === "pointerup") return "up";
@@ -3441,6 +3492,10 @@
       ctrl_key: !!(event && event.ctrlKey),
       meta_key: !!(event && event.metaKey),
       alt_key: !!(event && event.altKey),
+      delta_x: axis("deltaX"),
+      delta_y: axis("deltaY"),
+      delta_z: axis("deltaZ"),
+      delta_mode: axis("deltaMode"),
       client_x: axis("clientX"),
       client_y: axis("clientY"),
       offset_x: axis("offsetX"),
@@ -4839,6 +4894,7 @@
               drainEmits(mounted.module);
               drainFetches(mounted.module);
               element._observeHostTargets(root);
+              element._attachWheel(root);
             } catch (error) {
               element._unmount(mounted.module, mounted.instance, mounted.mountToken);
               throw error;
@@ -5047,6 +5103,8 @@
         var key = String(instance);
         state.unmountedInstances.add(key);
         discardPointerMoves(this);
+        discardWheel(this);
+        this._detachWheel();
         cancelOwnerFetches(key);
         state.hostAdapters.forEach(function (adapter) {
           if (typeof adapter.disposeOwner !== "function") return;
@@ -5128,6 +5186,7 @@
         var element = this;
         var eventNames = this._mochiRuntime ? this._mochiRuntime.eventNames : [];
         eventNames.forEach(function (eventName) {
+          if (eventName === "wheel") return;
           root.addEventListener(eventName, function (event) {
             var target = eventTarget(event, root, eventName);
             if (target) element._dispatch(target, event);
@@ -5147,6 +5206,46 @@
               if (target) element._dispatch(target, event);
             });
           }
+        }
+      }
+
+      _detachWheel() {
+        if (this._mochiWheelObserver) this._mochiWheelObserver.disconnect();
+        if (this._mochiWheelTargets) {
+          var listener = this._mochiWheelListener;
+          this._mochiWheelTargets.forEach(function (target) { target.removeEventListener("wheel", listener); });
+        }
+        this._mochiWheelObserver = this._mochiWheelTargets = this._mochiWheelListener = null;
+      }
+
+      _attachWheel(root) {
+        if (this._mochiRuntime.eventNames.indexOf("wheel") === -1) return;
+        var element = this;
+        var targets = this._mochiWheelTargets = new Set();
+        var listener = this._mochiWheelListener = function (event) {
+          if (element._mochiUnmounted || !element.isConnected) return;
+          var target = eventTarget(event, root, "wheel");
+          if (target === event.currentTarget && root.contains(target)) element._dispatch(target, event);
+        };
+        function reconcile() {
+          targets.forEach(function (target) {
+            if (root.contains(target)) return;
+            target.removeEventListener("wheel", listener);
+            targets.delete(target);
+            if (element._mochiWheelPending) element._mochiWheelPending.delete(target);
+          });
+          // Bind the actual interaction regions: a shadow root's box does not
+          // reliably establish a scroll-blocking hit region in every browser.
+          root.querySelectorAll("[data-mochi-wheel]").forEach(function (target) {
+            if (targets.has(target)) return;
+            targets.add(target);
+            target.addEventListener("wheel", listener, { passive: false });
+          });
+        }
+        reconcile();
+        if (typeof global.MutationObserver === "function") {
+          this._mochiWheelObserver = new global.MutationObserver(reconcile);
+          this._mochiWheelObserver.observe(root, { childList: true, subtree: true });
         }
       }
 
@@ -5175,23 +5274,30 @@
         }
       }
 
-      _dispatch(target, event, fromPointerMoveQueue) {
+      _dispatch(target, event, fromPointerMoveQueue, queuedPayload) {
         var element = this;
         var method = target.getAttribute("data-mochi-" + event.type);
         if (!method) return;
 
         // Native modifiers must run during this listener, before browser
         // dispatch ends and before any Ruby work is queued.
-        var modifiers = eventModifiers(target, event.type);
-        if (modifiers.indexOf("self") !== -1 && event.target !== target) return;
-        if (modifiers.indexOf("prevent") !== -1 && typeof event.preventDefault === "function") {
-          event.preventDefault();
+        if (!queuedPayload) {
+          var modifiers = eventModifiers(target, event.type);
+          if (modifiers.indexOf("self") !== -1 && event.target !== target) return;
+          if (modifiers.indexOf("prevent") !== -1 && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (modifiers.indexOf("stop") !== -1 && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          state.lastEventTarget = event.target;
         }
-        if (modifiers.indexOf("stop") !== -1 && typeof event.stopPropagation === "function") {
-          event.stopPropagation();
-        }
-        state.lastEventTarget = event.target;
         if (!this._mochiReady) return;
+
+        if (event.type === "wheel" && !queuedPayload) {
+          queueWheel(this, target, event);
+          return;
+        }
 
         if (event && typeof event.pointerId === "number") {
           if (event.type === "pointermove" && !fromPointerMoveQueue) {
@@ -5204,7 +5310,7 @@
           }
         }
 
-        var payload = eventPayload(target, event);
+        var payload = queuedPayload || eventPayload(target, event);
         var eachContexts = findEachContexts(target, this.shadowRoot);
         var nearestEachContext = eachContexts.length > 0 ? eachContexts[eachContexts.length - 1] : null;
         if (nearestEachContext && !(event && event.__mochiChildEvent)) {
@@ -5318,7 +5424,8 @@
           // A child event is dispatched on its emitting element. If that row
           // or child is removed before the queued handler runs, never deliver
           // it to a replacement element or parent state.
-          if (!target || target._mochiUnmounted || !target.isConnected) return;
+          if (!target || target._mochiUnmounted || !target.isConnected ||
+              (queuedPayload && !element.shadowRoot.contains(target))) return;
           var previousPointerDispatch = state.activePointerDispatch;
           state.activePointerDispatch = event && typeof event.pointerId === "number"
             ? { element: element, target: target, event: event, mountToken: mountToken }

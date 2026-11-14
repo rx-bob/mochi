@@ -87,8 +87,11 @@ Button handles remain keyboard focusable: Arrow keys move the example, and Escap
 the bound keyed `<g>` with `MochiPointer.capture(event["pointer_id"])`. The
 original target may be a circle or text descendant; no dynamic ref is needed.
 A stable SVG ancestor handles move/up/cancel/lost-capture events. Coordinates
-use the starting node position plus client deltas in this fixed, unscaled
-viewport. Measurement and zoom need their own coordinate conversion.
+use the starting node position plus client deltas divided by current fit/zoom
+scale. The measured viewBox matches viewport CSS dimensions. See
+[layout](LAYOUT_CONTRACT.md) and [wheel](WHEEL_CONTRACT.md) contracts. A new
+drag discards pending zoom; wheel input cancels an existing gesture before
+changing coordinates.
 
 The example keeps one rollback snapshot during a gesture, publishes model
 replacements while moving, and commits one history entry on a changed release.

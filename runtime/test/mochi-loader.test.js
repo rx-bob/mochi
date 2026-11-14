@@ -5746,6 +5746,10 @@ test("zero-argument handlers receive the normalized event when Ruby requires one
     ctrl_key: false,
     meta_key: false,
     alt_key: false,
+    delta_x: 0,
+    delta_y: 0,
+    delta_z: 0,
+    delta_mode: 0,
     client_x: 0,
     client_y: 0,
     offset_x: 0,
@@ -6100,6 +6104,10 @@ test("bind:value dispatches the event payload and reflects programmatic updates"
       ctrl_key: false,
       meta_key: false,
       alt_key: false,
+      delta_x: 0,
+      delta_y: 0,
+      delta_z: 0,
+      delta_mode: 0,
       client_x: 0,
       client_y: 0,
       offset_x: 0,
@@ -7028,3 +7036,81 @@ for (const mode of ["open", "closed"]) {
     assert.equal(payload.composed_path.some(node => node.tag === "button"), mode === "open");
   });
 }
+
+test("wheel batches preserve raw modes and latest anchor, with synchronous declared prevention", async (t) => {
+  const component = {
+    tag_name: "wheel-panel", class_name: "WheelPanel", chi_file: "wheel-panel.chi", css: "", bindings: [],
+    html_template: '<div class="owned" data-mochi-wheel="zoom" data-mochi-modifiers-wheel="prevent" data-mochi-args-wheel=\'[{"kind":"event"}]\'><span>inside</span></div>' +
+      '<div class="plain" data-mochi-wheel="zoom" data-mochi-args-wheel=\'[{"kind":"event"}]\'>plain</div>',
+    events: [{ path: [0], event: "wheel", method_sym: "zoom", args: [{ kind: "event" }], modifiers: ["prevent"] }],
+  };
+  const { dom, log } = await setup([component]);
+  log.methods.add("zoom");
+  const frames = new Map(); let next = 0;
+  const savedRAF = global.requestAnimationFrame, savedCancel = global.cancelAnimationFrame;
+  t.after(() => { global.requestAnimationFrame = savedRAF; global.cancelAnimationFrame = savedCancel; });
+  global.requestAnimationFrame = callback => { frames.set(++next, callback); return next; };
+  global.cancelAnimationFrame = id => frames.delete(id);
+  const flush = async () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(fn => fn()); await flushLifecycle(); };
+  const element = document.createElement("wheel-panel"); document.body.appendChild(element); await element._mochiReady;
+  const owned = element.shadowRoot.querySelector("span");
+  for (const [mode, x, y, z, anchor] of [[0, 1, 2, 3, 10], [0, 4, 5, 6, 20], [1, -1, 2, 0, 30], [2, 0, 1, 0, 40]]) {
+    const event = new dom.window.WheelEvent("wheel", { bubbles: true, cancelable: true,
+      deltaMode: mode, deltaX: x, deltaY: y, deltaZ: z, clientX: anchor, clientY: 90 });
+    owned.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+  }
+  assert.equal(log.dispatchedArgs.length, 0);
+  assert.equal(frames.size, 1);
+  await flush();
+  const payloads = log.dispatchedArgs.map(call => call.args[0]);
+  assert.deepEqual(payloads.map(p => [p.delta_mode, p.delta_x, p.delta_y, p.delta_z]), [[0, 5, 7, 9], [1, -1, 2, 0], [2, 0, 1, 0]]);
+  assert.ok(payloads.every(p => p.client_x === 40 && p.client_y === 90 && p.target_tag === "span"));
+  const plain = new dom.window.Event("wheel", { bubbles: true, cancelable: true });
+  element.shadowRoot.querySelector(".plain").dispatchEvent(plain);
+  assert.equal(plain.defaultPrevented, false);
+  await flush();
+  const missing = log.dispatchedArgs.at(-1).args[0];
+  assert.deepEqual([missing.delta_x, missing.delta_y, missing.delta_z, missing.delta_mode], [0, 0, 0, 0]);
+
+  // Removed targets and old mount generations never receive queued work.
+  owned.dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, deltaY: 1 }));
+  element.shadowRoot.querySelector(".owned").remove();
+  await flush(); assert.equal(log.dispatchedArgs.length, 4);
+  element.shadowRoot.querySelector(".plain").dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, deltaY: 1 }));
+  const staleFrame = [...frames.values()][0];
+  const removed = [];
+  const plainTarget = element.shadowRoot.querySelector(".plain");
+  const remove = plainTarget.removeEventListener.bind(plainTarget);
+  plainTarget.removeEventListener = (name, handler) => { removed.push(name); remove(name, handler); };
+  element.remove(); await flushLifecycle();
+  assert.ok(removed.includes("wheel")); assert.equal(frames.size, 0);
+  document.body.appendChild(element); await element._mochiReady;
+  assert.equal(log.dispatchedArgs.length, 4);
+  element.shadowRoot.querySelector(".plain").dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, deltaY: 7 }));
+  staleFrame(); await flushLifecycle(); assert.equal(log.dispatchedArgs.length, 4);
+  assert.equal(frames.size, 1);
+  await flush(); assert.equal(log.dispatchedArgs.length, 5);
+  assert.equal(log.dispatchedArgs.at(-1).args[0].delta_y, 7);
+  // Native events retarget to their host after dispatch; .self is decided
+  // once inside the original listener, never again during frame delivery.
+  const self = element.shadowRoot.querySelector(".plain");
+  self.setAttribute("data-mochi-modifiers-wheel", "self");
+  self.dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, composed: true, deltaY: 8 }));
+  await flush(); assert.equal(log.dispatchedArgs.length, 6);
+  assert.equal(log.dispatchedArgs.at(-1).args[0].delta_y, 8);
+  const child = document.createElement("span"); self.appendChild(child);
+  child.dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, composed: true, deltaY: 9 }));
+  await flush(); assert.equal(log.dispatchedArgs.length, 6);
+  log.onDispatch = name => {
+    if (name !== "zoom") return;
+    document.body.appendChild(self);
+    self.setAttribute("data-mochi-modifiers-wheel", "prevent");
+    const foreign = new dom.window.WheelEvent("wheel", { bubbles: true, composed: true, cancelable: true, deltaY: 5 });
+    self.dispatchEvent(foreign); // before removal observer has run
+    assert.equal(foreign.defaultPrevented, false);
+  };
+  self.dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, composed: true, deltaY: 1 }));
+  self.dispatchEvent(new dom.window.WheelEvent("wheel", { bubbles: true, composed: true, deltaY: 1, deltaMode: 1 }));
+  await flush(); assert.equal(log.dispatchedArgs.length, 7);
+});

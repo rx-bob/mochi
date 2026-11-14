@@ -49,7 +49,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 | `06-svg-each.md` | SVG paths enter the live document with valid `d` values, without console errors. | **supported, completed by E3.S1:** shared fragment lowering defers row geometry; ordinary SVG attributes now stay inert during parsing, compound values resolve together, and conditional scalar geometry initializes before insertion. `EditableGraphRoot` adds four keyed nodes/three paths, synchronous insertion audits, exact changed-path write counts, identity across reorder/delete/reinsert, branch recreation, canonical `viewBox`/`refX`, and marker references. SVG custom-element children remain deferred. | E2.S1 shared fix; E3.S1 graph |
 | `07-bind-and-handlers.md` | Binding synchronizes state before the explicit handler for the same native event. | **supported:** `07-binding-handler` observes `needle:a` on input and `needle:b` on select change. Shared Ruby scenarios cover both attribute orders, checkbox Booleans, current row arguments, property resets, branch recreation, and remount. `07-binding-failure` proves setter exhaustion blocks the callback and later events recover. | E2.S3 |
 | `08-event-target-dataset.md` | Target data stays target data; an explicit handler/current-target dataset exposes row ID even on descendant clicks. | **supported, completed by E3.S2:** `dataset` retains target semantics; `target_dataset` names that snapshot explicitly and `current_target_dataset` exposes bound-handler data. Graph nodes and inspector table rows select identically from surfaces and descendants. Report 08 covers source-located oversized target/handler payload rejection and subsequent recovery under the default limit. | E3.S2 |
-| `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` receives neither delta (`:` instead of `4:12`). Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
+| `09-missing-platform-apis.md` | Optional Ruby APIs cover bounded data/time, measurement, wheel, shortcuts, and downloads without adding unused application payload. | **reproduced-defect/API gaps:** `09-json`, `09-time`, `09-math`, `09-regexp` fail mounting with `unknown class`; `09-wheel` now receives raw X/Y/Z/mode (`4:12:0:0`) with E5.S2. Other requested APIs and explicit deferrals are listed below. Existing files and icons are not missing capabilities. | E5.S1–E5.S3, E6.S1–E6.S3; explicit deferrals below |
 | `10-ruby-gaps.md` | `next if line == ""` skips only that iteration. `redo` retains Ruby keyword meaning. | **supported:** `10-next` renders `alpha,beta`; E1.S3 adds nested `each`, `map` with `next value`, lexical-local updates, and continuation after iteration across helper/component contexts. **intentional-contract:** `10-redo` rejects the bare keyword with an authored location; use a real method name. Array semantics are repaired by E1.S2; E1.S3 covers helper parity in 03 and rejects unsupported nonlocal control flow before mounting. | E1.S2, E1.S3 |
 | `11-boolean-typecheck.md` | Documented `prop :enabled, Boolean, default: false` works in both runtime and typecheck. | **supported:** `11-boolean`, the typed Boolean event probe, and the shared form build with `--typecheck`. Static/conditional/repeated child props retain false values; wrong Boolean event payloads are rejected before parent delivery. Genuine Sorbet errors remain covered. | E2.S4 |
 | `12-assets-and-css-imports.md` | Public assets retain the documented output path; CSS resolution and icon packaging have explicit source-backed behavior. | **intentional-contract:** `12-assets-css` serves `/public/probe.svg`, resolves `lib/nested/../themes/base.css`, applies its color, and packages only the referenced `home` icon. **intentional-contract:** `12-missing-css` fails at build time with component/path details. **reproduced-defect:** `12-root-css` cannot import a present project-root `styles/base.css` through `../../styles/base.css`: the isolated compiler tree omits that directory. This differs from direct StyleComposer support. | E7.S2: document supported source layout and resolve or explicitly retain the root-style boundary |
@@ -58,7 +58,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 
 The synthetic workload in report 04 preserves nested hashes/arrays, concatenation, and repeated scans, but not every byte and binding of the application. It does not reproduce the reported 32,738-byte allocation failure or prove that 480 arbitrarily large records fit. Default scratch limits remain 2,048 objects and 131,072 bytes. E4 must test realistic structured records, resource lifetimes, and failure/recovery, using existing configuration rather than silently raising global budgets.
 
-Report 09 is a capability inventory, not one executable expression. JSON parse is probed; JSON generation/`require "json"` loading and error contracts belong to E6.S1. Time.now is probed; the timestamp subset belongs to E6.S2. Measurement, owned resize callbacks, and wheel handling belong to E5.S1/E5.S2; owned global shortcuts to E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. These broader contracts remain unresolved until their stories deliver them.
+Report 09 is a capability inventory, not one executable expression. JSON parse is probed; JSON generation/`require "json"` loading and error contracts belong to E6.S1. Time.now is probed; the timestamp subset belongs to E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned global shortcuts belong to E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. These broader contracts remain unresolved until their stories deliver them.
 
 Full Math, Date/timezone breadth, Regexp/query parsing, slots, arbitrary DOM/window access, and SVG custom-element composition are explicit deferrals. Mochi's existing formatters, focus helpers, and focus-trap support do not imply those capabilities. Bounded files and static icons are already available: the default whole-file limit is **48,000 bytes**, not a two-megabyte promise; 8,192-byte chunks support larger bounded streaming reads. Icons are selected from project `icons/` assets and emitted on demand, not supplied as an implicit Lucide catalog.
 
@@ -983,4 +983,40 @@ cold invocation took 1,432.3 ms and failed the strict 1,000 ms gate; the other
 14 took 135.6–147.8 ms. An unchanged full rerun passed all 15 at 137.7–142.8 ms.
 The outlier is retained here; no timing threshold was relaxed.
 
-Next story: E5.S2 — support wheel input with explicit units and default handling.
+## E5.S2 — raw wheel input, owned prevention, and anchored zoom
+
+Wheel events expose raw `delta_x`, `delta_y`, `delta_z`, and `delta_mode` with
+zero defaults. Existing `.prevent`, `.stop`, and `.self` declarations run in
+the native listener; no compiler syntax or application JavaScript was added.
+Actual-target non-passive listeners cover conditional/keyed regions and are
+removed on branch disposal or unmount. Native Chromium/WebKit tests reproduced
+scrolling with shadow-root delegation and passed after binding real regions.
+
+One scheduled frame sums each target's deltas in three separate unit buckets,
+with latest-anchor metadata. Delivery checks the owning mount and target again
+at Ruby entry. Regressions cover retargeted composed `.self` events, targets
+moved into another connected root, stale frames, and remount without duplicate
+listeners. The old missing-delta probe now requires `4:12:0:0`.
+
+Graph Ruby converts lines to 16 CSS pixels and pages to measured height, then
+changes scale by `-pixels / 500`, clamped to 0.25–4. Translation preserves the
+point beneath the latest anchor. One geometry read serves an accumulated zoom
+batch, including mixed modes; fresh viewport origin remains correct after
+page scrolling. New drags discard pending zoom, while wheel input cancels an
+existing drag. Fit/close/stop/unmount clear pending intent. Browser checks use
+0.02 CSS pixel anchor tolerance, real wheel scrolling inside/outside the graph,
+both scale limits, and pointer drag after zoom. See [wheel contracts](WHEEL_CONTRACT.md).
+
+Validation on 2026-11-14:
+
+- **565 compiler examples** and **214 runtime tests** passed.
+- **435 browser checks** passed across Chromium, Firefox, and WebKit (375 main
+  plus 60 asset/install). All **45 graph/lifecycle checks** passed again after
+  adding the pending-zoom/new-drag regression.
+- Payload determinism, membership, and exact ceilings passed. Core measures
+  **503,755 raw / 162,460 gzip bytes**, a loader increase of **4,749 / 1,068**.
+  WASM, optional layout code, capacity profile, and memory limits are unchanged.
+- All 15 minimal compile-time checks passed at **135.8–142.0 ms**, below the
+  strict 1,000 ms limit. No new benchmark, telemetry, or capacity knob was added.
+
+Next story: E5.S3 — add mount-owned keyboard shortcut registration.

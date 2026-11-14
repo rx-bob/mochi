@@ -57,15 +57,31 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 499,006 | 161,392 | 3 |
-| Minimal initial | 502,684 | 163,097 | 7 |
-| Feature initial | 503,496 | 163,284 | 7 |
+| Core runtime | 503,755 | 162,460 | 3 |
+| Minimal initial | 507,433 | 164,165 | 7 |
+| Feature initial | 508,245 | 164,352 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 517,732 | 167,885 | 11 |
-| Network initial | 507,819 | 164,595 | 8 |
-| Network total | 507,819 | 164,595 | 8 |
+| Feature total | 522,481 | 168,953 | 11 |
+| Network initial | 512,568 | 165,663 | 8 |
+| Network total | 512,568 | 165,663 | 8 |
 
-### Optional layout (E5.S1)
+### Wheel input and owned listeners (E5.S2)
+
+Core grows **4,749 raw / 1,068 gzip bytes** against E5.S1. Loader is now
+**227,635 raw / 48,331 gzip bytes**. This covers normalized raw wheel fields,
+three fixed unit buckets per active target, frame coalescing, target ownership
+checks, and actual-region non-passive listeners with branch/remount cleanup.
+Binding these regions is necessary for reliable native scroll prevention in
+Chromium and WebKit; a delegated shadow-root listener failed that regression.
+
+WASM, glue, optional layout files, capacity defaults, and memory limits are
+unchanged. Graph conversion/zoom methods live in its component bytecode. This
+is an explicit shared event-layer cost; no optional adapter is made eager.
+All baselines increase by the measured loader delta, with no extra headroom.
+See [wheel contracts](WHEEL_CONTRACT.md).
+
+### Optional layout (E5.S1 historical delta)
+
 
 Shared loader support grows **1,241 raw / 211 gzip bytes** against E4.S3.
 This pays for mount-guarded static-ref resolution, repeat notifications,

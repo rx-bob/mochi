@@ -106,7 +106,11 @@ capture and clears transient gesture state. E5.S1 adds optional static-ref measu
 uses the actual viewport with 24-pixel padding; dragging inverts the fit scale.
 Zero/hidden, too-small, and empty graphs report explicit states. Stop resize
 observation cancels the subscription while one-shot fitting remains available.
-Wheel zoom remains E5.S2 work. See [layout contracts](../../../references/LAYOUT_CONTRACT.md).
+E5.S2 adds pointer-anchored wheel zoom, clamped to 0.25–4. Pixel units pass
+through, lines count as 16 pixels, and pages use measured viewport height.
+Wheel batches retain their latest anchor and use one geometry read. Native
+scrolling is prevented only over the SVG region. See [layout contracts](../../../references/LAYOUT_CONTRACT.md)
+and [wheel contracts](../../../references/WHEEL_CONTRACT.md).
 The existing pointer capability loads only when the graph mounts.
 
 `editable_graph_test.rb` performs 45 edits, checks all 40 undo and redo steps,
