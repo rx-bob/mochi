@@ -55,6 +55,12 @@ not replayed; they do not unregister the pending receiver. Duplicate
 event/handler/instance registrations are idempotent. Subscribe/unsubscribe and
 emit in a single handler follow Ruby statement order, including self-subscription.
 
+Child event attributes must contain exactly one braced Ruby handler, for
+example `on:action="{handle($event)}"`. Unbraced values such as
+`on:action="handle"`, empty values, and values mixed with literal text now fail
+compilation at the authored attribute. Multiple child events on one element
+remain supported.
+
 Payloads must be Hashes containing transportable values (nested Hash/Array,
 String/Symbol, finite number, boolean, or nil), with String/Symbol keys.
 Objects, cycles, non-finite numbers and nesting deeper than 16 levels raise a

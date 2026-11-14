@@ -104,6 +104,28 @@ describe EventArgumentExtractor do
     args.map { |arg| arg["kind"].as_s }.should eq(["event", "literal"])
   end
 
+  it "rejects empty, unbraced, and mixed-literal child event bindings" do
+    [
+      %Q(<child-row on:action=""></child-row>),
+      %Q(<child-row on:action="handle"></child-row>),
+      %Q(<child-row on:action="prefix {handle} suffix"></child-row>),
+    ].each do |html|
+      error = expect_raises(TemplateExpressionError) do
+        EventArgumentExtractor.process(html)
+      end
+      error.message.should contain("invalid child event binding")
+      error.message.should contain("on:action")
+      error.message.should contain("on:action=\"{handle($event)}\"")
+    end
+  end
+
+  it "keeps multiple valid child event bindings" do
+    html = %Q(<child-row on:action="{save($event)}" on:change="{changed}"></child-row>)
+    _result, calls = EventArgumentExtractor.rewrite(html) { |call| call.method_name }
+
+    calls.map(&.event).should eq(["action", "change"])
+  end
+
   it "parses synchronous event modifiers into a loader-readable attribute" do
     html = %Q(<a href="#save" onclick.prevent.stop.self="{save(item.id)}">Save</a>)
     result = EventArgumentExtractor.process(html)

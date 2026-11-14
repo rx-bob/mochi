@@ -72,9 +72,11 @@ class EventArgumentExtractor
     calls = [] of EventCall
     result = TemplateAttributes.rewrite(html, expression_parser) do |attribute|
       event_name = attribute.name.downcase
+      if event_name.starts_with?("on:")
+        validate_component_binding!(attribute, html, expression_parser)
+      end
       next nil unless EVENT_NAME.matches?(event_name)
       value = attribute.value(html).strip
-      next nil unless value.starts_with?("{")
       expressions = expression_parser.scan(value, "event", validate: false)
       next nil unless expressions.size == 1 && expressions.first.full_text(value) == value
       content = expressions.first.source
@@ -86,6 +88,23 @@ class EventArgumentExtractor
       replacement.call(call)
     end
     {result, calls}
+  end
+
+  private def self.validate_component_binding!(attribute : TemplateAttribute, html : String,
+                                               parser : TemplateExpressionParser)
+    value = attribute.value(html).strip
+    expressions = parser.scan(value, "event", validate: false)
+    valid_name = EVENT_NAME.matches?(attribute.name.downcase)
+    valid = valid_name && expressions.size == 1 && expressions.first.full_text(value) == value
+    return if valid
+
+    span = parser.locator.try(&.locate(attribute.name))
+    raise TemplateExpressionError.new(
+      "invalid child event binding #{attribute.name.inspect}=" \
+      "#{attribute.value(html).inspect}; expected one braced handler, " \
+      "for example on:action=\"{handle($event)}\"",
+      span,
+    )
   end
 
   # The loader reads modifiers from the same element as the event handler so

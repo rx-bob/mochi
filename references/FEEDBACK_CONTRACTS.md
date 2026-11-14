@@ -1,5 +1,9 @@
 # Browser and Ruby feedback evidence
 
+The newer Cowboy port reports from 2026-11-14 are investigated separately in
+[Cowboy feedback review](COWBOY_FEEDBACK_REVIEW.md), with standalone Mochi probes,
+three-engine browser results, and explicit limits on historical claims.
+
 Evidence index for the 17 reports reviewed on 2026-11-12. Status describes Mochi framework evidence; passing a product integration test does not establish a general contract.
 
 | Report | Framework evidence/status | Owner |

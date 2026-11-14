@@ -1,0 +1,256 @@
+{
+  "ruby_version": "4.0.9",
+  "compiler_sha256": "a461c719e53c5c162fc13708373ba839ad3fd5bbbc13154f1e9b8b3b13a26d1e",
+  "compile": [
+    {
+      "name": "methods_118",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_119",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_250",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_251",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_252",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_253",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_254",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_255",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_256",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_257",
+      "exit": 1,
+      "diagnostic": [
+        "probe-root: lib/ProbeRoot.rb:771: unsupported OP_TCLASS (Exception)"
+      ]
+    },
+    {
+      "name": "methods_260",
+      "exit": 1,
+      "diagnostic": [
+        "probe-root: lib/ProbeRoot.rb:771: unsupported OP_TCLASS (Exception)"
+      ]
+    },
+    {
+      "name": "methods_118_bindings_130",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "methods_118_bindings_140",
+      "exit": 1,
+      "diagnostic": [
+        "probe-root: lib/ProbeRoot.rb:635: unsupported OP_TCLASS (Exception)"
+      ]
+    },
+    {
+      "name": "missing_css_import",
+      "exit": 1,
+      "diagnostic": [
+        "Error processing file <build>/pre_tp/lib/ProbeRoot.rb: Component 'ProbeRoot' CSS import \"missing.css\" at lib/ProbeRoot.rb:1 was not found (resolved to <build>/pre_tp/lib/missing.css) (Exception)"
+      ]
+    },
+    {
+      "name": "unbraced_event",
+      "exit": 0,
+      "diagnostic": [
+
+      ],
+      "template": "<review-child on:action=\"handle\"></review-child>"
+    },
+    {
+      "name": "state_router",
+      "exit": 0,
+      "diagnostic": [
+
+      ]
+    },
+    {
+      "name": "stored_range",
+      "exit": 1,
+      "diagnostic": [
+        "probe-root: lib/ProbeRoot.rb:4: unsupported OP_RANGE_INC (Exception)"
+      ]
+    }
+  ],
+  "ruby": [
+    {
+      "name": "array_type",
+      "expression": "[].is_a?(Array)",
+      "mri": "true",
+      "exit": 1,
+      "evidence": [
+        "FAIL [chromium] array_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "FAIL [firefox] array_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "FAIL [webkit] array_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1 mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1"
+      ]
+    },
+    {
+      "name": "hash_type",
+      "expression": "{}.is_a?(Hash)",
+      "mri": "true",
+      "exit": 1,
+      "evidence": [
+        "FAIL [chromium] hash_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1",
+        "FAIL [firefox] hash_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1",
+        "FAIL [webkit] hash_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1 mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Hash at lib/ProbeRoot.rb:1"
+      ]
+    },
+    {
+      "name": "integer_type",
+      "expression": "1.is_a?(Integer)",
+      "mri": "true",
+      "exit": 1,
+      "evidence": [
+        "FAIL [chromium] integer_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1",
+        "FAIL [firefox] integer_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1",
+        "FAIL [webkit] integer_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1 mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Integer at lib/ProbeRoot.rb:1"
+      ]
+    },
+    {
+      "name": "float_type",
+      "expression": "1.0.is_a?(Float)",
+      "mri": "true",
+      "exit": 1,
+      "evidence": [
+        "FAIL [chromium] float_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1",
+        "FAIL [firefox] float_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1",
+        "FAIL [webkit] float_type: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1 mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown class ProbeRoot::Float at lib/ProbeRoot.rb:1"
+      ]
+    },
+    {
+      "name": "two_argument_slice",
+      "expression": "a = [1,2,3,4]; n = 2; a[1,n].join(\",\")",
+      "mri": "2,3",
+      "exit": 0,
+      "evidence": [
+        "PASS [chromium] two_argument_slice",
+        "PASS [firefox] two_argument_slice",
+        "PASS [webkit] two_argument_slice"
+      ]
+    },
+    {
+      "name": "unshift",
+      "expression": "a = [2,3]; a.unshift(1); a.join(\",\")",
+      "mri": "1,2,3",
+      "exit": 1,
+      "evidence": [
+        "FAIL [chromium] unshift: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "FAIL [firefox] unshift: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "FAIL [webkit] unshift: <probe>/test/probe_test.rb:2: console error: [mochi] probe-root mount failed Error: mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1 mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1",
+        "Mochi runtime error (lib/ProbeRoot.rb:1): mochi-loader: patch flush failed: ProbeRoot#__mochi_bind_0 (binding 0): unknown method at lib/ProbeRoot.rb:1"
+      ]
+    },
+    {
+      "name": "computed_inclusive_slice",
+      "expression": "a = [1,2,3,4]; n = 2; a[1..n].join(\",\")",
+      "mri": "2,3",
+      "exit": 1,
+      "evidence": [
+        "probe-root: lib/ProbeRoot.rb:4: unsupported OP_RANGE_INC"
+      ]
+    },
+    {
+      "name": "computed_exclusive_slice",
+      "expression": "a = [1,2,3,4]; n = 3; a[1...n].join(\",\")",
+      "mri": "2,3",
+      "exit": 1,
+      "evidence": [
+        "probe-root: lib/ProbeRoot.rb:4: unsupported OP_RANGE_EXC"
+      ]
+    },
+    {
+      "name": "negative_slice",
+      "expression": "a = [1,2,3,4]; a[1..-1].join(\",\")",
+      "mri": "2,3,4",
+      "exit": 1,
+      "evidence": [
+        "probe-root: lib/ProbeRoot.rb:4: unsupported OP_RANGE_INC"
+      ]
+    },
+    {
+      "name": "beginless_slice",
+      "expression": "a = [1,2,3,4]; n = 2; a[..n].join(\",\")",
+      "mri": "1,2,3",
+      "exit": 1,
+      "evidence": [
+        "probe-root: lib/ProbeRoot.rb:4: unsupported OP_RANGE_INC"
+      ]
+    },
+    {
+      "name": "endless_slice",
+      "expression": "a = [1,2,3,4]; n = 2; a[n..].join(\",\")",
+      "mri": "3,4",
+      "exit": 1,
+      "evidence": [
+        "probe-root: lib/ProbeRoot.rb:4: unsupported OP_RANGE_INC"
+      ]
+    }
+  ],
+  "reviewed_commit": "97b94f76bd2d110767ccff6f43d35b6466c9f673",
+  "date": "2026-11-14"
+}
