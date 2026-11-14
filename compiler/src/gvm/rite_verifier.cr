@@ -188,6 +188,7 @@ class RiteVerifier
                     when 43, 44, 45 then "rescue/ensure (#{name})"
                     when 62         then "nonlocal block return (#{name})"
                     when 67         then "block break (#{name})"
+                    when 100, 101  then "Range expressions (#{name}); use array[start, length] for array slicing"
                     else                 name
                     end
         raise Unsupported.new(construct, context, index, pc)

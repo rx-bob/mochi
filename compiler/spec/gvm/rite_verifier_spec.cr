@@ -40,7 +40,7 @@ RUBY
       "[1].each { break 3 }"           => "block break",
       "[1].each { return 3 }"          => "nonlocal block return",
       "begin; unknown; rescue; 3; end" => "rescue/ensure",
-      "1..3"                           => "OP_RANGE_INC",
+      "1..3"                           => "Range expressions",
     }.each do |expression, construct|
       compile_contract("class Probe\n  def work\n    #{expression}\n  end\nend\n") do |bytes|
         error = expect_raises(RiteVerifier::Unsupported) { RiteVerifier.verify!(bytes, "probe.rb") }
@@ -48,6 +48,12 @@ RUBY
         error.irep_index.should be > 0
         RiteDebugInfo.line_for(bytes, error.irep_index, error.pc).should eq(3)
       end
+    end
+  end
+
+  it "keeps two-argument array slicing supported" do
+    compile_contract("items[1, 2]\n") do |bytes|
+      RiteVerifier.verify!(bytes, "slice.rb")
     end
   end
 

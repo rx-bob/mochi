@@ -398,8 +398,18 @@ class MrbcCompiler
         RiteVerifier.verify!(bytecode, verify_context)
       rescue error : RiteVerifier::Unsupported
         run_mrbc(ruby_file.path, mrb_file.path, source_path, source_line_offset, debug: true)
-        line = RiteDebugInfo.line_for(File.read(mrb_file.path).to_slice, error.irep_index, error.pc) || 1
-        raise "#{source_path || label}:#{line + source_line_offset - 1}: unsupported #{error.construct}"
+        debug_line = RiteDebugInfo.line_for(File.read(mrb_file.path).to_slice, error.irep_index, error.pc)
+        if line = debug_line
+          authored_line = line + source_line_offset - 1
+          if source_path && File.exists?(source_path) && authored_line > File.read_lines(source_path).size
+            raise "#{source_path}: unsupported #{error.construct}; no exact authored source span available " \
+                  "(generated code, IREP ##{error.irep_index} at pc=#{error.pc})"
+          end
+          raise "#{source_path || label}:#{authored_line}: unsupported #{error.construct} " \
+                "(IREP ##{error.irep_index} at pc=#{error.pc})"
+        end
+        raise "#{source_path || label}: unsupported #{error.construct}; no exact authored source span available " \
+              "(IREP ##{error.irep_index} at pc=#{error.pc})"
       end
       body = strip_rite_header(bytecode, label)
 

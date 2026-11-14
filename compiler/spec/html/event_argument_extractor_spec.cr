@@ -113,9 +113,9 @@ describe EventArgumentExtractor do
       error = expect_raises(TemplateExpressionError) do
         EventArgumentExtractor.process(html)
       end
-      error.message.should contain("invalid child event binding")
-      error.message.should contain("on:action")
-      error.message.should contain("on:action=\"{handle($event)}\"")
+      error.message.to_s.should contain("invalid child event binding")
+      error.message.to_s.should contain("on:action")
+      error.message.to_s.should contain("on:action=\"{handle($event)}\"")
     end
   end
 

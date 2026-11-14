@@ -410,9 +410,14 @@ extra control-flow runtime is needed.
 The compiler verifies actual mruby 4.0 instruction numbers and every nested
 IREP before emitting a bundle. Unsupported block `break`, nonlocal block
 `return`, rescue/ensure, Range bytecodes, and `redo` fail at build time with
-the construct name and authored source location. Ordinary method `return`
-and supported while-loop `break`/`next` remain valid. The bare keyword `redo`
-is not a valid handler method name. On opcode rejection, a temporary debug
+the construct name and authored source location when the debug line maps to
+authored code. Range bytecodes explain that array slicing uses
+`array[start, length]`; this preserves Ruby's negative-index and exclusive
+range semantics by leaving Range expressions unsupported. If generated code
+has no exact authored span, the diagnostic says so and includes IREP/PC
+context instead of inventing a source line. Ordinary method `return` and
+supported while-loop `break`/`next` remain valid. The bare keyword `redo` is
+not a valid handler method name. On opcode rejection, a temporary debug
 compile supplies mrbc's line table; successful bundles contain no added debug
 section.
 
