@@ -9,6 +9,7 @@
   var CAPABILITY_LIMIT_KEYS = {
     formatting: { cache_entries: "host_format_cache_entries" },
     pointer: {},
+    layout: { requests: "bindings" },
     drag: { payload_bytes: "host_drag_payload_bytes" },
     files: {
       handles: "host_file_handles",
@@ -1001,13 +1002,6 @@
     });
   }
 
-  function cancelOwnerPointerCaptures(instance, mountToken) {
-    var adapter = state.hostAdapters.get("pointer");
-    if (adapter && typeof adapter.disposeOwner === "function") {
-      adapter.disposeOwner(String(instance), mountToken);
-    }
-  }
-
   function writeFetchEnvelope(module, element, request, envelope) {
     var offset = module._mochi_fetch_inbox_offset ? module._mochi_fetch_inbox_offset() : 0;
     var capacity = module._mochi_fetch_inbox_capacity ? module._mochi_fetch_inbox_capacity() : 0;
@@ -1155,9 +1149,17 @@
     var key = hostRequestKey(request);
     if (!state.pendingHostRequests.has(key)) return;
     state.pendingHostRequests.delete(key);
+    notifyHostResult(module, element, request, envelope);
+  }
+
+  function notifyHostResult(module, element, request, envelope) {
     var liveElement = hostRequestElement(request);
     if (!liveElement || liveElement !== element) return;
     try {
+      if (!request.callback) {
+        if (!envelope.ok) throw new Error(envelope.error || "host capability failed");
+        return;
+      }
       writeHostResult(module, element, request, envelope);
       if (!element._mochiDisconnected) {
         applyPatches(element, module);
@@ -1215,7 +1217,19 @@
     var result;
     try {
       result = operation.call(adapter.async, argsJson, adapter.limits, {
-        owner: String(request.instance), mountToken: request.mountToken, request: request
+        owner: String(request.instance), mountToken: request.mountToken, request: request,
+        isLive: function () { return hostRequestElement(request) === element; },
+        resolveRef: function (reference) {
+          if (hostRequestElement(request) !== element) return null;
+          return findNamedRef(element, reference);
+        },
+        complete: function (value) {
+          deliverHostResult(module, element, request, { ok: true, value: value, error: null });
+        },
+        notify: function (value) {
+          notifyHostResult(module, element, request, { ok: true, value: value, error: null });
+        },
+        cancel: function () { state.pendingHostRequests.delete(hostRequestKey(request)); }
       });
     } catch (error) {
       deliverHostResult(module, element, request, {
@@ -4824,6 +4838,7 @@
               applyPatches(element, mounted.module);
               drainEmits(mounted.module);
               drainFetches(mounted.module);
+              element._observeHostTargets(root);
             } catch (error) {
               element._unmount(mounted.module, mounted.instance, mounted.mountToken);
               throw error;
@@ -4994,9 +5009,9 @@
           this._mochiAttrObserver.disconnect();
           this._mochiAttrObserver = null;
         }
-        if (this._mochiPointerObserver) {
-          this._mochiPointerObserver.disconnect();
-          this._mochiPointerObserver = null;
+        if (this._mochiHostObserver) {
+          this._mochiHostObserver.disconnect();
+          this._mochiHostObserver = null;
         }
         this._mochiModule = null;
         this._mochiInstance = null;
@@ -5013,6 +5028,7 @@
       // VM registrations. The DOM/binding caches clear last, after the hook can
       // no longer read them, and a failed hook never skips VM cleanup.
       _unmount(module, instance, mountToken) {
+        var element = this;
         if (this._mochiUnmounted) return;
         if (mountToken !== undefined && mountToken !== this._mochiMountToken) return;
         this._mochiDisposalScheduled = false;
@@ -5023,16 +5039,20 @@
           this._mochiAttrObserver.disconnect();
           this._mochiAttrObserver = null;
         }
-        if (this._mochiPointerObserver) {
-          this._mochiPointerObserver.disconnect();
-          this._mochiPointerObserver = null;
+        if (this._mochiHostObserver) {
+          this._mochiHostObserver.disconnect();
+          this._mochiHostObserver = null;
         }
 
         var key = String(instance);
         state.unmountedInstances.add(key);
         discardPointerMoves(this);
         cancelOwnerFetches(key);
-        cancelOwnerPointerCaptures(key, mountToken);
+        state.hostAdapters.forEach(function (adapter) {
+          if (typeof adapter.disposeOwner !== "function") return;
+          try { adapter.disposeOwner(key, mountToken); }
+          catch (error) { reportError(element, adapter.name, "dispose", error, module); }
+        });
         var filesAdapter = state.hostAdapters.get("files");
         if (filesAdapter && typeof filesAdapter.releaseOwner === "function") {
           filesAdapter.releaseOwner(key, mountToken);
@@ -5128,24 +5148,30 @@
             });
           }
         }
-        if (Array.isArray(component.capabilities) && component.capabilities.indexOf("pointer") !== -1 &&
+      }
+
+      _observeHostTargets(root) {
+        var element = this;
+        var component = this._mochiComponent || {};
+        if (componentCapabilities(component).some(function (name) {
+              var adapter = state.hostAdapters.get(name);
+              return adapter && typeof adapter.reconcileOwner === "function";
+            }) &&
             typeof global.MutationObserver === "function") {
-          if (this._mochiPointerObserver) this._mochiPointerObserver.disconnect();
-          this._mochiPointerObserver = new global.MutationObserver(function () {
+          if (this._mochiHostObserver) this._mochiHostObserver.disconnect();
+          this._mochiHostObserver = new global.MutationObserver(function () {
             discardPointerMoves(element, element.shadowRoot);
-            var adapter = state.hostAdapters.get("pointer");
-            if (!adapter || typeof adapter.reconcileOwner !== "function" ||
-                element._mochiUnmounted || element._mochiInstance === null ||
+            if (element._mochiUnmounted || element._mochiInstance === null ||
                 element._mochiInstance === undefined) return;
-            try {
-              adapter.reconcileOwner(
-                String(element._mochiInstance), element._mochiMountToken, element.shadowRoot
-              );
-            } catch (error) {
-              reportError(element, "pointer", "reconcile", error, element._mochiModule);
-            }
+            componentCapabilities(component).forEach(function (name) {
+              var adapter = state.hostAdapters.get(name);
+              if (!adapter || typeof adapter.reconcileOwner !== "function") return;
+              try {
+                adapter.reconcileOwner(String(element._mochiInstance), element._mochiMountToken, element.shadowRoot);
+              } catch (error) { reportError(element, name, "reconcile", error, element._mochiModule); }
+            });
           });
-          this._mochiPointerObserver.observe(root, { childList: true, subtree: true });
+          this._mochiHostObserver.observe(root, { childList: true, subtree: true });
         }
       }
 

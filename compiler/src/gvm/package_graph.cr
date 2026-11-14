@@ -57,6 +57,14 @@ module MochiPackaging
       ]
     ),
     CapabilityDefinition.new(
+      "layout",
+      1,
+      "mochi-layout.js",
+      "MochiLayout",
+      [CapabilityOperation.new("measure", "async"), CapabilityOperation.new("observe", "async"), CapabilityOperation.new("cancel", "async")],
+      [{"requests", "bindings"}]
+    ),
+    CapabilityDefinition.new(
       "pointer",
       1,
       "mochi-pointer.js",

@@ -10,6 +10,103 @@ const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
+test("optional layout fits real resized graph bounds and stops observation @ui-graph", async ({ page }) => {
+  const failures: string[] = [];
+  page.on("pageerror", error => failures.push(error.message));
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator("editable-graph-root");
+    await expect(root.locator(".layout-status")).toHaveText("ready");
+    await root.locator(".fit").click();
+    await expect(root.locator(".layout-status")).toHaveText("fitted");
+    const contained = () => root.evaluate(el => {
+      const shadow = el.shadowRoot!;
+      const viewport = shadow.querySelector(".viewport")!.getBoundingClientRect();
+      return [...shadow.querySelectorAll(".node")].every(node => {
+        const bounds = node.getBoundingClientRect();
+        return bounds.left >= viewport.left + 23 && bounds.top >= viewport.top + 23 &&
+          bounds.right <= viewport.right - 23 && bounds.bottom <= viewport.bottom - 23;
+      });
+    });
+    expect(await contained()).toBe(true);
+    for (const [width, height] of [[640, 360], [280, 180]]) {
+      await root.locator(".viewport").evaluate((el, size) => {
+        (el as HTMLElement).style.width = `${size[0]}px`;
+        (el as HTMLElement).style.height = `${size[1]}px`;
+      }, [width, height]);
+      await expect.poll(() => root.locator(".canvas").getAttribute("viewBox")).toMatch(new RegExp(`^0 0 ${width}(?:\\.0)? ${height}(?:\\.0)?$`));
+      await expect.poll(contained).toBe(true);
+    }
+    // Fit scale must also be inverted for captured pointer movement.
+    const node = root.locator("[data-node='b'] circle");
+    const beforeViewport = await root.locator(".viewport").boundingBox();
+    const before = await node.boundingBox();
+    await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
+    await page.mouse.down(); await page.mouse.move(before!.x + before!.width / 2 + 15, before!.y + before!.height / 2 + 10);
+    await page.mouse.up();
+    const after = await node.boundingBox();
+    expect(after!.x - before!.x).toBeCloseTo(15, 0);
+    const afterViewport = await root.locator(".viewport").boundingBox();
+    expect((after!.y - afterViewport!.y) - (before!.y - beforeViewport!.y)).toBeCloseTo(10, 0);
+    await root.locator(".undo").click();
+    await expect.poll(contained).toBe(true);
+
+    await root.locator(".viewport").evaluate(el => { (el as HTMLElement).style.width = "40px"; });
+    await expect(root.locator(".layout-status")).toHaveText("too small");
+    await root.locator(".viewport").evaluate(el => { (el as HTMLElement).style.width = "0px"; });
+    await expect(root.locator(".layout-status")).toHaveText("hidden");
+    await root.locator(".viewport").evaluate(el => { (el as HTMLElement).style.width = "280px"; });
+    await expect(root.locator(".layout-status")).toHaveText("fitted");
+    await root.locator(".viewport").evaluate(el => { (el as HTMLElement).style.display = "none"; });
+
+    await expect(root.locator(".layout-status")).toHaveText("hidden");
+    expect(await root.locator(".scene").getAttribute("transform")).not.toMatch(/NaN|Infinity/);
+    await root.locator(".viewport").evaluate(el => { (el as HTMLElement).style.display = "block"; });
+    await expect(root.locator(".layout-status")).toHaveText("fitted");
+    await root.locator(".stop-layout").click();
+    await expect(root.locator(".layout-status")).toHaveText("stopped");
+    const stopped = await root.locator(".canvas").getAttribute("viewBox");
+    await root.locator(".viewport").evaluate(el => { (el as HTMLElement).style.width = "350px"; });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await root.locator(".canvas").getAttribute("viewBox")).toBe(stopped);
+    await root.locator(".fit").click(); // one-shot measurement still works
+    await expect(root.locator(".layout-status")).toHaveText("fitted");
+    for (const id of ["a", "b", "c", "d"]) {
+      await root.locator(`[data-node='${id}']`).dispatchEvent("click");
+      await root.locator(".remove-node").click();
+    }
+    await root.locator(".fit").click();
+    await expect(root.locator(".layout-status")).toHaveText("empty");
+    expect(await root.locator(".scaled").getAttribute("transform")).toBe("scale(1)");
+    expect(failures).toEqual([]);
+  }, "<editable-graph-root></editable-graph-root>");
+});
+
+test("layout package is absent when unused and adapter loads only for graph mount @ui-graph", async ({ page }) => {
+  await withCompiledProject(path.join(repoRoot, "compiler/spec/fixtures/payload/minimal"), async (_url, bundle) => {
+    expect(fs.existsSync(path.join(bundle, "mochi-layout.js"))).toBe(false);
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundle, "mochi-manifest.json"), "utf8"));
+    expect(manifest.capabilities?.layout).toBeUndefined();
+    expect(Object.keys(manifest.packages).some(key => key.includes("builtin_layout"))).toBe(false);
+  });
+  const requests: string[] = [];
+  page.on("request", request => requests.push(request.url()));
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    await expect(page.locator("inspector-root .total")).toHaveText("480");
+    expect(requests.filter(url => url.endsWith("/mochi-layout.js"))).toHaveLength(0);
+    for (let index = 0; index < 3; index++) {
+      await page.evaluate(() => document.body.appendChild(document.createElement("editable-graph-root")));
+      await expect(page.locator("editable-graph-root .layout-status")).toHaveText("ready");
+      await page.locator("editable-graph-root .fit").click();
+      await expect(page.locator("editable-graph-root .layout-status")).toHaveText("fitted");
+      await page.locator("editable-graph-root").evaluate(el => el.remove());
+    }
+    expect(requests.filter(url => url.endsWith("/mochi-layout.js"))).toHaveLength(1);
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().pendingHostRequests)).toBe(0);
+  }, "<inspector-root></inspector-root>");
+});
+
 test("inspector renders exactly 12 of 480 records without browser errors @ui-inspector", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

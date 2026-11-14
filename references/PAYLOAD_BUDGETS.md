@@ -57,15 +57,41 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 497,681 | 161,170 | 3 |
-| Minimal initial | 501,359 | 162,875 | 7 |
-| Feature initial | 502,171 | 163,062 | 7 |
+| Core runtime | 499,006 | 161,392 | 3 |
+| Minimal initial | 502,684 | 163,097 | 7 |
+| Feature initial | 503,496 | 163,284 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 516,407 | 167,663 | 11 |
-| Network initial | 506,494 | 164,373 | 8 |
-| Network total | 506,494 | 164,373 | 8 |
+| Feature total | 517,732 | 167,885 | 11 |
+| Network initial | 507,819 | 164,595 | 8 |
+| Network total | 507,819 | 164,595 | 8 |
 
-### Structured computed fixtures and persistent storage (E4.S2)
+### Optional layout (E5.S1)
+
+Shared loader support grows **1,241 raw / 211 gzip bytes** against E4.S3.
+This pays for mount-guarded static-ref resolution, repeat notifications,
+frame-phase completion, and generic adapter cleanup/reconciliation. The loader
+is **222,886 raw / 47,263 gzip bytes**. WASM, glue, memory ceilings, and all
+capacity defaults remain unchanged. The exact budgets include this core cost;
+the formatting feature's later load is unchanged.
+
+`MochiLayout` and `mochi-layout.js` are absent from the minimal bundle and load
+only when a dependent component mounts. Their separate optional costs are
+recorded in the E5.S1 evidence in `UI_FIXTURE_CONTRACTS.md`. The compiler graph
+and browser tests enforce omission and lazy loading. See
+[the layout contract](LAYOUT_CONTRACT.md) for ownership and coordinate rules.
+
+### Capacity lifecycle diagnostics (E4.S3 historical delta)
+
+
+Computed-entry allocation failure now retains the rejected method's source
+context even before its VM frame exists. This adds **84 raw / 11 gzip bytes**
+to WASM and core against E4.S2. WASM measures **212,950 raw / 96,520 gzip bytes**;
+loader and glue are unchanged. The exact ceilings above include only this
+measured change. Stress fixtures and assertions ship no application runtime
+bytes. Default capacities, capacity fingerprint, memory maximum, and region
+accounting are unchanged.
+
+### Structured computed fixtures and persistent storage (E4.S2 historical delta)
 
 The 480-record fixture reproduced a WASM backing-storage overrun before its
 declared state limit. Persistent arenas and GC bookkeeping now have bounded

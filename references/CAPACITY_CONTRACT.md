@@ -47,6 +47,11 @@ normal failure/retry semantics below still apply. See
 [explicit computed values](RUBY_SURFACE.md#explicit-computed-values) for the
 root-replacement boundary.
 
+Computed-entry allocation can fail before a method has a VM frame. The error
+still names that computed method and its authored source, preserving the
+binding ID and requested/used/capacity counts. Nested entry exhaustion must not
+be attributed to the calling projection merely because its frame exists.
+
 The build profile also contains host bounds for bridge envelopes, fetches,
 formatting cache entries, events, drag payloads, and file handles/readers.
 Manifest metadata copies only the limits required by each declared capability.
@@ -117,6 +122,43 @@ outboxes on failure. Mochi does not roll back arbitrary Ruby statements that
 already changed persistent state before the rejected operation; applications
 should treat the reported operation as failed and decide how to repair that
 state.
+
+## Three-fixture recovery evidence
+
+`e2e/tests/gvm_capacity_boundaries.spec.ts` compiles a deliberately small
+profile: 128 scratch objects, 8,192 scratch bytes, 256 scratch slots, 524,288
+state bytes, four bindings/cache entries, and two component registrations.
+The authored `probes/13-capacity-lifecycle/lib/CapacityComputedRoot.rb` forces
+scratch exhaustion during computed flush, nested cache-entry exhaustion, and
+persistent-byte exhaustion during incremental retention. Failures identify the
+actual resource, exact authored method line, counts, and compiled profile.
+
+The handler changes status and queues a storage command before rejection.
+Neither status nor projection DOM updates and the queued command never runs.
+Recovery reveals the earlier `pending` status; the state-pressure case also
+reveals a positive retained count before clearing it. This verifies the lack
+of arbitrary state rollback rather than hiding it behind a reset. Every case
+checks an independent component, a smaller valid operation, and disposal/remount.
+A computed failure during initial mounting releases partial registrations and
+cache entries without publishing its preceding successful binding. Six failed
+mounts exceed the four-slot cache limit before a successful remount; command
+absence is checked again after subsequent successful work.
+
+`e2e/tests/gvm_ui_capacity_lifecycle.spec.ts` uses the real 480-record inspector,
+editable graph, and nested form under a separate working-set profile: 1,024
+scratch objects / 65,536 bytes / 2,048 slots; 24,576 state objects / 1,048,576
+bytes / 65,536 slots / 8,192 ivars; 256 bindings and 16 components. It runs
+100 page/filter/append, graph edit/undo/redo, and form close/reopen cycles.
+Graph history crosses its 40-snapshot bound; each recreated form editor starts
+with its initial draft and subscribes once. Another 100 full mount/disposal
+cycles return bindings, subscriptions, live state allocations, and reusable
+state bytes to the warmed baseline. These are correctness checks, not timing
+measurements. No arena defaults or memory ceilings are increased.
+
+Native computed tests also run 100 rooting/replacement/failure/recovery/disposal
+cycles while a second cache remains live. Disposal returns live allocations
+and entry counts to baseline. Existing promotion-failure and cache-capacity
+tests remain part of the same suite.
 
 The standalone row-capacity browser fixture renders 540 ordinary rows of hashes
 under the default profile. With `scratch_objects: 512`, its live row projection

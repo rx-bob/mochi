@@ -33,6 +33,7 @@ const COMPONENT = {
 
 const TEST_CAPACITY_FINGERPRINT = "a".repeat(64);
 const TEST_HOST_CAPACITIES = {
+  bindings: 2048,
   host_patch_bytes: 65536,
   host_fetch_envelope_bytes: 65536,
   host_emit_envelope_bytes: 16384,
@@ -1441,6 +1442,17 @@ test("pointer capture commands run with an owned target during the matching even
   element.remove();
   await flushLifecycle();
   assert.deepEqual(disposed, [[ownerKey, mountToken]]);
+  // The retained shadow root keeps event listeners, but owner observation
+  // must be recreated for every mount after teardown disconnected it.
+  dom.window.document.body.appendChild(element);
+  await element._mochiReady;
+  assert.notEqual(element._mochiMountToken, mountToken);
+  element.shadowRoot.querySelector("button").remove();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reconciled.length, 2);
+  assert.equal(reconciled[1][1], element._mochiMountToken);
+  element.remove(); await flushLifecycle();
+
 });
 
 test("drag events dispatch Ruby and DataTransfer commands synchronously within the native window", async () => {
@@ -6552,6 +6564,52 @@ test("async host capabilities deliver typed results before the next patch", asyn
     callback: "on_ping",
     envelope: { ok: true, value: { count: 42, ok: true }, error: null },
   }]);
+  assert.equal(loader.debugStats().pendingHostRequests, 0);
+});
+
+test("owned adapter notifications and refs cannot cross a reused mount", async () => {
+  const contexts = [], disposed = [];
+  const { module, log } = await setup([PROBE_COMPONENT], {
+    manifest: probeManifest(),
+    hostModuleFactory: async () => ({ name: "probe", version: 1,
+      async: { ping: (_args, _limits, context) => { contexts.push(context); context.complete({ initial: true }); return { duplicate: true }; } },
+      disposeOwner: (owner, token) => disposed.push([owner, token]),
+    }),
+  });
+  module.reuseInstance(9);
+  module.queueEmit(probeLine(9, []));
+  const first = document.createElement("probe-panel");
+  document.body.appendChild(first); await first._mochiReady; await flushLifecycle();
+  const ref = document.createElement("div"); ref.setAttribute("data-mochi-ref", "viewport");
+  first.shadowRoot.appendChild(ref);
+  assert.equal(contexts[0].resolveRef("viewport"), ref);
+  assert.deepEqual(log.deliveredHostResults[0].envelope.value, { initial: true });
+  assert.equal(log.deliveredHostResults.length, 1);
+  contexts[0].notify({ width: 400 });
+  assert.equal(log.deliveredHostResults.length, 2);
+  first.remove(); await flushLifecycle();
+  assert.equal(disposed.length, 1);
+  assert.equal(contexts[0].resolveRef("viewport"), null);
+  module.reuseInstance(9); module.queueEmit(probeLine(9, []));
+  const second = document.createElement("probe-panel");
+  document.body.appendChild(second); await second._mochiReady; await flushLifecycle();
+  contexts[0].notify({ stale: true });
+  assert.equal(log.deliveredHostResults.length, 3);
+  contexts[1].notify({ width: 500 });
+  assert.equal(log.deliveredHostResults.length, 4);
+});
+
+test("empty async callbacks acknowledge cancellation without calling Ruby", async () => {
+  const { loader, module, log } = await setup([PROBE_COMPONENT], {
+    manifest: probeManifest(),
+    hostModuleFactory: async () => ({ name: "probe", version: 1, async: { ping: () => true } }),
+  });
+  module.reuseInstance(9);
+  const command = JSON.parse(probeLine(9, [])); command.callback = "";
+  module.queueEmit(JSON.stringify(command) + "\n");
+  const element = document.createElement("probe-panel"); document.body.appendChild(element);
+  await element._mochiReady; await flushLifecycle();
+  assert.equal(log.deliveredHostResults.length, 0);
   assert.equal(loader.debugStats().pendingHostRequests, 0);
 });
 

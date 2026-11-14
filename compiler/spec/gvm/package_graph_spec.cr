@@ -387,6 +387,35 @@ RUBY
     end
   end
 
+  it "loads layout only through reachable Ruby measurement dependencies" do
+    root = File.join(Dir.tempdir, "mochi_package_layout_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      layout = dependency_prelude(root, "lib/mochi_builtin_layout.rb", "class MochiLayout\nend\n")
+      plain = dependency_component(root, "plain-layout", "PlainLayout", "class PlainLayout\nend\n")
+      helper = dependency_helper(root, "mochi-helpers-layout.chi", "lib/layout_helper.rb", <<-RUBY)
+class LayoutHelper
+  def self.watch
+    MochiLayout.observe("viewport", "on_viewport")
+  end
+end
+RUBY
+      measured = dependency_component(root, "measured-layout", "MeasuredLayout", "class MeasuredLayout\n  def mounted\n    LayoutHelper.watch\n  end\nend\n")
+      measured.manifest.helper_chi = helper.key
+      graph = dependency_graph(root, [plain, measured], [layout], [helper])
+      plain.manifest.capabilities.should eq([] of String)
+      measured.manifest.capabilities.should eq(["layout"])
+      graph.capabilities["layout"].host.should eq("mochi-layout.js")
+      graph.capabilities["layout"].limit_keys.should eq([{"requests", "bindings"}])
+      graph.capabilities["layout"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"measure", "async"}, {"observe", "async"}, {"cancel", "async"}])
+      unused = dependency_graph(root, [plain], [layout], [] of HelperUnit)
+      unused.has_capability?("layout").should be_false
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "loads the pointer adapter only for components that reach MochiPointer" do
     root = File.join(Dir.tempdir, "mochi_package_pointer_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

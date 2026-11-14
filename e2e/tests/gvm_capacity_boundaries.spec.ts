@@ -10,6 +10,7 @@ const repo = path.resolve(__dirname, "../..");
 const capacities = {
   scratch_objects: 128, scratch_bytes: 8192, scratch_slots: 256,
   scratch_ivars: 32, state_components: 2, bindings: 4, host_patch_bytes: 1024,
+  state_bytes: 524288,
   host_emit_envelope_bytes: 1024,
   // Keep the optional file decoder's reservation valid under the deliberately
   // tiny scratch byte pool; this suite does not exercise file capabilities.
@@ -105,6 +106,7 @@ test.beforeAll(async () => {
   for (const [name, source] of Object.entries({ CapacityProbe: probe, BindingProbe: bindingProbe, PropsProbe: propsProbe })) {
     fs.writeFileSync(path.join(directory, "lib", `${name}.rb`), source);
   }
+  fs.copyFileSync(path.join(repo, "e2e/fixtures/ui_contracts/probes/13-capacity-lifecycle/lib/CapacityComputedRoot.rb"), path.join(directory, "lib/CapacityComputedRoot.rb"));
   fs.writeFileSync(path.join(directory, "index.html"), '<!doctype html><script src="mochi-loader.js"></script>');
   fs.writeFileSync(path.join(directory, "capacity.json"), JSON.stringify({ schema_version: 1, capacities }));
   const bundle = path.join(directory, "bundle");
@@ -121,6 +123,73 @@ test.beforeAll(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   url = `http://127.0.0.1:${(server.address() as any).port}`;
+});
+
+for (const [action, resource, limit, method] of [
+  ["objects", "scratch objects", 128, "projection"],
+  ["bytes", "scratch bytes", 8192, "projection"],
+  ["cache", "computed cache entries", 4, "four"],
+  ["state", "state bytes", 524288, "fill_state"],
+] as const) {
+  test(`computed lifecycle: ${resource} preserves DOM and recovers with an independent instance`, async ({ page }) => {
+    const crashes: string[] = [];
+    page.on("pageerror", error => crashes.push(error.message));
+    await page.goto(url);
+    expect(await mount(page)).toBe("");
+    expect(await mount(page, "capacity-computed-root")).toBe("");
+    const host = page.locator("capacity-computed-root");
+    await expect(host.locator(".projection")).toHaveText("1");
+    await host.locator(`.${action}`).click();
+    await expect.poll(() => host.evaluate((el: any) => el.mochiError?.message || "")).toContain(`${resource} exhausted`);
+    const error = await host.evaluate((el: any) => el.mochiError);
+    expect(error.message).toMatch(new RegExp(`requested \\d+, used \\d+ of ${limit}`));
+    expect(error.message).toMatch(/capacity profile [a-f0-9]{64}/);
+    const source = fs.readFileSync(path.join(directory, "lib/CapacityComputedRoot.rb"), "utf8").split("\n");
+    expect(error.message).toContain(`lib/CapacityComputedRoot.rb:${source.indexOf(`  def ${method}`) + 1}`);
+    await expect(host.locator(".status")).toHaveText("ready");
+    await expect(host.locator(".projection")).toHaveText("1");
+    expect(await page.evaluate(() => localStorage.getItem("capacity-projection"))).toBeNull();
+    // Recovery is possible without rolling back arbitrary preceding writes.
+    await page.locator("capacity-probe").getByRole("button", { name: "valid", exact: true }).click();
+    await expect(page.locator("capacity-probe p")).toHaveText("valid");
+    await host.locator(".recover").click();
+    await expect(host.locator(".status")).toHaveText(action === "state" ? /^pending:[1-9]\d*:recovered$/ : "pending:0:recovered");
+    await expect(host.locator(".projection")).toHaveText("1");
+    await host.evaluate(el => el.remove());
+    expect(await mount(page, "capacity-computed-root")).toBe("");
+    await expect(page.locator("capacity-computed-root .projection")).toHaveText("1");
+    expect(await page.evaluate(() => localStorage.getItem("capacity-projection"))).toBeNull();
+    expect(crashes).toEqual([]);
+  });
+}
+
+test("failed computed mount releases caches and bindings before a valid remount", async ({ page }) => {
+  await page.goto(url);
+  expect(await mount(page)).toBe("");
+  // More failed mounts than cache slots: even one leaked entry per failure
+  // would change the resource or prevent the final healthy mount.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const failure = await page.evaluate(async () => {
+      await customElements.whenDefined("capacity-computed-root");
+      const el = document.createElement("capacity-computed-root") as any;
+      el.setAttribute("fail_mount", "true");
+      document.body.appendChild(el);
+      try { await el._mochiReady; return "unexpected success"; }
+      catch (error) { return String(error); }
+    });
+    expect(failure).toContain("scratch objects exhausted");
+    expect(failure).toContain("lib/CapacityComputedRoot.rb:");
+    expect(await page.locator("capacity-computed-root").evaluate(el => el.shadowRoot?.querySelector(".status")?.textContent)).not.toBe("ready");
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().components)).toBe(1);
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().bindings)).toBe(1);
+    await page.locator("capacity-computed-root").evaluate(el => el.remove());
+    await page.locator("capacity-probe").getByRole("button", { name: "valid", exact: true }).click();
+    await expect(page.locator("capacity-probe p")).toHaveText("valid");
+  }
+  expect(await mount(page, "capacity-computed-root")).toBe("");
+  await expect(page.locator("capacity-computed-root .projection")).toHaveText("1");
+  await page.locator("capacity-probe").getByRole("button", { name: "valid", exact: true }).click();
+  await expect(page.locator("capacity-probe p")).toHaveText("valid");
 });
 test.afterAll(async () => {
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -151,7 +220,8 @@ for (const [action, resource, limit] of [
     page.on("request", (request) => { if (request.url().includes("/must-not-run")) leakedRequests.push(request.url()); });
     await page.goto(url);
     expect(await mount(page)).toBe("");
-    const host = page.locator("capacity-probe");
+    expect(await mount(page)).toBe("");
+    const host = page.locator("capacity-probe").first();
     await expect(host.locator("p")).toHaveText("ready");
     await host.getByRole("button", { name: action, exact: true }).click();
     await expect.poll(() => host.evaluate((el: any) => el.mochiError?.message || "")).toContain(`${resource} exhausted`);
@@ -161,6 +231,9 @@ for (const [action, resource, limit] of [
     expect(error).toContain("lib/CapacityProbe.rb:");
     expect(error).toMatch(/capacity profile [a-f0-9]{64}/);
     await expect(host.locator("p")).toHaveText("ready");
+    const other = page.locator("capacity-probe").last();
+    await other.getByRole("button", { name: "valid", exact: true }).click();
+    await expect(other.locator("p")).toHaveText("valid");
     await host.getByRole("button", { name: "valid", exact: true }).click();
     await expect(host.locator("p")).toHaveText("valid");
     expect(await page.evaluate(() => [localStorage.getItem("capacity-command"), localStorage.getItem("capacity-failed")])).toEqual([null, null]);

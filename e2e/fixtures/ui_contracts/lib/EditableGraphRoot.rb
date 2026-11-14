@@ -22,6 +22,9 @@ class EditableGraphRoot
   @drag_y
   @drag_moved
   @terminal_reason
+  @scale
+  @fit_enabled
+  @layout_status
 
   computed :rendered_edges, depends_on: [:@nodes, :@edges]
 
@@ -52,6 +55,81 @@ class EditableGraphRoot
     @drag_y = 0
     @drag_moved = false
     @terminal_reason = ""
+    @scale = 1
+    @fit_enabled = false
+    @layout_status = "ready"
+  end
+
+  def mounted
+    MochiLayout.observe("viewport", "on_viewport")
+  end
+
+  def on_viewport(result)
+    unless result["ok"]
+      @layout_status = result["error"]
+      return
+    end
+    bounds = result["value"]
+    if bounds["width"] <= 0 || bounds["height"] <= 0
+      @layout_status = "hidden"
+      return
+    end
+    cancel_gesture("resize") if @width != bounds["width"] || @height != bounds["height"]
+    @width = bounds["width"]
+    @height = bounds["height"]
+    @layout_status = "ready"
+    fit_model if @fit_enabled
+  end
+
+  def fit_view
+    cancel_gesture("fit")
+    @fit_enabled = true
+    MochiLayout.measure("viewport", "on_viewport")
+  end
+
+  def stop_layout
+    MochiLayout.cancel("viewport")
+    @layout_status = "stopped"
+  end
+
+  def fit_model
+    if @nodes.empty?
+      @offset_x = 0
+      @offset_y = 0
+      @scale = 1
+      @layout_status = "empty"
+      return
+    end
+    padding = 24
+    if @width <= padding * 2 || @height <= padding * 2
+      @layout_status = "too small"
+      return
+    end
+    first = @nodes[0]
+    left = first["x"] - first["radius"]
+    top = first["y"] - first["radius"]
+    right = first["x"] + 18 + first["label"].length * 9
+    right = first["x"] + first["radius"] if first["x"] + first["radius"] > right
+    bottom = first["y"] + first["radius"]
+    @nodes.each do |node|
+      x1 = node["x"] - node["radius"]
+      y1 = node["y"] - node["radius"]
+      # The fixture uses 14px monospace labels; nine model units per
+      # character conservatively include each label in the model bounds.
+      x2 = node["x"] + 18 + node["label"].length * 9
+      x2 = node["x"] + node["radius"] if node["x"] + node["radius"] > x2
+      y2 = node["y"] + node["radius"]
+      left = x1 if x1 < left
+      top = y1 if y1 < top
+      right = x2 if x2 > right
+      bottom = y2 if y2 > bottom
+    end
+    scale_x = (@width - padding * 2).to_f / (right - left)
+    scale_y = (@height - padding * 2).to_f / (bottom - top)
+    @scale = scale_x < scale_y ? scale_x : scale_y
+    @offset_x = (@width - (right - left) * @scale) / 2 - left * @scale
+    @offset_y = (@height - (bottom - top) * @scale) / 2 - top * @scale
+    @layout_status = "fitted"
   end
 
   def edge(id, from, to, order)
@@ -218,8 +296,8 @@ class EditableGraphRoot
 
   def move_drag(event)
     return if @pointer_id < 0 || event["pointer_id"] != @pointer_id
-    x = @drag_x + event["client_x"] - @press_x
-    y = @drag_y + event["client_y"] - @press_y
+    x = @drag_x + (event["client_x"] - @press_x) / @scale
+    y = @drag_y + (event["client_y"] - @press_y) / @scale
     @drag_moved = x != @drag_x || y != @drag_y
     @nodes = @nodes.map do |node|
       if node["id"] == @drag_node
@@ -298,12 +376,17 @@ class EditableGraphRoot
       <button class="restore" onclick="{restore_edge}">Restore middle edge</button>
       <button class="pan" onclick="{pan}">Pan graph</button>
       <button class="toggle" onclick="{toggle}">Toggle graph</button>
+      <button class="fit" onclick="{fit_view}">Fit graph</button>
+      <button class="stop-layout" onclick="{stop_layout}">Stop resize observation</button>
+      <output class="layout-status">{@layout_status}</output>
+      <div class="viewport" ref="viewport" style="width:400px;height:220px;max-width:100%;display:{@open ? 'block' : 'none'}">
       {if @open}
-        <svg class="canvas" viewBox="0 0 {@width} {@height}" width="400" height="220" role="img" aria-label="Editable workflow" style="touch-action: none"
+        <svg class="canvas" viewBox="0 0 {@width} {@height}" width="100%" height="100%" role="img" aria-label="Editable workflow" style="touch-action: none;font:14px monospace"
              onpointermove="{move_drag($event)}" onpointerup="{finish_drag($event)}"
              onpointercancel="{finish_drag($event)}" onlostpointercapture="{finish_drag($event)}">
           <defs><marker id="arrowhead" viewBox="0 0 8 8" refX="{@arrow_size}" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 Z" fill="currentColor"></path></marker></defs>
           <g class="scene" transform="translate({@offset_x} {@offset_y})">
+            <g class="scaled" transform="scale({@scale})">
             <g class="edges" fill="none" stroke="currentColor" stroke-width="2">
               {each rendered_edges as item, key: item["id"]}
                 <path class="edge" data-edge="{item['id']}" d="{item['path']}" marker-end="url(#arrowhead)"></path>
@@ -317,11 +400,12 @@ class EditableGraphRoot
                 </g>
               {end}
             </g>
+            </g>
           </g>
         </svg>
-      {else}
-        <p class="closed">Graph closed</p>
       {end}
+      </div>
+      {if !@open}<p class="closed">Graph closed</p>{end}
     }
   end
 end

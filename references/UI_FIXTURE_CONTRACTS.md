@@ -879,3 +879,108 @@ Default capacity profile:
 `4c12f87f5b1adbd1b7165dd6e2c0ff988d982c63c46baaa6b80e3984a992f7cf`.
 
 Next story: E4.S3 — exercise capacity failures and lifecycle reuse in the three fixtures.
+
+## E4.S3 — capacity failure isolation and lifecycle reuse
+
+The standalone capacity suite now forces computed scratch-object/byte failure,
+nested computed-entry exhaustion, and persistent-byte pressure under a small
+compiled profile. It verifies the resource and requested/used/limit counts,
+profile fingerprint, and exact authored method line. Two output bindings remain
+unchanged after rejection, and queued storage commands remain absent both
+immediately and after later successful work. An independent component and a
+smaller operation still work after each failure.
+
+Recovery deliberately exposes the status written before failure and, for state
+pressure, the positive retained-record count. These tests preserve the existing
+nontransactional Ruby-state contract. Six failing computed mounts under a
+four-entry cache bound release partial caches/bindings before a valid mount;
+the earlier successful binding is not partially published.
+
+`gvm_ui_capacity_lifecycle.spec.ts` runs the actual inspector, graph, and form
+under reduced scratch/state/binding/component bounds. Each browser executes
+100 page/filter/append, graph edit/undo/redo, and form close/reopen cycles, then
+100 complete mount/disposal cycles. Inspector retention stays at 480 with 12
+visible rows, graph history trims at 40, recreated editor drafts reset, and
+subscriptions/bindings/live allocations/reusable bytes return to baseline.
+The native suite adds 100 computed replacement/error/recovery/disposal cycles
+while a second instance's cached graph stays rooted. No new diagnostics UI,
+profiler, telemetry, benchmark, capacity defaults, or memory ceilings were added.
+
+One defect was reproduced and fixed: cache-entry allocation could fail before
+the computed method had a frame, attributing exhaustion to its caller. GVM now
+captures the rejected method, existing binding ID, and allocation details at
+that point. The browser regression rejects caller-line attribution; native
+coverage checks the computed marker, method symbol, and capacity resource.
+
+Validation on 2026-11-14:
+
+- **227 GVM cases / 22,444 assertions**, all passed; Goose formatting passed.
+- **564 compiler examples** and **202 runtime tests**, all passed.
+- **423 browser checks** across Chromium, Firefox, and WebKit: 363 main
+  (including 48 capacity cases and three 100-cycle cases), plus 60 asset/install
+  checks. Final failed-mount and delayed-command assertions rerun separately.
+- Payload determinism, membership, and exact ceilings passed. Core is
+  **497,765 raw / 161,181 gzip bytes**; the source-attribution fix costs
+  **84 raw / 11 gzip bytes**. Loader, glue, capacity profile, and arena limits
+  remain unchanged. See [payload accounting](PAYLOAD_BUDGETS.md).
+- Compile-time rejection check passed; all 15 minimal builds were
+  **146.5–253.3 ms**, below the strict 1,000 ms limit.
+
+Both capacity suites are included in `framework:e2e` and `framework:ui`.
+Individual UI targets include the shared lifecycle run. Exact profiles and
+recovery semantics are documented in [capacity contracts](CAPACITY_CONTRACT.md).
+No commits were made.
+
+Production WASM SHA-256:
+`9844dd68d1836391229ed39466c33b128e10595ec46f9fa02f6068d4184bed93`.
+
+## E5.S1 — optional static-ref geometry and fitted graph
+
+`MochiLayout.measure`, `observe`, and `cancel` use the existing host-capability
+ABI. The compiler follows reachable helpers to include the optional Ruby
+package and adapter; minimal applications omit both. The graph mounts its
+adapter lazily, and repeated mount/disposal cycles fetch it only once.
+
+Geometry is plain numeric viewport-relative CSS border-box data. The adapter
+coalesces resize notifications, reads each target once before callbacks, and
+suppresses unchanged sizes. Requests and observations are bounded by the
+existing binding capacity. Owner generation and target identity guard every
+delivery; cancellation, branch removal, and unmount release work. Initial
+frame delivery consumes its request synchronously, so another callback can
+cancel a later measurement in the same batch. A completed one-shot releases
+capacity before its callback can request another measurement.
+
+The shared loader now runs adapter reconciliation after adapters are installed
+and recreates its observer on every mount. This also preserves pointer cleanup
+when the same custom element reconnects. Errors in one adapter's disposal do
+not skip VM cleanup.
+
+Fit graph computes circles and fixed-monospace label bounds in Ruby and fits
+with 24 CSS pixels of padding. Browser geometry assertions cover both enlarged
+and reduced containers, fit-scaled dragging, explicit cancellation, and three
+fresh mounts. Zero/hidden dimensions, insufficient padding space, and an empty
+model have explicit statuses and finite coordinates. Model undo history remains
+independent of viewport framing. Dynamic row refs and per-node DOM measurement
+remain deferred. See [layout contracts](LAYOUT_CONTRACT.md).
+
+Validation on 2026-11-14:
+
+- **565 compiler examples**, **213 runtime tests**, and **429 browser checks**
+  passed (369 main plus 60 asset/install, across Chromium, Firefox, and WebKit).
+  All 39 graph and 100-cycle lifecycle checks passed again after delivery-race
+  fixes; same-element reconciliation also has a loader regression.
+- Payload determinism, membership, and exact ceilings passed. Core is
+  **499,006 raw / 161,392 gzip bytes**, an explicit loader increase of
+  **1,241 raw / 211 gzip bytes** against E4.S3. No WASM, glue, capacity-profile,
+  or memory-limit changes belong to this story.
+- Optional layout adapter: **5,997 raw / 1,855 gzip bytes**. Ruby package:
+  **468 raw / 275 gzip bytes**. Combined feature code is **6,465 / 2,130**,
+  excluding component-specific bytecode, descriptors, and manifest metadata.
+  These files do not appear in the unused minimal application.
+
+Compile-time rejection checks passed. After compiler regeneration, one initial
+cold invocation took 1,432.3 ms and failed the strict 1,000 ms gate; the other
+14 took 135.6–147.8 ms. An unchanged full rerun passed all 15 at 137.7–142.8 ms.
+The outlier is retained here; no timing threshold was relaxed.
+
+Next story: E5.S2 — support wheel input with explicit units and default handling.

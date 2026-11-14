@@ -19,6 +19,18 @@ geometry. Test-only VM counters verify projection evaluation counts without
 adding shipped instrumentation. No manual cache, epoch, feed timer, index,
 virtualization layer, or serialized record representation is involved.
 
+E4.S3 runs the real three fixtures through 100 interaction cycles and another
+100 complete mount/disposal cycles under a smaller compiled profile. Inspector
+filtering/paging/appends, graph history trimming and replay, form editor drafts,
+route subscriptions, and released state capacity are checked on every cycle.
+`probes/13-capacity-lifecycle/lib/CapacityComputedRoot.rb` is copied into the
+standalone capacity-boundary project to force scratch, computed-cache, and
+persistent-byte failures. Failed flushes leave rendered values unchanged and
+discard queued storage commands; later recovery reveals prior Ruby mutations.
+No rollback or increased default capacity is implied. `framework:ui` and
+`framework:e2e` include both suites; individual UI targets include the shared
+100-cycle case.
+
 E1.S2 pages with ordinary `Array#slice`. The inspector target also runs
 `probes/02-array-contexts/test/array_slice_test.rb`: native Ruby boundary
 oracles, initialization/helper/handler/template execution, invalid arguments,
@@ -90,8 +102,11 @@ Drag starts on a keyed SVG group and captures that group even when the press
 hits its circle or text. Movement can continue outside the graph; release
 commits once. Cancel, capture loss, and closing the branch restore the starting
 model without changing history. No-op drags add no entry. Unmount releases
-capture and clears transient gesture state. The fixed viewport currently maps
-one CSS pixel to one graph unit; viewport measurement and zoom remain E5 work.
+capture and clears transient gesture state. E5.S1 adds optional static-ref measurement and resize observation. Fit graph
+uses the actual viewport with 24-pixel padding; dragging inverts the fit scale.
+Zero/hidden, too-small, and empty graphs report explicit states. Stop resize
+observation cancels the subscription while one-shot fitting remains available.
+Wheel zoom remains E5.S2 work. See [layout contracts](../../../references/LAYOUT_CONTRACT.md).
 The existing pointer capability loads only when the graph mounts.
 
 `editable_graph_test.rb` performs 45 edits, checks all 40 undo and redo steps,
