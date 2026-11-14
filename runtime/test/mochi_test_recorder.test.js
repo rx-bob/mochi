@@ -7,6 +7,23 @@ const { spawnSync } = require("node:child_process");
 
 const recorder = path.resolve(__dirname, "mochi_test_recorder.rb");
 
+test("Ruby recorder captures download byte expectations and authored locations", () => {
+  withTestProject((root, testDir) => {
+    const source = path.join(testDir, "export_test.rb"), plan = path.join(root, "plan.json");
+    fs.writeFileSync(source, 'Mochi::Test.test("export") do\n  download ".export"\n  assert_download filename: "résumé.bin", bytes: [0, 128, 255]\nend\n');
+    const result = spawnSync("ruby", [recorder, testDir, plan], {encoding:"utf8"});
+    assert.equal(result.status, 0, result.stderr);
+    const steps = JSON.parse(fs.readFileSync(plan, "utf8")).tests[0].steps;
+    assert.equal(steps[0].operation, "download");
+    assert.equal(steps[0].selector, ".export");
+    assert.equal(steps[1].operation, "assert_download");
+    assert.equal(steps[1].filename, "résumé.bin");
+    assert.deepEqual(steps[1].bytes, [0,128,255]);
+    assert.equal(steps[1].ruby_file, source);
+    assert.equal(steps[1].line, 3);
+  });
+});
+
 function withTestProject(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-test-recorder-"));
   const testDir = path.join(root, "test");

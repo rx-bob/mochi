@@ -29,6 +29,7 @@ td_router = "/builtins/router"
 items = []
 items.push(Item.new("JSON", "#{dir_batteries}/json.rb", td_root, "json_rb.cr"))
 items.push(Item.new("Time", "#{dir_batteries}/time.rb", td_root, "time_rb.cr"))
+items.push(Item.new("MochiDownload", "#{dir_batteries}/download.rb", td_root, "download_rb.cr"))
 items.push(Item.new("Mochi", "#{dir_batteries}/mochi.rb", td_root, "mochi_rb.cr"))
 items.push(Item.new("AppRouter", "#{dir_batteries}/app_router.rb", td_root, "app_router_rb.cr"))
 items.push(Item.new("MochiStore", "#{dir_batteries}/store.rb", td_root, "store_rb.cr"))

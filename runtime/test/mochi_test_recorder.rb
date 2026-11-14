@@ -17,6 +17,22 @@ module Mochi
         record("click", { "selector" => selector.to_s })
       end
 
+      def download(selector)
+        record("download", { "selector" => test_selector(selector) })
+      end
+
+      def assert_download(filename:, bytes:)
+        unless filename.is_a?(String) && !filename.empty?
+          raise ArgumentError, "download filename must be a non-empty String"
+        end
+        unless bytes.is_a?(String) || (bytes.is_a?(Array) && bytes.all? { |byte| byte.is_a?(Integer) && byte.between?(0, 255) })
+          raise ArgumentError, "download bytes must be a String or an Array of bytes"
+        end
+        content = bytes.is_a?(String) ? bytes.bytes : bytes
+        raise ArgumentError, "download bytes exceed the 16 MiB harness limit" if content.length > 16 * 1024 * 1024
+        record("assert_download", { "filename" => filename, "bytes" => content })
+      end
+
       def fill(selector, value)
         record("fill", { "selector" => selector.to_s, "value" => value.to_s })
       end

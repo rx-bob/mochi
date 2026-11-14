@@ -11,7 +11,7 @@ module RecordData
     {
       "id" => "record-#{index}",
       "severity" => index % 3 == 0 ? "warning" : "info",
-      "message" => "Record #{index} processed",
+      "message" => index == 42 ? "Record 42 processed — café, \"quoted\"\nnext line" : "Record #{index} processed",
       "details" => {"source" => "worker-#{index % 4}", "sequence" => index,
                     "timestamp" => BASE + index,
                     "attributes" => [{"name" => "region", "value" => "zone-#{index % 3}"},

@@ -4,6 +4,15 @@ Mochi implements a practical Ruby interface for browser applications. This
 document records supported forms and explicit VM limits. It does not promise
 full MRI, Enumerable, or arbitrary-precision compatibility.
 
+## Optional downloads
+
+`MochiDownload.save(filename, content_type, content)` hands a bounded String or
+Array of byte String parts to the browser during a live user action. The optional
+package and adapter load before component controls render. Mochi owns the Blob,
+temporary URL, activation checks, capacity errors, and cleanup. See the
+[download contract](DOWNLOAD_CONTRACT.md) for bounds, filename/MIME rules,
+disposal behavior, inspector JSONL/CSV semantics, and Ruby download assertions.
+
 ## Optional JSON
 
 ```ruby

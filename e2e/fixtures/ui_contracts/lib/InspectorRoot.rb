@@ -12,6 +12,8 @@ class InspectorRoot
   @json_roundtrip
   @newest_first
   @display_zone
+  @export_parts
+  @export_status
 
   computed :ordered_records, depends_on: [:@records, :@newest_first]
   computed :filtered_records, depends_on: [:ordered_records, :@query]
@@ -37,6 +39,30 @@ class InspectorRoot
     @json_roundtrip = ""
     @newest_first = false
     @display_zone = "UTC"
+    @export_parts = []
+    @export_status = ""
+  end
+
+  def export_jsonl
+    @export_parts = []
+    filtered_records.each { |record| @export_parts << JSON.generate(record) + "\n" }
+    parts = @export_parts
+    @export_parts = []
+    MochiDownload.save("records.jsonl", "application/x-ndjson;charset=utf-8", parts)
+    @export_status = "Downloaded #{parts.length} records as JSONL"
+  end
+
+  def export_csv
+    @export_parts = ["id,severity,message,source,sequence,timestamp\r\n"]
+    filtered_records.each do |record|
+      detail = record["details"]
+      fields = [record["id"], record["severity"], record["message"], detail["source"], detail["sequence"], detail["timestamp"]]
+      @export_parts << fields.map { |field| '"' + field.to_s.gsub('"', '""') + '"' }.join(",") + "\r\n"
+    end
+    parts = @export_parts
+    @export_parts = []
+    MochiDownload.save("records.csv", "text/csv;charset=utf-8", parts)
+    @export_status = "Downloaded #{parts.length - 1} records as CSV"
   end
 
   def ordered_records
@@ -162,6 +188,9 @@ class InspectorRoot
       <span class="display-zone">{@display_zone}</span>
       <button class="parse-json" onclick="{parse_sample}">Parse JSON sample</button>
       <button class="roundtrip-json" onclick="{roundtrip_selected}">Round-trip selected record</button>
+      <button class="export-jsonl" onclick="{export_jsonl}">Download filtered JSONL</button>
+      <button class="export-csv" onclick="{export_csv}">Download filtered CSV</button>
+      <output class="export-status">{@export_status}</output>
       <output class="json-sample">{@json_sample}</output>
       <output class="json-roundtrip">{@json_roundtrip}</output>
       <table><tbody>

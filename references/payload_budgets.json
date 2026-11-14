@@ -11,32 +11,32 @@
   },
   "baselines": {
     "core": {
-      "raw": 507654,
-      "gzip": 164239
+      "raw": 510703,
+      "gzip": 165203
     },
     "minimal_initial": {
-      "raw": 511332,
-      "gzip": 165944
+      "raw": 514381,
+      "gzip": 166908
     },
     "feature_initial": {
-      "raw": 512144,
-      "gzip": 166131
+      "raw": 515193,
+      "gzip": 167095
     },
     "feature_later": {
       "raw": 15281,
       "gzip": 4821
     },
     "feature_total": {
-      "raw": 527425,
-      "gzip": 170952
+      "raw": 530474,
+      "gzip": 171916
     },
     "network_initial": {
-      "raw": 516467,
-      "gzip": 167442
+      "raw": 519516,
+      "gzip": 168406
     },
     "network_total": {
-      "raw": 516467,
-      "gzip": 167442
+      "raw": 519516,
+      "gzip": 168406
     }
   }
 }

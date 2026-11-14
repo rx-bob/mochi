@@ -5,8 +5,18 @@ const os = require("node:os");
 const path = require("node:path");
 
 process.env.MOCHI_TEST_RUNNER_LIBRARY = "1";
-const { syntheticFiles } = require("../../e2e/mochi_test_runner.cjs");
+const { syntheticFiles, assertDownload } = require("../../e2e/mochi_test_runner.cjs");
 delete process.env.MOCHI_TEST_RUNNER_LIBRARY;
+
+test("download assertions compare filename and actual bytes with Ruby source diagnostics", () => {
+  const actual = {filename: "résumé.bin", bytes: Buffer.from([0, 128, 255])};
+  const step = {filename: "résumé.bin", bytes: [0, 128, 255]};
+  assertDownload(actual, step, "test/export_test.rb:9");
+  assertDownload({...actual, filename: actual.filename.normalize("NFD")}, step, "test/export_test.rb:9");
+  assert.throws(() => assertDownload(null, step, "test/export_test.rb:9"), /export_test.rb:9: no captured download/);
+  assert.throws(() => assertDownload({...actual, filename: "other"}, step, "test/export_test.rb:9"), /export_test.rb:9: expected download filename/);
+  assert.throws(() => assertDownload({...actual, bytes: Buffer.from([0, 129])}, step, "test/export_test.rb:9"), /export_test.rb:9: download bytes differ at offset 1; expected 3 bytes, got 2/);
+});
 
 test("browser runner resolves Ruby test file paths and preserves inline bytes", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-runner-files-"));

@@ -264,6 +264,7 @@ async function runCase(browser, browserName, baseUrl, testCase) {
     });
 
     let host = null;
+    let lastDownload = null;
     let detachedHost = null;
     let expectedError = null;
     let activePointer = null;
@@ -441,6 +442,33 @@ async function runCase(browser, browserName, baseUrl, testCase) {
           if (step.operation === "assert_text" && result.actual !== step.expected) {
             throw new Error(`${origin}: expected '${step.expected}' at '${step.selector}', got '${result.actual}'`);
           }
+        } else if (step.operation === "download") {
+          if (!host) throw new Error(`${origin}: mount a component before downloading`);
+          lastDownload = null;
+          const target = page.locator(host).locator(step.selector.replace(/\s*>>>\s*/g, " "));
+          const pending = page.waitForEvent("download", { timeout: 10000 });
+          pending.catch(() => {});
+          await target.click();
+          const artifact = await pending;
+          try {
+            const stream = await artifact.createReadStream();
+            if (!stream) throw new Error(await artifact.failure() || "download has no readable content");
+            const chunks = [];
+            let size = 0;
+            for await (const chunk of stream) {
+              size += chunk.length;
+              if (size > 16 * 1024 * 1024) {
+                stream.destroy();
+                throw new Error("download exceeds the 16 MiB harness limit");
+              }
+              chunks.push(chunk);
+            }
+            const failure = await artifact.failure();
+            if (failure) throw new Error(failure);
+            lastDownload = { filename: artifact.suggestedFilename(), bytes: Buffer.concat(chunks) };
+          } finally { await artifact.delete(); }
+        } else if (step.operation === "assert_download") {
+          assertDownload(lastDownload, step, origin);
         } else if (step.operation === "select_files") {
           if (!host) throw new Error(`${origin}: mount a component before selecting files`);
           const files = syntheticFiles(step);
@@ -603,7 +631,20 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-module.exports = { syntheticFiles, collectDiagnostics, assertDiagnostics, runCase };
+function assertDownload(actual, step, origin) {
+  if (!actual) throw new Error(`${origin}: no captured download; use download first`);
+  if (actual.filename.normalize("NFC") !== step.filename.normalize("NFC")) {
+    throw new Error(`${origin}: expected download filename ${JSON.stringify(step.filename)}, got ${JSON.stringify(actual.filename)}`);
+  }
+  const expected = Buffer.from(step.bytes);
+  if (!actual.bytes.equals(expected)) {
+    let at = 0;
+    while (at < expected.length && at < actual.bytes.length && expected[at] === actual.bytes[at]) at++;
+    throw new Error(`${origin}: download bytes differ at offset ${at}; expected ${expected.length} bytes, got ${actual.bytes.length}`);
+  }
+}
+
+module.exports = { syntheticFiles, collectDiagnostics, assertDiagnostics, runCase, assertDownload };
 
 if (require.main === module && process.env.MOCHI_TEST_RUNNER_LIBRARY !== "1") {
   main().catch((error) => {

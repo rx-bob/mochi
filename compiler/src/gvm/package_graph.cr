@@ -36,6 +36,11 @@ module MochiPackaging
 
   CAPABILITY_DEFINITIONS = [
     CapabilityDefinition.new(
+      "download", 1, "mochi-download.js", "MochiDownload",
+      [CapabilityOperation.new("save", "sync")],
+      [{"bytes", "host_file_buffer_bytes"}, {"retained_bytes", "host_event_queue_bytes"}, {"leases", "host_file_handles"}]
+    ),
+    CapabilityDefinition.new(
       "time", 1, "mochi-time.js", "Time",
       [CapabilityOperation.new("now", "sync")],
       [] of Tuple(String, String)

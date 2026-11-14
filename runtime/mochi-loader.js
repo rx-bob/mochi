@@ -7,6 +7,7 @@
   var DEFAULT_MANIFEST = "mochi-manifest.json";
   var MANIFEST_SCHEMA_VERSION = 3;
   var CAPABILITY_LIMIT_KEYS = {
+    download: { bytes: "host_file_buffer_bytes", retained_bytes: "host_event_queue_bytes", leases: "host_file_handles" },
     formatting: { cache_entries: "host_format_cache_entries" },
     pointer: {},
     layout: { requests: "bindings" },
@@ -184,7 +185,12 @@
   // One failure shape for every runtime entry point. The VM text is kept even
   // when the JS layer already has an error, because only the VM knows which
   // Ruby method failed.
-  function methodFromError(error, fallback) {
+  function methodFromError(error, fallback, className) {
+    if (className) {
+      var frames = error && error.message ? error.message.matchAll(/([A-Za-z_][A-Za-z0-9_:]*)#([A-Za-z_][A-Za-z0-9_?!]*)/g) : [];
+      for (var frame of frames) { if (frame[1] === className) return frame[2]; }
+      return fallback;
+    }
     var match = error && error.message ? /#([A-Za-z_][A-Za-z0-9_?!]*)/.exec(error.message) : null;
     return match ? match[1] : fallback;
   }
@@ -210,7 +216,7 @@
     if (!detail) detail = phase + " failed";
     // A handler can fail while flushing a computed getter. Prefer the VM's
     // authored method when this component has its source map.
-    var failedMethod = methodFromError({ message: vmText }, method);
+    var failedMethod = methodFromError({ message: vmText }, method, component && component.class_name);
     if (component && component.methods && component.methods[failedMethod]) method = failedMethod;
     var source = component && component.source;
     var line = source && source.line;
@@ -2488,6 +2494,18 @@
   }
 
   function installHostAdapter(module, name, capability, spec, url) {
+    module.__mochiHostOwner = function (owner, capabilityName) {
+      var element = state.elements.get(String(owner));
+      if (!element || !element.isConnected || element._mochiDisconnected || element._mochiUnmounted ||
+          !element._mochiComponent || (element._mochiComponent.capabilities || []).indexOf(capabilityName) < 0) {
+        throw new Error("host capability owner is stale or capability is unavailable");
+      }
+      var token = element._mochiMountToken;
+      return { owner: String(owner), mountToken: token, isLive: function () {
+        return element.isConnected && !element._mochiDisconnected && !element._mochiUnmounted &&
+          element._mochiMountToken === token && String(element._mochiInstance) === String(owner);
+      } };
+    };
     var hosts = module.__mochiHostCapabilities;
     if (!hosts) {
       hosts = Object.create(null);
@@ -3003,17 +3021,7 @@
   // A mount is one transaction: instance creation, attribute sync, binding
   // registration, then the mounted hook. Any failure removes everything the
   // transaction created and rethrows the original error.
-  async function mountInstance(component, manifest, manifestUrl, element, mountToken) {
-    var module = await loadComponentClass(component, manifest, manifestUrl);
-
-    // A final removal during the class download must not create a VM component
-    // that only gets torn down later. A same-turn move has already reconnected
-    // (and cancelled disposal) by the time the download settles.
-    if (mountToken !== element._mochiMountToken || element._mochiDisconnected ||
-        !element.isConnected) {
-      return { cancelled: true, mountToken: mountToken };
-    }
-
+  function mountInstance(component, module, element, mountToken) {
     var declared = resolveMountProps(component, element);
     if (declared && typeof module._mochi_mount_component_props !== "function") {
       throw new Error("mochi-loader: runtime does not support declared props");
@@ -4824,7 +4832,7 @@
         var element = this;
 
         this._mochiReady = loadComponentDescriptor(entry, state.manifest, manifestUrl)
-          .then(function (loaded) {
+          .then(async function (loaded) {
             // The descriptor download can outlive the connection. Settle the
             // cancelled mount before touching styles, the shadow tree, or the
             // VM so a detached element never becomes a ghost instance.
@@ -4835,6 +4843,14 @@
             }
 
             element._mochiComponent = loaded;
+            // Controls must not accept a user gesture before their Ruby class
+            // and host capabilities are ready. Do not defer loading to dispatch.
+            var module = await loadComponentClass(loaded, state.manifest, manifestUrl);
+            if (element._mochiMountToken !== mountToken ||
+                element._mochiDisconnected || !element.isConnected) {
+              element._settleCancelledMount(mountToken);
+              return { cancelled: true, mountToken: mountToken };
+            }
             var runtime = componentRuntime(loaded);
             element._mochiRuntime = runtime;
             runtime.allBindings.forEach(function (binding) {
@@ -4863,7 +4879,7 @@
               element._mochiEventsAttached = true;
             }
 
-            return mountInstance(loaded, state.manifest, manifestUrl, element, mountToken);
+            return mountInstance(loaded, module, element, mountToken);
           })
           .then(function (mounted) {
             if (mounted.cancelled) {

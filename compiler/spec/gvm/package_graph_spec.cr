@@ -461,6 +461,26 @@ RUBY
     end
   end
 
+  it "loads download only for reachable Ruby consumers" do
+    root = File.join(Dir.tempdir, "mochi_package_download_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      library = dependency_prelude(root, "lib/mochi_builtin_download.rb", "class MochiDownload\nend\n")
+      plain = dependency_component(root, "plain-download", "PlainDownload", "class PlainDownload\nend\n")
+      consumer = dependency_component(root, "save-download", "SaveDownload", "class SaveDownload\n def save\n MochiDownload.save(\"a.txt\", \"text/plain\", \"a\")\n end\nend\n")
+      graph = dependency_graph(root, [plain, consumer], [library])
+      plain.manifest.capabilities.should eq([] of String)
+      consumer.manifest.capabilities.should eq(["download"])
+      graph.capabilities["download"].host.should eq("mochi-download.js")
+      graph.capabilities["download"].operations.map { |operation| {operation.name, operation.mode} }.should eq([{"save", "sync"}])
+      unused = dependency_graph(root, [plain], [library])
+      unused.has_capability?("download").should be_false
+      unused.order.should_not contain("ruby:lib/mochi_builtin_download.rb")
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "loads layout only through reachable Ruby measurement dependencies" do
     root = File.join(Dir.tempdir, "mochi_package_layout_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

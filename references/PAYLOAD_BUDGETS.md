@@ -57,13 +57,32 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 507,654 | 164,239 | 3 |
-| Minimal initial | 511,332 | 165,944 | 7 |
-| Feature initial | 512,144 | 166,131 | 7 |
+| Core runtime | 510,703 | 165,203 | 3 |
+| Minimal initial | 514,381 | 166,908 | 7 |
+| Feature initial | 515,193 | 167,095 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 527,425 | 170,952 | 11 |
-| Network initial | 516,467 | 167,442 | 8 |
-| Network total | 516,467 | 167,442 | 8 |
+| Feature total | 530,474 | 171,916 | 11 |
+| Network initial | 519,516 | 168,406 | 8 |
+| Network total | 519,516 | 168,406 | 8 |
+
+### Optional bounded downloads (E6.S3)
+
+Core grows **3,049 raw / 964 gzip bytes** against E6.S2. WASM adds **865 / 421**
+for a synchronous byte-view bridge; JS glue adds **990 / 284** for decoding
+metadata and passing bounded views directly to the optional adapter. This
+avoids JSON transport limits and preserves binary Strings while keeping user
+activation. Loader adds **1,194 / 259** for live mount ownership, capability
+limits, readiness before rendering controls, and class-qualified source mapping (helper names must not borrow an
+unrelated component method's source). Default capacities remain unchanged.
+
+The Blob/URL implementation stays optional: `mochi-download.js` is **3,961 raw /
+1,596 gzip bytes**, and its Ruby package is **228 / 196**. Combined optional
+code is **4,189 / 1,792**, excluding consumer code and manifest metadata.
+Minimal apps omit both; the existing formatting feature-later set is unchanged.
+Browser coverage delays the adapter response and proves export controls are
+not rendered until it is ready. URLs have bounded, disposal-safe 30-second
+leases; runtime tests verify byte/count limits, immediate failure cleanup,
+and repeated reuse. See [the download contract](DOWNLOAD_CONTRACT.md).
 
 ### Optional clock and timestamp formatting (E6.S2)
 
@@ -448,9 +467,9 @@ Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 216,643 | 98,256 |
-| `mochi-gvm.js` | 63,170 | 17,609 |
-| `mochi-loader.js` | 227,841 | 48,374 |
+| `mochi-gvm.wasm` | 217,508 | 98,677 |
+| `mochi-gvm.js` | 64,160 | 17,893 |
+| `mochi-loader.js` | 229,035 | 48,633 |
 
 The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block

@@ -10,6 +10,67 @@ const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
+test("downloads stay optional, preserve binary bytes, and retain accepted URLs through disposal @ui-inspector", async ({ page }) => {
+  await withCompiledProject(path.join(repoRoot, "compiler/spec/fixtures/payload/minimal"), async (_url, bundle) => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundle, "mochi-manifest.json"), "utf8"));
+    expect(manifest.capabilities?.download).toBeUndefined();
+    expect(fs.existsSync(path.join(bundle, "mochi-download.js"))).toBe(false);
+    expect(Object.keys(manifest.packages).some(key => key.includes("builtin_download"))).toBe(false);
+  });
+  await page.clock.install();
+  await page.addInitScript(() => {
+    const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+    const urls = new Set<string>();
+    (window as any).__downloadUrls = urls;
+    (window as any).__downloadTypes = [];
+    URL.createObjectURL = blob => {
+      const url = create(blob); urls.add(url);
+      (window as any).__downloadTypes.push((blob as Blob).type);
+      return url;
+    };
+    URL.revokeObjectURL = url => { urls.delete(url); revoke(url); };
+  });
+  const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
+  let releaseAdapter!: () => void, requestedAdapter!: () => void;
+  const ready = new Promise<void>(resolve => { releaseAdapter = resolve; });
+  const requested = new Promise<void>(resolve => { requestedAdapter = resolve; });
+  await page.route("**/mochi-download.js", async route => {
+    requestedAdapter(); await ready; await route.continue();
+  });
+  await withCompiledProject(path.join(fixture, "probes/14-download"), async url => {
+    const navigation = page.goto(url);
+    await requested;
+    try { await expect(page.locator(".save")).toHaveCount(0); }
+    finally { releaseAdapter(); }
+    await navigation;
+    await expect(page.locator("output")).toHaveText("idle");
+    await page.locator(".oversized").click();
+    const errors = await page.evaluate(() => (window as any).__uiErrors.splice(0));
+    expect(errors).toHaveLength(1);
+    expect(errors[0].vmText).toContain("byte limit");
+    const lines = fs.readFileSync(path.join(fixture, "probes/14-download/lib/ProbeRoot.rb"), "utf8").split("\n");
+    expect(errors[0].source).toBe(`lib/ProbeRoot.rb:${lines.indexOf("  def oversized") + 1}`);
+    await settleConsole();
+    for (const error of [...consoleErrors.splice(0), ...pageErrors.splice(0)]) expect(error).toContain("byte limit");
+    expect(await page.evaluate(() => (window as any).__downloadUrls.size)).toBe(0);
+    for (let index = 0; index < 3; index++) {
+      const pending = page.waitForEvent("download");
+      await page.locator(index === 1 ? ".save-string" : ".save").click();
+      const download = await pending;
+      // WebKit/macOS returns canonically equivalent decomposed filenames.
+      expect(download.suggestedFilename().normalize("NFC")).toBe("résumé.bin");
+      expect([...fs.readFileSync((await download.path())!)]).toEqual([0, 128, 255]);
+      await download.delete();
+    }
+    expect(await page.evaluate(() => (window as any).__downloadTypes)).toEqual(Array(3).fill("application/octet-stream"));
+    await page.locator("probe-root").evaluate(element => element.remove());
+    expect(await page.evaluate(() => (window as any).__downloadUrls.size)).toBe(3);
+    await page.clock.fastForward(30001);
+    expect(await page.evaluate(() => (window as any).__downloadUrls.size)).toBe(0);
+    expect(await page.evaluate(() => (window as any).__uiErrors)).toEqual([]);
+  }, "<probe-root></probe-root>");
+});
+
 test("Ruby timestamp conversions and error recovery @ui-inspector", async ({ browserName }) => {
   const output = runRubyProject(path.join(fixture, "probes/09-time"), browserName);
   expect(output).toContain(`PASS [${browserName}] Unix seconds preserve fractions`);
@@ -408,6 +469,7 @@ test("inspector renders exactly 12 of 480 records without browser errors @ui-ins
 // Discover every authored Ruby suite. Graph/form stories add their files to
 // this same project; these entry points then include them without new harnesses.
 const rubySuites: Record<string, string> = {
+  "download_test.rb": "@ui-inspector",
   "inspector_test.rb": "@ui-inspector",
   "editable_graph_test.rb": "@ui-graph",
   "nested_form_test.rb": "@ui-form",

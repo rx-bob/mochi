@@ -58,7 +58,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 
 The synthetic workload in report 04 preserves nested hashes/arrays, concatenation, and repeated scans, but not every byte and binding of the application. It does not reproduce the reported 32,738-byte allocation failure or prove that 480 arbitrarily large records fit. Default scratch limits remain 2,048 objects and 131,072 bytes. E4 must test realistic structured records, resource lifetimes, and failure/recovery, using existing configuration rather than silently raising global budgets.
 
-Report 09 is a capability inventory, not one executable expression. Bounded JSON parsing/generation, top-level `require "json"`, and error recovery are delivered in E6.S1. The UTC-instant Time subset, fixed-clock tests, and explicit timestamp formatting are delivered in E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned keyboard shortcuts and dialog scope precedence are delivered in E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. Other broader contracts remain unresolved until their stories deliver them.
+Report 09 is a capability inventory, not one executable expression. Bounded JSON parsing/generation, top-level `require "json"`, and error recovery are delivered in E6.S1. The UTC-instant Time subset, fixed-clock tests, and explicit timestamp formatting are delivered in E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned keyboard shortcuts and dialog scope precedence are delivered in E5.S3; bounded browser downloads in E6.S3. No supported Ruby API is invented here merely to make a negative probe. Broader Math/Regexp/Date coverage, save pickers, filesystem writes, and streaming downloads remain explicit deferrals.
 
 Full Math, Date/timezone breadth, Regexp/query parsing, slots, arbitrary DOM/window access, and SVG custom-element composition are explicit deferrals. Mochi's existing formatters, focus helpers, and focus-trap support do not imply those capabilities. Bounded files and static icons are already available: the default whole-file limit is **48,000 bytes**, not a two-megabyte promise; 8,192-byte chunks support larger bounded streaming reads. Icons are selected from project `icons/` assets and emitted on demand, not supplied as an implicit Lucide catalog.
 
@@ -1155,4 +1155,56 @@ Validation on 2026-11-14:
 - Payload membership, determinism, and exact ceilings passed. All 15 minimal
   compile-time checks passed at **135.6–157.3 ms**, below the strict 1,000 ms gate.
 
-Next story: E6.S3 — download inspector JSONL and CSV through Ruby.
+## E6.S3 — bounded downloads and inspector exports
+
+`MochiDownload.save(filename, content_type, content)` accepts a String or up to
+1,024 binary String parts. A synchronous native byte-view bridge preserves
+arbitrary bytes and current user activation without routing through bounded
+JSON transport or joining all output into a scratch String. The Ruby package
+and Blob/URL adapter remain optional; the loader resolves both before rendering
+export controls. A delayed-adapter browser check locks down that readiness.
+
+Inspector exports every row in the current filtered set and sort order, not
+only the visible page. JSONL uses `JSON.generate` per record. CSV quotes all
+data fields and doubles quotes, preserving Unicode, commas, embedded newlines,
+and raw millisecond timestamps. Empty filters produce empty JSONL/header-only
+CSV. Ruby scenarios compare actual downloaded bytes against independent MRI
+JSON/CSV output for all 480 rows, filtered/reversed rows, and special/empty data.
+
+The optional adapter rejects metadata, activation, stale-owner, per-file byte,
+pending-byte, and URL-count violations before handoff. Failure releases any
+allocated URL immediately. Accepted URLs survive component disposal and expire
+after a 30-second lease; timer throttling may delay release, but retention stays
+bounded. Browser checks verify exact binary bytes, Unicode filenames, MIME,
+failure/recovery, repeated exports, and disposal/expiry. Runtime tests cover
+injected construction/append/click failures and 50 release/reuse cycles.
+
+Ruby test authors use `download` and `assert_download filename:, bytes:`.
+Assertions inspect suggested filenames and exact artifact bytes; canonical
+Unicode filename equivalence accommodates WebKit/macOS normalization. Errors
+keep the authored test location. A discovered helper/component name collision
+also required class-qualified runtime source mapping: `MochiDownload#save`
+must not be attributed to an unrelated component `save` method.
+
+See [the complete download contract](DOWNLOAD_CONTRACT.md). Save pickers,
+filesystem writes, streaming exports, and completion/cancellation after browser
+handoff are outside this bounded API. No application JavaScript is required.
+
+Optional download code is **4,189 raw / 1,792 gzip bytes**. Shared bridge,
+ownership, readiness, and source-mapping changes add **3,049 / 964** to core, now
+**510,703 / 165,203**. Exact payload budgets track these measured changes;
+default capacity profiles and the formatting feature-later payload are unchanged.
+
+Validation on 2026-11-14:
+
+- **572 compiler examples**, **239 Goose cases / 23,003 assertions**, and
+  **232 runtime tests** passed. Goose/Crystal formatting and Ruby typechecking
+  passed for the shared fixtures and binary download probe.
+- **459 browser checks** passed across Chromium, Firefox, and WebKit: 399
+  main checks (including 100-cycle lifecycle checks) plus 60 asset/install
+  checks. Download checks cover actual artifacts and delayed capability readiness.
+- Payload membership, determinism, and exact ceilings passed. All 15 minimal
+  compile-time checks passed at **144.5–169.4 ms**, below the strict 1,000 ms
+  gate; the gate's own failure test passed too.
+
+Next story: E7.S2 — publish current contracts and close the evidence inventory.

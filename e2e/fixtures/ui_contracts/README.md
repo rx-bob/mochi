@@ -4,6 +4,14 @@ This is one Mochi project: Ruby components in `lib/`, authored browser scenarios
 
 The inspector retains 480 structured records with 12 rows per page, literal filtering, page clamping, stable-ID selection, and nested details. E2.S1 supplies the nested form described below. E3.S1 adds the editable graph geometry slice described below.
 
+Inspector JSONL and CSV buttons export the entire current filtered set in its
+current order. Empty selections, Unicode, and CSV quoting are covered by
+`test/download_test.rb`, using Ruby `download` and `assert_download` steps.
+The optional capability is ready before controls render; each action retains
+user activation and hands one bounded file to the browser. See the
+[download contract](../../../references/DOWNLOAD_CONTRACT.md) for byte limits,
+filename rules, and disposal-safe temporary URL cleanup.
+
 E4.S2 separates computed filtered records, visible page, selected record, and
 detail fields. All detail bindings share the selected-record lookup. Paging
 reuses the filtered array; toggling details does not scan records. Initialization

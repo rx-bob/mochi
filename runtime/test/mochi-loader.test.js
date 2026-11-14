@@ -1815,6 +1815,24 @@ test("computed failures use the VM method source instead of the triggering handl
   assert.equal(details[0].source, "lib/counter.rb:20");
 });
 
+test("helper failures do not borrow an unrelated component method's source", async () => {
+  const component = {...COMPONENT, source: {file: "lib/counter.rb", line: 3},
+    methods: {initialize: 8, increment: 12, save: 20}};
+  const {log} = await setup([component]);
+  const details = [];
+  document.addEventListener("mochi:error", event => details.push(event.detail));
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+  log.errorText = "MochiDownload#save: content exceeds configured byte limit";
+  log.failDispatch.add("increment");
+  element.shadowRoot.querySelector('button[data-mochi-click="increment"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(details.length, 1);
+  assert.equal(details[0].method, "increment");
+  assert.equal(details[0].source, "lib/counter.rb:12");
+});
+
 test("capacity errors include the compiled profile and failed outboxes are discarded", async () => {
   const component = {
     ...COMPONENT,
