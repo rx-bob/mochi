@@ -137,6 +137,34 @@ test('feedback: is_a? matches Ruby value classes across VM zones, props, inherit
   }, '<type-inspection items="[]" meta="{}"></type-inspection>');
 });
 
+test('feedback: unshift preserves order and prop snapshots while root replacement renders', async ({page}) => {
+  const errors: unknown[] = [];
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const root = page.locator('unshift-root');
+    await expect(root.locator('.root-values')).toHaveText('1,2,3');
+    await expect(root.locator('.alias-values')).toHaveText('1,2,3');
+    await expect(root.locator('.child-values')).toHaveText('1,2,3');
+
+    await root.locator('.child-prepend').click();
+    await expect(root.locator('.child-values')).toHaveText('8,1,2,3');
+    await expect(root.locator('.root-values')).toHaveText('1,2,3');
+
+    await root.locator('.root-prepend').click();
+    await expect(root.locator('.root-values')).toHaveText('0,4,5,1,2,3');
+    await expect(root.locator('.alias-values')).toHaveText('4,5,1,2,3');
+    await expect(root.locator('.child-values')).toHaveText('0,4,5,1,2,3');
+    errors.push(...await page.evaluate(() => (window as any).__mochiErrors));
+    expect(errors).toEqual([]);
+  }, '<unshift-root></unshift-root>');
+});
+
 test('feedback: dragstart inside conditional keyed rows registers without ancestor listener', async ({page}) => {
   await withCompiledProject(fixture, async url => {
     await page.goto(url);

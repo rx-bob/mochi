@@ -57,13 +57,13 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 416,204 | 133,512 | 3 |
-| Minimal initial | 419,882 | 135,217 | 7 |
-| Feature initial | 420,694 | 135,404 | 7 |
+| Core runtime | 417,537 | 133,957 | 3 |
+| Minimal initial | 421,215 | 135,662 | 7 |
+| Feature initial | 422,027 | 135,849 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 435,975 | 140,225 | 11 |
-| Network initial | 425,017 | 136,715 | 8 |
-| Network total | 425,017 | 136,715 | 8 |
+| Feature total | 437,308 | 140,670 | 11 |
+| Network initial | 426,350 | 137,160 | 8 |
+| Network total | 426,350 | 137,160 | 8 |
 
 ### Lifecycle source diagnostics (completion audit)
 
@@ -500,11 +500,19 @@ The predicate checks immediate and boxed numeric values, scratch and state
 collections, strings, symbols, booleans, nil, and custom class ancestry without
 wrapping values. The payload budgets below include this measured growth.
 
+### Bounded Array#unshift (E3.S2)
+
+Array prepending adds **1,333 raw / 445 gzip bytes** to the core runtime, all in
+WASM. The implementation prepends linked slots in reverse argument order,
+preserving receiver and element identities without copying the existing array.
+Capacity failures use the existing scratch/state error paths; the budget below
+includes this measured growth.
+
 Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 177,450 | 80,994 |
+| `mochi-gvm.wasm` | 178,783 | 81,439 |
 | `mochi-gvm.js` | 8,658 | 3,631 |
 | `mochi-loader.js` | 230,096 | 48,887 |
 
@@ -526,9 +534,9 @@ Minimal initial (current measured artifacts):
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-Minimal initial is 419,882 / 135,217; formatting feature initial is 420,694 /
-135,404; formatting feature total is 435,975 / 140,225; and network initial /
-total is 425,017 / 136,715. The checked-in JSON budget matches these measured
+Minimal initial is 421,215 / 135,662; formatting feature initial is 422,027 /
+135,849; formatting feature total is 437,308 / 140,670; and network initial /
+total is 426,350 / 137,160. The checked-in JSON budget matches these measured
 artifacts.
 
 Feature initial adds only manifest metadata:
