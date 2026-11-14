@@ -37,6 +37,7 @@ items.push(Item.new("MochiFormat", "#{dir_batteries}/format.rb", td_root, "forma
 items.push(Item.new("MochiCollections", "#{dir_batteries}/collections.rb", td_root, "collections_rb.cr"))
 items.push(Item.new("MochiPointer", "#{dir_batteries}/pointer.rb", td_root, "pointer_rb.cr"))
 items.push(Item.new("MochiLayout", "#{dir_batteries}/layout.rb", td_root, "layout_rb.cr"))
+items.push(Item.new("MochiShortcuts", "#{dir_batteries}/shortcuts.rb", td_root, "shortcuts_rb.cr"))
 items.push(Item.new("MochiDrag", "#{dir_batteries}/drag.rb", td_root, "drag_rb.cr"))
 items.push(Item.new("MochiFiles", "#{dir_batteries}/files.rb", td_root, "files_rb.cr"))
 

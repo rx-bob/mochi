@@ -65,6 +65,14 @@ module MochiPackaging
       [{"requests", "bindings"}]
     ),
     CapabilityDefinition.new(
+      "shortcuts",
+      1,
+      "mochi-shortcuts.js",
+      "MochiShortcuts",
+      [CapabilityOperation.new("register", "async"), CapabilityOperation.new("cancel", "async")],
+      [{"registrations", "bindings"}]
+    ),
+    CapabilityDefinition.new(
       "pointer",
       1,
       "mochi-pointer.js",

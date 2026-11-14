@@ -57,15 +57,31 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 503,755 | 162,460 | 3 |
-| Minimal initial | 507,433 | 164,165 | 7 |
-| Feature initial | 508,245 | 164,352 | 7 |
+| Core runtime | 503,961 | 162,503 | 3 |
+| Minimal initial | 507,639 | 164,208 | 7 |
+| Feature initial | 508,451 | 164,395 | 7 |
 | Later feature load | 14,236 | 4,601 | 4 |
-| Feature total | 522,481 | 168,953 | 11 |
-| Network initial | 512,568 | 165,663 | 8 |
-| Network total | 512,568 | 165,663 | 8 |
+| Feature total | 522,687 | 168,996 | 11 |
+| Network initial | 512,774 | 165,706 | 8 |
+| Network total | 512,774 | 165,706 | 8 |
 
-### Wheel input and owned listeners (E5.S2)
+### Optional owned shortcuts (E5.S3)
+
+Core grows **206 raw / 43 gzip bytes** against E5.S2. Loader is now
+**227,841 raw / 48,374 gzip bytes**. The shared cost is a mount-guarded
+composed-path scope lookup and the capability's capacity mapping. WASM, glue,
+existing optional adapters, capacity defaults, and memory limits are unchanged.
+All core-containing baselines increase by this exact delta.
+
+`mochi-shortcuts.js` is **6,888 raw / 2,161 gzip bytes**; its Ruby package is
+**391 raw / 280 gzip bytes**. Combined optional feature code is **7,279 / 2,441**,
+excluding consumer component code and manifest/descriptor metadata. Both files
+are absent from minimal applications and load once when a consuming component
+mounts. Keyboard policies and registration tables remain in the optional
+adapter. See [shortcut contracts](SHORTCUT_CONTRACT.md).
+
+### Wheel input and owned listeners (E5.S2 historical delta)
+
 
 Core grows **4,749 raw / 1,068 gzip bytes** against E5.S1. Loader is now
 **227,635 raw / 48,331 gzip bytes**. This covers normalized raw wheel fields,

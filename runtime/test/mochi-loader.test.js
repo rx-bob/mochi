@@ -6591,6 +6591,8 @@ test("owned adapter notifications and refs cannot cross a reused mount", async (
   const ref = document.createElement("div"); ref.setAttribute("data-mochi-ref", "viewport");
   first.shadowRoot.appendChild(ref);
   assert.equal(contexts[0].resolveRef("viewport"), ref);
+  assert.equal(contexts[0].eventScopeIndex([ref, first.shadowRoot, first]), 2);
+  assert.equal(contexts[0].eventScopeIndex([document.body]), -1);
   assert.deepEqual(log.deliveredHostResults[0].envelope.value, { initial: true });
   assert.equal(log.deliveredHostResults.length, 1);
   contexts[0].notify({ width: 400 });
@@ -6598,6 +6600,7 @@ test("owned adapter notifications and refs cannot cross a reused mount", async (
   first.remove(); await flushLifecycle();
   assert.equal(disposed.length, 1);
   assert.equal(contexts[0].resolveRef("viewport"), null);
+  assert.equal(contexts[0].eventScopeIndex([first]), -1);
   module.reuseInstance(9); module.queueEmit(probeLine(9, []));
   const second = document.createElement("probe-panel");
   document.body.appendChild(second); await second._mochiReady; await flushLifecycle();

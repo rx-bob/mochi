@@ -25,6 +25,7 @@ class EditableGraphRoot
   @scale
   @fit_enabled
   @layout_status
+  @shortcut_error
   @wheel_pending
   @wheel_pixels
   @wheel_lines
@@ -63,12 +64,33 @@ class EditableGraphRoot
     @terminal_reason = ""
     @scale = 1
     @fit_enabled = false
+    @shortcut_error = ""
     @layout_status = "ready"
     clear_wheel
   end
 
   def mounted
     MochiLayout.observe("viewport", "on_viewport")
+    MochiShortcuts.register("z", "shortcut_undo", {"ctrl" => true, "prevent" => true})
+    MochiShortcuts.register("z", "shortcut_undo", {"meta" => true, "prevent" => true})
+    MochiShortcuts.register("z", "shortcut_redo", {"ctrl" => true, "shift" => true, "prevent" => true})
+    MochiShortcuts.register("z", "shortcut_redo", {"meta" => true, "shift" => true, "prevent" => true})
+  end
+
+  def shortcut_undo(result)
+    if result["ok"]
+      undo_change
+    else
+      @shortcut_error = result["error"]
+    end
+  end
+
+  def shortcut_redo(result)
+    if result["ok"]
+      redo_change
+    else
+      @shortcut_error = result["error"]
+    end
   end
 
   def on_viewport(result)
@@ -430,6 +452,8 @@ class EditableGraphRoot
   def html
     %Q{
       <h1>Editable graph</h1>
+      <label>Graph note <input class="graph-note" type="text"></label>
+      <output class="shortcut-error">{@shortcut_error}</output>
       <p>Selected <span class="selected-id">{@selected_id}</span></p>
       <p><span class="node-count">{@nodes.length}</span> nodes; <span class="edge-count">{@edges.length}</span> edges</p>
       <p>Undo <span class="undo-count">{@undo.length}</span>; redo <span class="redo-count">{@redo.length}</span></p>
@@ -447,7 +471,7 @@ class EditableGraphRoot
       <button class="fit" onclick="{fit_view}">Fit graph</button>
       <button class="stop-layout" onclick="{stop_layout}">Stop resize observation</button>
       <output class="layout-status">{@layout_status}</output>
-      <div class="viewport" ref="viewport" style="width:400px;height:220px;max-width:100%;display:{@open ? 'block' : 'none'}">
+      <div class="viewport" ref="viewport" tabindex="0" style="width:400px;height:220px;max-width:100%;display:{@open ? 'block' : 'none'}">
       {if @open}
         <svg class="canvas" viewBox="0 0 {@width} {@height}" width="100%" height="100%" role="img" aria-label="Editable workflow" style="touch-action: none;font:14px monospace"
              onwheel.prevent="{wheel_zoom($event)}" onpointermove="{move_drag($event)}" onpointerup="{finish_drag($event)}"

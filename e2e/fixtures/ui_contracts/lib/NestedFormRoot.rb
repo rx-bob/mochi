@@ -7,6 +7,8 @@ class NestedFormRoot
   @quoted
   @saved
   @cancelled
+  @focus_return
+  @shortcut_error
 
   def initialize
     @groups = [
@@ -21,9 +23,35 @@ class NestedFormRoot
     ]
     @saved = "none"
     @cancelled = false
+    @focus_return = false
+    @shortcut_error = ""
     @last = "none"
     @events = 0
     @quoted = {"label" => "Quoted title", "active" => true}
+  end
+
+  def mounted
+    MochiShortcuts.register("Escape", "shortcut_cancel",
+      {"scope" => "application", "active_ref" => "dialog", "prevent" => true, "allow_editable" => true})
+  end
+
+  def shortcut_cancel(result)
+    if result["ok"]
+      @cancelled = true
+      close_form
+    else
+      @shortcut_error = result["error"]
+    end
+  end
+
+  def close_form
+    @open = false
+    if @focus_return
+      Mochi.restore_focus
+    else
+      Mochi.focus("toggle")
+    end
+    @focus_return = false
   end
 
   def field(id, label, value, help, invalid)
@@ -35,8 +63,13 @@ class NestedFormRoot
   end
 
   def toggle
-    @open = !@open
-    Mochi.focus("toggle") unless @open
+    if @open
+      close_form
+    else
+      @open = true
+      Mochi.focus("dialog")
+      @focus_return = true
+    end
   end
 
   def reorder
@@ -103,8 +136,7 @@ class NestedFormRoot
 
   def cancel_form(event)
     @cancelled = event["discarded"]
-    @open = false
-    Mochi.focus("toggle")
+    close_form
   end
 
   def pick(group_id, field_id, group_index, field_index)
@@ -130,6 +162,7 @@ class NestedFormRoot
   def html
     %Q{
       <h1>Nested form</h1>
+      <output class="shortcut-error">{@shortcut_error}</output>
       <button class="adversarial" onclick="{adversarial_labels}">Use quoted labels</button>
       <p class="quoted-static" title="{@quoted["label"]}" data-alt='{@quoted['label']}' data-interpolated="{"#{@quoted["label"]}:#{%q[}]}"}" data-literal="{{literal}}">{@quoted["label"]}</p>
       <button class="quoted-event" onclick="{quote_event("#{@quoted["label"]}:#{%q[}]}")}">Read quoted title</button>
@@ -144,6 +177,7 @@ class NestedFormRoot
       <output class="saved">{@saved}</output><output class="cancelled">{@cancelled}</output>
       <output class="last">{@last}</output><output class="events">{@events}</output>
       {if @open}
+        <section ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-label="Nested form" tabindex="-1" data-mochi-focus-trap>
         <p class="quoted-branch {if @quoted["active"]}active{end}" title="{@quoted["label"]}" data-entity="{if @quoted["active"]}&quot; {@quoted["label"]} &amp;{else}none{end}">{@quoted['label']}</p>
         <div class="groups">
           {each @groups as group, gi, key: group["id"]}
@@ -174,6 +208,7 @@ class NestedFormRoot
             </section>
           {end}
         </div>
+        </section>
       {else}
         <p class="closed">Form closed</p>
       {end}

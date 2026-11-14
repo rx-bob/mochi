@@ -10,6 +10,90 @@ const repoRoot = path.resolve(__dirname, "../..");
 const compiler = path.join(repoRoot, "compiler/mochi");
 const fixture = path.join(__dirname, "../fixtures/ui_contracts");
 
+test("active form shortcut scope suppresses graph actions and restores focus @ui-graph @ui-form", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const graph = page.locator("editable-graph-root"), form = page.locator("nested-form-root");
+    await expect(graph.locator(".node")).toHaveCount(4);
+    await expect(form.locator(".closed")).toHaveText("Form closed");
+    await graph.locator(".move").click(); await graph.locator(".move").click();
+    await graph.locator(".viewport").focus(); await page.keyboard.press("Control+z");
+    await expect(graph.locator(".undo-count")).toHaveText("1");
+    await page.keyboard.press("Control+Shift+z");
+    await expect(graph.locator(".undo-count")).toHaveText("2");
+    await page.evaluate(() => {
+      (window as any).__keyPrevention = [];
+      document.addEventListener("keydown", event => (window as any).__keyPrevention.push(event.defaultPrevented));
+    });
+    await graph.locator(".graph-note").fill("Keep ordinary editing");
+    await page.keyboard.press("Control+z"); await page.keyboard.press("Meta+z");
+    await expect(graph.locator(".undo-count")).toHaveText("2");
+    expect(await page.evaluate(() => (window as any).__keyPrevention.some(Boolean))).toBe(false);
+    for (let index = 0; index < 3; index++) {
+      await form.locator(".toggle").focus(); await page.keyboard.press("Enter");
+      await expect(form.locator(".dialog")).toBeFocused();
+      // Even forced focus outside a modal owner cannot activate lower scopes.
+      await graph.locator(".viewport").focus(); await page.keyboard.press("Control+z");
+      await expect(graph.locator(".undo-count")).toHaveText("2");
+      const draft = form.locator("[data-field='a'] field-editor .draft");
+      await draft.fill("Discard this draft"); await page.keyboard.press("Escape");
+      await expect(form.locator(".closed")).toHaveText("Form closed");
+      await expect(form.locator(".toggle")).toBeFocused();
+      await page.keyboard.press("Escape"); // cancellation removed its registration
+      await expect(form.locator(".toggle")).toBeFocused();
+    }
+    await graph.locator(".viewport").focus(); await page.keyboard.press("Control+z");
+    await expect(graph.locator(".undo-count")).toHaveText("1");
+    // Parent/attribute-driven branches must own the same shortcut lifetime.
+    await form.evaluate(el => el.setAttribute("open", "true"));
+    await expect(form.locator(".dialog")).toBeVisible();
+    await graph.locator(".viewport").focus(); await page.keyboard.press("Control+z");
+    await expect(graph.locator(".undo-count")).toHaveText("1");
+    await form.evaluate(el => el.setAttribute("open", "false"));
+    await expect(form.locator(".closed")).toHaveText("Form closed");
+    await page.keyboard.press("Control+z");
+    await expect(graph.locator(".undo-count")).toHaveText("0");
+    await form.evaluate(el => el.setAttribute("open", "true"));
+    await expect(form.locator(".dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(form.locator(".closed")).toHaveText("Form closed");
+    await expect(graph.locator(".shortcut-error")).toHaveText("");
+    await expect(form.locator(".shortcut-error")).toHaveText("");
+    expect(errors).toEqual([]);
+  }, '<editable-graph-root></editable-graph-root><nested-form-root open="false"></nested-form-root>');
+});
+
+test("shortcuts stay optional and remounts retain one owned action @ui-graph @ui-form", async ({ page }) => {
+  await withCompiledProject(path.join(repoRoot, "compiler/spec/fixtures/payload/minimal"), async (_url, bundle) => {
+    expect(fs.existsSync(path.join(bundle, "mochi-shortcuts.js"))).toBe(false);
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundle, "mochi-manifest.json"), "utf8"));
+    expect(manifest.capabilities?.shortcuts).toBeUndefined();
+    expect(Object.keys(manifest.packages).some(key => key.includes("builtin_shortcuts"))).toBe(false);
+  });
+  const requests: string[] = []; page.on("request", request => requests.push(request.url()));
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    await expect(page.locator("inspector-root .total")).toHaveText("480");
+    expect(requests.filter(url => url.endsWith("/mochi-shortcuts.js"))).toHaveLength(0);
+    await page.evaluate(() => { (window as any).__graph = document.createElement("editable-graph-root"); });
+    for (let index = 0; index < 3; index++) {
+      await page.evaluate(() => document.body.appendChild((window as any).__graph));
+      const graph = page.locator("editable-graph-root");
+      await expect(graph.locator(".node")).toHaveCount(4);
+      await graph.locator(".move").click(); await graph.locator(".move").click();
+      await graph.locator(".viewport").focus(); await page.keyboard.press("Control+z");
+      await expect(graph.locator(".undo-count")).toHaveText("1");
+      await expect(graph.locator(".redo-count")).toHaveText("1");
+      await graph.evaluate(el => el.remove());
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+      await page.keyboard.press("Control+z");
+    }
+    expect(requests.filter(url => url.endsWith("/mochi-shortcuts.js"))).toHaveLength(1);
+    await expect.poll(() => page.evaluate(() => (window as any).MochiLoader.debugStats().pendingHostRequests)).toBe(0);
+  }, "<inspector-root></inspector-root>");
+});
+
 test("wheel zoom preserves measured pointer anchor, units, limits, and drag @ui-graph", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

@@ -113,6 +113,15 @@ scrolling is prevented only over the SVG region. See [layout contracts](../../..
 and [wheel contracts](../../../references/WHEEL_CONTRACT.md).
 The existing pointer capability loads only when the graph mounts.
 
+E5.S3 adds optional Ctrl/Meta+Z undo and Ctrl/Meta+Shift+Z redo while the graph
+has focus. Its note input keeps native editing behavior. Open forms own an
+application shortcut scope: Escape cancels through nested editor inputs while
+graph shortcuts remain inactive. User-opened dialogs restore opener focus on
+close. A static `active_ref` tied to the dialog makes local and parent-driven `open`
+changes deactivate/reactivate the same owned scope. See
+[shortcut contracts](../../../references/SHORTCUT_CONTRACT.md).
+
+
 `editable_graph_test.rb` performs 45 edits, checks all 40 undo and redo steps,
 branches after undo, and exercises node/edge restoration, cancellation, loss,
 branch removal, and unmount. Browser tests compare complete rendered snapshots

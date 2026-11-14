@@ -416,6 +416,35 @@ RUBY
     end
   end
 
+  it "loads shortcuts only through reachable Ruby shortcut dependencies" do
+    root = File.join(Dir.tempdir, "mochi_package_shortcuts_#{Random.rand(1_000_000)}")
+    Dir.mkdir_p(File.join(root, "lib"))
+    begin
+      shortcuts = dependency_prelude(root, "lib/mochi_builtin_shortcuts.rb", "class MochiShortcuts\nend\n")
+      plain = dependency_component(root, "plain-shortcuts", "PlainShortcuts", "class PlainShortcuts\nend\n")
+      helper = dependency_helper(root, "mochi-helpers-shortcuts.chi", "lib/shortcuts_helper.rb", <<-RUBY)
+class ShortcutsHelper
+  def self.watch
+    MochiShortcuts.register("Escape", "on_escape")
+  end
+end
+RUBY
+      measured = dependency_component(root, "measured-shortcuts", "MeasuredShortcuts", "class MeasuredShortcuts\n  def mounted\n    ShortcutsHelper.watch\n  end\nend\n")
+      measured.manifest.helper_chi = helper.key
+      graph = dependency_graph(root, [plain, measured], [shortcuts], [helper])
+      plain.manifest.capabilities.should eq([] of String)
+      measured.manifest.capabilities.should eq(["shortcuts"])
+      graph.capabilities["shortcuts"].host.should eq("mochi-shortcuts.js")
+      graph.capabilities["shortcuts"].limit_keys.should eq([{"registrations", "bindings"}])
+      graph.capabilities["shortcuts"].operations.map { |operation| {operation.name, operation.mode} }
+        .should eq([{"register", "async"}, {"cancel", "async"}])
+      unused = dependency_graph(root, [plain], [shortcuts], [] of HelperUnit)
+      unused.has_capability?("shortcuts").should be_false
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "loads the pointer adapter only for components that reach MochiPointer" do
     root = File.join(Dir.tempdir, "mochi_package_pointer_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(File.join(root, "lib"))

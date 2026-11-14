@@ -10,6 +10,7 @@
     formatting: { cache_entries: "host_format_cache_entries" },
     pointer: {},
     layout: { requests: "bindings" },
+    shortcuts: { registrations: "bindings" },
     drag: { payload_bytes: "host_drag_payload_bytes" },
     files: {
       handles: "host_file_handles",
@@ -1219,6 +1220,10 @@
       result = operation.call(adapter.async, argsJson, adapter.limits, {
         owner: String(request.instance), mountToken: request.mountToken, request: request,
         isLive: function () { return hostRequestElement(request) === element; },
+        eventScopeIndex: function (path) {
+          if (hostRequestElement(request) !== element) return -1;
+          return path.indexOf(element);
+        },
         resolveRef: function (reference) {
           if (hostRequestElement(request) !== element) return null;
           return findNamedRef(element, reference);

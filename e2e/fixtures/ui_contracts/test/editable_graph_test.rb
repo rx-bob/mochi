@@ -246,3 +246,29 @@ Mochi::Test.test("canceled drags preserve redo while a completed new drag clears
   assert_text ".redo-count", "1"
   assert_pointer_capture_released
 end
+
+Mochi::Test.test("owned graph shortcuts undo redo without intercepting note editing") do
+  mount "editable-graph-root"
+  click ".move"
+  focus ".viewport"
+  press "Control+z"
+  assert_attribute "[data-node='b']", "transform", "translate(180 50)"
+  press "Control+Shift+z"
+  assert_attribute "[data-node='b']", "transform", "translate(200 60)"
+  press "Meta+z"
+  assert_attribute "[data-node='b']", "transform", "translate(180 50)"
+  press "Meta+Shift+z"
+  assert_attribute "[data-node='b']", "transform", "translate(200 60)"
+  focus ".graph-note"
+  fill ".graph-note", "Draft note"
+  press "Control+z"
+  assert_attribute "[data-node='b']", "transform", "translate(200 60)"
+  assert_text ".undo-count", "1"
+  assert_text ".shortcut-error", ""
+  remount "editable-graph-root"
+  click ".move"
+  focus ".viewport"
+  press "Control+z"
+  assert_text ".undo-count", "0"
+  assert_text ".redo-count", "1"
+end

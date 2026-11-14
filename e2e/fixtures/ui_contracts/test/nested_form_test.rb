@@ -140,3 +140,26 @@ Mochi::Test.test("keyboard save and cancel preserve focus and current draft cont
   click ".toggle"
   assert_focused ".toggle"
 end
+
+Mochi::Test.test("dialog Escape cancels once through child editors and restores opener focus") do
+  mount "nested-form-root", open: false
+  focus ".toggle"
+  press "Enter"
+  wait_for_settled
+  assert_focused ".dialog"
+  focus "[data-field='a'] field-editor >>> .draft"
+  fill "[data-field='a'] field-editor >>> .draft", "Discard by Escape"
+  press "Escape"
+  assert_text ".closed", "Form closed"
+  assert_text ".cancelled", "true"
+  assert_focused ".toggle"
+  press "Escape"
+  assert_focused ".toggle"
+  press "Enter"
+  wait_for_settled
+  assert_value "[data-field='a'] field-editor >>> .draft", "Alpha"
+  press "Escape"
+  assert_text ".closed", "Form closed"
+  assert_focused ".toggle"
+  assert_text ".shortcut-error", ""
+end

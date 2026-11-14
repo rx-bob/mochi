@@ -58,7 +58,7 @@ Probe names below are directory names under `e2e/fixtures/ui_contracts/probes/` 
 
 The synthetic workload in report 04 preserves nested hashes/arrays, concatenation, and repeated scans, but not every byte and binding of the application. It does not reproduce the reported 32,738-byte allocation failure or prove that 480 arbitrarily large records fit. Default scratch limits remain 2,048 objects and 131,072 bytes. E4 must test realistic structured records, resource lifetimes, and failure/recovery, using existing configuration rather than silently raising global budgets.
 
-Report 09 is a capability inventory, not one executable expression. JSON parse is probed; JSON generation/`require "json"` loading and error contracts belong to E6.S1. Time.now is probed; the timestamp subset belongs to E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned global shortcuts belong to E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. These broader contracts remain unresolved until their stories deliver them.
+Report 09 is a capability inventory, not one executable expression. JSON parse is probed; JSON generation/`require "json"` loading and error contracts belong to E6.S1. Time.now is probed; the timestamp subset belongs to E6.S2. Measurement and owned resize callbacks are delivered in E5.S1; raw wheel input and anchored zoom in E5.S2. Owned keyboard shortcuts and dialog scope precedence are delivered in E5.S3; actual browser downloads to E6.S3. No supported Ruby API is invented here merely to make a negative probe. These broader contracts remain unresolved until their stories deliver them.
 
 Full Math, Date/timezone breadth, Regexp/query parsing, slots, arbitrary DOM/window access, and SVG custom-element composition are explicit deferrals. Mochi's existing formatters, focus helpers, and focus-trap support do not imply those capabilities. Bounded files and static icons are already available: the default whole-file limit is **48,000 bytes**, not a two-megabyte promise; 8,192-byte chunks support larger bounded streaming reads. Icons are selected from project `icons/` assets and emitted on demand, not supplied as an implicit Lucide catalog.
 
@@ -1019,4 +1019,51 @@ Validation on 2026-11-14:
 - All 15 minimal compile-time checks passed at **135.8–142.0 ms**, below the
   strict 1,000 ms limit. No new benchmark, telemetry, or capacity knob was added.
 
-Next story: E5.S3 — add mount-owned keyboard shortcut registration.
+## E5.S3 — optional mount-owned shortcuts
+
+`MochiShortcuts.register(key, callback, options)` returns an Integer cleanup
+token through the existing host ABI; `cancel(token)` cancels only that owner's
+current mount. Successful registration does not invoke the action. Matching
+keys and registration errors use the normal `ok/value/error` callback envelope.
+No GVM changes or Ruby test-runner extensions were needed.
+
+The optional adapter strictly matches modifiers, normalizes single-letter key
+case, ignores editable paths and repeats by default, and always ignores
+composition. A composed-path check finds component ownership across shadow
+roots. The newest active application owner suppresses lower shortcut scopes;
+only one eligible match runs and declared prevention happens synchronously.
+Registrations are bounded by existing binding capacity and removed on disposal.
+
+An optional static `active_ref` makes scope activation follow its DOM region.
+A missing ref deactivates without canceling the token; replacement/reactivation
+updates precedence. Keydown rechecks ownership/ref presence before dispatch,
+so neither branch-observer timing nor old mount generations can expose stale
+shortcuts. Graph Ctrl/Meta+Z and Shift+Z operate while graph scope has focus;
+its text input retains ordinary editing. Form Escape opts into editable targets,
+closes through nested editor shadows, and restores captured opener focus.
+Initially open forms retain the explicit toggle fallback.
+
+The full matrix exposed a race in an intermediate conditional shortcut child:
+the dialog could receive focus before that child registered its modal scope.
+Binding activation directly to the parent-owned dialog ref fixes this and
+handles externally updated `open` props without additional lifecycle hooks.
+Ruby scenarios and native browser checks cover focus, precedence, editing,
+repeated mount/disposal, one-time lazy loading, and unused-package omission.
+See [shortcut contracts](SHORTCUT_CONTRACT.md).
+
+Validation on 2026-11-14:
+
+- **566 compiler examples** and **221 runtime tests** passed.
+- **441 browser checks** passed across Chromium, Firefox, and WebKit: 381 main
+  (including the 100-cycle fixture lifecycle checks), plus 60 asset/install.
+  Final run uses ref-based activation; no failures or skipped cases.
+- Payload determinism, membership, and exact ceilings passed. Core is
+  **503,961 raw / 162,503 gzip bytes**, a shared loader increase of **206 / 43**.
+  WASM, glue, memory limits, and capacity defaults remain unchanged.
+- Optional adapter: **6,888 raw / 2,161 gzip bytes**; Ruby package:
+  **391 raw / 280 gzip bytes**. Combined optional code is **7,279 / 2,441**,
+  excluding consuming component code and manifest/descriptor metadata.
+- All 15 minimal compile-time checks passed at **133.3–221.5 ms**, below the
+  strict 1,000 ms gate. No new telemetry, benchmark, or capacity controls.
+
+Next story: E6.S1 — provide bounded JSON parsing and generation.
