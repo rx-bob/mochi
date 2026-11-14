@@ -103,6 +103,40 @@ test('feedback: binding failures name unsupported helper and preserve binding co
   }, '<review-root></review-root>');
 });
 
+test('feedback: is_a? matches Ruby value classes across VM zones, props, inheritance, and recovery', async ({page}) => {
+  await page.addInitScript(() => {
+    (window as any).__mochiErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__mochiErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const expected = 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true';
+    await expect(page.locator('.init')).toHaveText(expected);
+    await expect(page.locator('.binding')).toHaveText(expected);
+    await page.locator('.check').click();
+    await expect(page.locator('.event')).toHaveText(expected);
+
+    await page.locator('.bad-arity').click();
+    await expect.poll(async () => page.evaluate(() => (window as any).__mochiErrors.length)).toBe(1);
+    let errors = await page.evaluate(() => (window as any).__mochiErrors);
+    expect(errors[0].phase).toBe('event');
+    expect(errors[0].source).toContain('TypeInspection.rb:');
+    expect(errors[0].vmText).toContain('wrong number of arguments');
+
+    await page.locator('.check').click();
+    await expect(page.locator('.event')).toHaveText(expected);
+    await page.locator('.bad-type').click();
+    await expect.poll(async () => page.evaluate(() => (window as any).__mochiErrors.length)).toBe(2);
+    errors = await page.evaluate(() => (window as any).__mochiErrors);
+    expect(errors[1].source).toContain('TypeInspection.rb:');
+    expect(errors[1].vmText).toContain('type mismatch');
+    await page.locator('.check').click();
+    await expect(page.locator('.event')).toHaveText(expected);
+  }, '<type-inspection items="[]" meta="{}"></type-inspection>');
+});
+
 test('feedback: dragstart inside conditional keyed rows registers without ancestor listener', async ({page}) => {
   await withCompiledProject(fixture, async url => {
     await page.goto(url);

@@ -57,13 +57,13 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 415,706 | 133,115 | 3 |
-| Minimal initial | 419,384 | 134,820 | 7 |
-| Feature initial | 420,196 | 135,007 | 7 |
+| Core runtime | 416,204 | 133,512 | 3 |
+| Minimal initial | 419,882 | 135,217 | 7 |
+| Feature initial | 420,694 | 135,404 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 435,477 | 139,828 | 11 |
-| Network initial | 424,519 | 136,318 | 8 |
-| Network total | 424,519 | 136,318 | 8 |
+| Feature total | 435,975 | 140,225 | 11 |
+| Network initial | 425,017 | 136,715 | 8 |
+| Network total | 425,017 | 136,715 | 8 |
 
 ### Lifecycle source diagnostics (completion audit)
 
@@ -476,7 +476,7 @@ runtime, not to either fixture's entry component or later feature load.
 ### Rebuilt GVM runtime and bytecode compatibility (E2.S3)
 
 The GVM WASM and JS were rebuilt from current runtime source before browser
-validation. Core artifacts now measure **415,706 raw / 133,115 gzip bytes**,
+validation. At that stage, core artifacts measured **415,706 raw / 133,115 gzip bytes**,
 down from the previous recorded **511,067 / 165,293**. This is a reduction of
 **95,361 raw / 32,178 gzip bytes** across WASM, JS glue, and loader. WASM
 shrinks by **40,556 / 18,080**, JS glue by **55,502 / 14,262**, while loader
@@ -492,11 +492,19 @@ cliff is removed; fixed method-table, bytecode, and other capacity limits remain
 documented in [fixed VM capacities](../docs/fixed-capacities.md). Debug tables
 remain excluded from shipped `.chi` files.
 
+### Canonical Ruby type inspection (E3.S1)
+
+Canonical class identities and `Object#is_a?` checks add **498 raw / 397 gzip
+bytes** to the core runtime, all in WASM; JS glue and loader are unchanged.
+The predicate checks immediate and boxed numeric values, scratch and state
+collections, strings, symbols, booleans, nil, and custom class ancestry without
+wrapping values. The payload budgets below include this measured growth.
+
 Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 176,952 | 80,597 |
+| `mochi-gvm.wasm` | 177,450 | 80,994 |
 | `mochi-gvm.js` | 8,658 | 3,631 |
 | `mochi-loader.js` | 230,096 | 48,887 |
 
@@ -518,9 +526,9 @@ Minimal initial (current measured artifacts):
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-Minimal initial is 419,384 / 134,820; formatting feature initial is 420,196 /
-135,007; formatting feature total is 435,477 / 139,828; and network initial /
-total is 424,519 / 136,318. The checked-in JSON budget matches these measured
+Minimal initial is 419,882 / 135,217; formatting feature initial is 420,694 /
+135,404; formatting feature total is 435,975 / 140,225; and network initial /
+total is 425,017 / 136,715. The checked-in JSON budget matches these measured
 artifacts.
 
 Feature initial adds only manifest metadata:
