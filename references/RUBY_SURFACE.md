@@ -9,6 +9,7 @@ buildable/typechecked examples and Ruby-authored tests. Labeled fixture excerpts
 below belong to their linked complete classes/modules, not standalone components. The
 [current feedback inventory](UI_FIXTURE_CONTRACTS.md) distinguishes supported,
 intentional and deferred outcomes from historical observations.
+For workflows, start with the [Ruby task guide](RUBY_TASK_GUIDE.md).
 
 ## Optional downloads
 

@@ -4,6 +4,8 @@
 it from a reachable component/helper adds its capability dependency. The host
 module loads when a consuming component mounts; unrelated applications omit
 both package and adapter. No application JavaScript or document handle is needed.
+The [Ruby task guide](RUBY_TASK_GUIDE.md#register-scoped-shortcuts) links its
+fixture and scoped keyboard scenarios.
 
 ```ruby
 def mounted

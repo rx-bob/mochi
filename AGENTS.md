@@ -12,6 +12,7 @@ The sections below describe the current implementation and its contracts.
 
 ## Guide index
 
+- [Ruby task guide](references/RUBY_TASK_GUIDE.md): timers, storage, downloads, events, datasets, shortcuts, and screen lifetime recipes
 - [Build from source](#building-mochi-from-source), [tasks](#compiler-tasks), and [CLI / development installation](#cli-reference)
 - [Complete Ruby examples and contracts](#complete-ruby-examples-and-contracts)
 - [Shared styles](#shared-component-styles), [public assets](#public-assets), and [icons](#icons)

@@ -84,6 +84,7 @@ page. The generated starter already includes a counter and a test to try.
 
 ## Learn More
 
+- [Ruby task guide](references/RUBY_TASK_GUIDE.md): recipes for timers, preferences, downloads, events, datasets, shortcuts, and screen lifetimes.
 - [Ruby examples](e2e/fixtures/ui_contracts/README.md): a record inspector, SVG graph editor, and nested form.
 - [Supported Ruby](references/RUBY_SURFACE.md): available APIs and current limits.
 - [Project guide](AGENTS.md): styling, props, events, routing, capabilities, and contributor commands.

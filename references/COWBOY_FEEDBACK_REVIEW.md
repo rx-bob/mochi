@@ -87,4 +87,6 @@ Thus adding a template binding can trigger failure without adding an authored me
 4. Document and test existing timer/storage APIs and asynchronous layout/readiness semantics.
 5. Review raw-markup wrapper behavior and deliberate content projection as separate composition designs.
 
+The tested developer workflows are collected in the [Ruby task guide](RUBY_TASK_GUIDE.md); it links the runnable Mochi fixtures and contracts without changing this review's findings.
+
 Do not introduce reserved event names, force one event per child, ban row components, broaden shortcut scope automatically, or add another timer API on the basis of these reports.

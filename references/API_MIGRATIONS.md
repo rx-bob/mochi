@@ -2,6 +2,7 @@
 
 This page covers user-visible contract changes. New browser APIs remain Ruby
 interfaces and are loaded only when an application uses their package.
+For checked task examples, see the [Ruby task guide](RUBY_TASK_GUIDE.md).
 
 ## Global events
 
