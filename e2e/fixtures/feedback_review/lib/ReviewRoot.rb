@@ -61,6 +61,9 @@ class ReviewRoot
         <button class="save" onclick="{save}">Save</button><button class="read" onclick="{read}">Read</button>
         <button class="fail-helper" onclick="{fail_helper}">Fail helper</button><button class="recover-helper" onclick="{recover_helper}">Recover helper</button>
         <output>{@result}</output><span class="ticks">{@ticks}</span><span class="diagnostic">{diagnostic}</span>
+        <method-boundary-256></method-boundary-256>
+        <method-boundary-257></method-boundary-257>
+        <method-boundary-260></method-boundary-260>
         <div class="mixed">Before {Mochi.raw(icon)} after</div>
         {if @show}
           <section class="modal">{Mochi.raw(body)}

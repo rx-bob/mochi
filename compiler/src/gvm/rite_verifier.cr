@@ -74,11 +74,14 @@ class RiteVerifier
      95_u8 => 3, # OP_HASHADD
      96_u8 => 2, # OP_HASHCAT
      98_u8 => 3, # OP_BLOCK
+     99_u8 => 3, # OP_METHOD
     103_u8 => 3, # OP_CLASS
     104_u8 => 3, # OP_MODULE
     105_u8 => 3, # OP_EXEC
+    106_u8 => 3, # OP_DEF
     107_u8 => 4, # OP_TDEF
     108_u8 => 4, # OP_SDEF
+    112_u8 => 2, # OP_TCLASS
     118_u8 => 1, # OP_STOP
   }
 
@@ -109,11 +112,9 @@ class RiteVerifier
      89_u8 => "OP_APOST",
      90_u8 => "OP_INTERN",
      97_u8 => "OP_LAMBDA",
-     99_u8 => "OP_METHOD",
     100_u8 => "OP_RANGE_INC",
     101_u8 => "OP_RANGE_EXC",
     102_u8 => "OP_OCLASS",
-    106_u8 => "OP_DEF",
     109_u8 => "OP_ALIAS",
     110_u8 => "OP_UNDEF",
     111_u8 => "OP_SCLASS",
@@ -165,10 +166,11 @@ class RiteVerifier
     end
     if catches > 0
       # Locate the first exception opcode for the authored rescue/ensure line.
-      verify_iseq!(bytes[cursor + 16, length], context, index)
+      verify_iseq!(bytes[cursor + 16, length], context, index,
+        read_u16_be(bytes, cursor + 6).to_i, children)
       raise Unsupported.new("rescue/ensure handlers", context, index, 0)
     end
-    verify_iseq!(bytes[cursor + 16, length], context, index)
+    verify_iseq!(bytes[cursor + 16, length], context, index, read_u16_be(bytes, cursor + 6).to_i, children)
     at = cursor + size
     next_index = index + 1
     children.times do
@@ -177,10 +179,34 @@ class RiteVerifier
     {at, next_index}
   end
 
-  private def self.verify_iseq!(iseq : Bytes, context : String, index : Int32) : Nil
+  private def self.verify_iseq!(iseq : Bytes, context : String, index : Int32,
+                                register_count : Int32, child_count : Int32) : Nil
     pc = 0
     while pc < iseq.size
       op = iseq[pc]
+      if op == 115 || op == 116 || op == 117
+        raise "Truncated extension opcode in #{context} (IREP ##{index} at pc=#{pc})" if pc + 1 >= iseq.size
+        extended_op = iseq[pc + 1]
+        unless extended_op == 99 || extended_op == 106 || extended_op == 112
+          raise Unsupported.new("extended #{OPCODE_NAMES[extended_op]? || "OP_UNKNOWN_#{extended_op}"}", context, index, pc)
+        end
+        widths = case op
+                 when 115 then {2, 1}
+                 when 116 then {1, 2}
+                 else          {2, 2}
+                 end
+        operand_count = extended_op == 112 ? 1 : 2
+        a_width = widths[0]
+        b_width = operand_count == 2 ? widths[1] : 0
+        operands_at = pc + 2
+        size = a_width + b_width
+        raise "Truncated extension operands in #{context} (IREP ##{index} at pc=#{pc})" if operands_at + size > iseq.size
+        a = read_operand(iseq, operands_at, a_width)
+        b = operand_count == 2 ? read_operand(iseq, operands_at + a_width, b_width) : 0
+        validate_definition_operands!(extended_op, a, b, register_count, child_count, context, index, pc)
+        pc = operands_at + size
+        next
+      end
       length = OPCODE_LENGTHS[op]?
       unless length
         name = OPCODE_NAMES[op]? || "OP_UNKNOWN_#{op}"
@@ -194,7 +220,42 @@ class RiteVerifier
         raise Unsupported.new(construct, context, index, pc)
       end
       raise "Truncated instruction #{op} in #{context} (IREP ##{index} at pc=#{pc})" if pc + length > iseq.size
+      if op == 99 || op == 106 || op == 112
+        a = iseq[pc + 1].to_i
+        b = op == 112 ? 0 : iseq[pc + 2].to_i
+        validate_definition_operands!(op, a, b, register_count, child_count, context, index, pc)
+      elsif op == 107
+        a = iseq[pc + 1].to_i
+        child = iseq[pc + 3].to_i
+        validate_definition_operands!(107, a, child, register_count, child_count, context, index, pc)
+      end
       pc += length
+    end
+  end
+
+  private def self.read_operand(iseq : Bytes, offset : Int32, width : Int32) : Int32
+    width == 1 ? iseq[offset].to_i : ((iseq[offset].to_i << 8) | iseq[offset + 1].to_i)
+  end
+
+  private def self.validate_definition_operands!(op : UInt8, a : Int32, b : Int32,
+                                                registers : Int32, children : Int32,
+                                                context : String, index : Int32, pc : Int32) : Nil
+    valid = if op == 99
+              a > 0 && a < registers && b < children
+            elsif op == 106
+              a + 1 < registers
+            elsif op == 112
+              a < registers
+            elsif op == 108
+              a < registers && b < children
+            elsif op == 107
+              # mrbc may store nregs without OP_TDEF's write-only result register.
+              a <= registers && b < children
+            else
+              a < registers && b < children
+            end
+    unless valid
+      raise "Invalid method-definition operand #{op}/#{a}/#{b} with #{registers} registers and #{children} children in #{context} (IREP ##{index} at pc=#{pc})"
     end
   end
 

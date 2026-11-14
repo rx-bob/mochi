@@ -57,6 +57,43 @@ RUBY
     end
   end
 
+  it "verifies fused and fallback method definitions across child IREP 255" do
+    [256, 257, 260].each do |count|
+      source = String.build do |builder|
+        builder << "class BoundaryProbe\n"
+        count.times do |method|
+          builder << "  def method_#{method}; #{method}; end\n"
+        end
+        builder << "end\nBoundaryProbe.new\n"
+      end
+      compile_contract(source) do |bytes|
+        RiteVerifier.verify!(bytes, "boundary.rb")
+      end
+    end
+  end
+
+  it "rejects invalid method children and truncated extension instructions" do
+    compile_contract("class Probe\n  def item; 1; end\nend\n") do |bytes|
+      corrupt_child = bytes.dup
+      root_size = (bytes[32].to_u32 << 24) | (bytes[33].to_u32 << 16) |
+                  (bytes[34].to_u32 << 8) | bytes[35].to_u32
+      class_body = 32 + root_size.to_i
+      corrupt_child[class_body + 19] = 255_u8 # TDEF child IREP ordinal
+      expect_raises(Exception, "Invalid method-definition operand") do
+        RiteVerifier.verify!(corrupt_child, "bad-child.rb")
+      end
+    end
+
+    compile_contract("1\n") do |bytes|
+      corrupt = bytes.dup
+      corrupt[48] = 117_u8 # OP_EXT3
+      corrupt[49] = 99_u8  # OP_METHOD, short stream has no full operand set
+      expect_raises(Exception, "Truncated extension operands") do
+        RiteVerifier.verify!(corrupt, "truncated-extension.rb")
+      end
+    end
+  end
+
   it "accepts loop jumps but rejects malformed headers and record lengths" do
     compile_contract("i = 0\nwhile i < 4\n i += 1\n next if i == 2\n break if i == 3\nend\n") do |bytes|
       RiteVerifier.verify!(bytes, "loop.rb")

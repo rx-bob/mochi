@@ -9,6 +9,9 @@ test('feedback: nested typed children retain both event connections across updat
   page.on('console', m => { if(m.type() === 'error') errors.push(m.text()); });
   await withCompiledProject(fixture, async url => {
     await page.goto(url);
+    await expect(page.locator('.boundary-count-256')).toHaveText('255');
+    await expect(page.locator('.boundary-count-257')).toHaveText('256');
+    await expect(page.locator('.boundary-count-260')).toHaveText('259');
     for (let cycle=0;cycle<3;cycle++) {
       const row = page.locator('[data-row="a"]');
       await expect(row.locator('.label')).toHaveText(cycle ? 'Alpha2' : 'Alpha');
