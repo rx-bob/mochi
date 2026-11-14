@@ -63,7 +63,7 @@ class Initializer
 
     ## Getting Started
 
-    Install the Mochi development command from a Mochi checkout (see the [Mochi getting-started guide](https://github.com/yampug/mochi#installing-the-development-command)). The install links the command to that checkout and records its compiler and browser runtime locations. Add the printed `bin` directory to `PATH` if needed.
+    Install the Mochi development command from a Mochi checkout (see the [Mochi getting-started guide](https://github.com/yampug/mochi/blob/main/AGENTS.md#installing-the-development-command)). The install links the command to that checkout and records its compiler and browser runtime locations. Add the printed `bin` directory to `PATH` if needed.
 
     From this project directory, run:
 
@@ -90,9 +90,9 @@ class Initializer
 
     Put shared CSS under `lib/styles/`. From `lib/MyCounter.rb`, use a literal `@import "./styles/controls.css";` before local rules in `def css`; paths are component-relative and resolved at build time. Project-root `styles/` is not staged. `public/` assets keep their `public/` output prefix. Static icons come from your project's `icons/` directory; no icon catalog is bundled implicitly.
 
-    See Mochi's [Ruby examples and contracts](https://github.com/yampug/mochi#complete-ruby-examples-and-contracts) for computed dependencies, keyed forms/SVG, and optional mount-owned browser APIs. Replace collection roots to publish nested edits; automatic deep mutation observation is not provided. File reads, JSON documents, and downloads have explicit bounds; no application JavaScript or manual adapter tags are needed.
+    See Mochi's [Ruby examples and contracts](https://github.com/yampug/mochi/blob/main/AGENTS.md#complete-ruby-examples-and-contracts) for computed dependencies, keyed forms/SVG, and optional mount-owned browser APIs. Replace collection roots to publish nested edits; automatic deep mutation observation is not provided. File reads, JSON documents, and downloads have explicit bounds; no application JavaScript or manual adapter tags are needed.
 
-    `index.html` uses a root asset base so the loader and compiled bundle also resolve when a static host serves a deep link. The dev server maps `/deep/entry` to the entry page for this purpose. If deploying under a URL prefix, set the base URL and loader paths to that prefix and configure the host to serve the entry page for application routes. See the [asset path guide](https://github.com/yampug/mochi#icons).
+    `index.html` uses a root asset base so the loader and compiled bundle also resolve when a static host serves a deep link. The dev server maps `/deep/entry` to the entry page for this purpose. If deploying under a URL prefix, set the base URL and loader paths to that prefix and configure the host to serve the entry page for application routes. See the [asset path guide](https://github.com/yampug/mochi/blob/main/AGENTS.md#icons).
 
     TEXT
   end

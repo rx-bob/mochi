@@ -497,7 +497,7 @@ unchanged. At zero or negative precision, NaN or Infinity produces a
 range produces `integer overflow`. Integer results remain within the VM's
 checked signed 64-bit range. These methods do
 not provide decimal arithmetic or exact currency calculations; use
-[`MochiMoney`](../README.md#money-helpers) for exact minor-unit accumulation.
+[`MochiMoney`](../AGENTS.md#money-helpers) for exact minor-unit accumulation.
 
 Examples:
 

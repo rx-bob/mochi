@@ -98,7 +98,7 @@ cents = MochiMoney.round_half_up(ledger)
 MochiFormat.currency(cents, "USD", "en-US", 2)
 ```
 
-See [money contracts](../README.md#money-helpers) for exact accumulation and display
+See [money contracts](../AGENTS.md#money-helpers) for exact accumulation and display
 rounding, and [Ruby surface](RUBY_SURFACE.md) for supported numeric and
 collection methods.
 
