@@ -3,7 +3,7 @@ class UnshiftChild
   prop :items, Array, required: true
 
   def prepend
-    @items.unshift(8)
+    RubySurfaceHelpers.prepend_one(@items, 8)
   end
 
   def html
@@ -21,12 +21,12 @@ class UnshiftRoot
 
   def initialize
     @values = [3]
-    @values.unshift(1, 2)
+    RubySurfaceHelpers.prepend_two(@values, 1, 2)
     @alias = @values
   end
 
   def prepend_and_replace
-    @values.unshift(4, 5)
+    RubySurfaceHelpers.prepend_two(@values, 4, 5)
     @values = [0] + @values
   end
 

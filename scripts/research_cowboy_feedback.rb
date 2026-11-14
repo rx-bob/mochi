@@ -13,6 +13,15 @@ abort "Use Ruby 2.7+ for the MRI oracle" if (RUBY_VERSION.split(".").first(2).ma
 observations = {ruby_version: RUBY_VERSION, compiler_sha256: Digest::SHA256.file(COMPILER).hexdigest, compile: [], ruby: []}
 Dir.mktmpdir('mochi-feedback-review-') do |dir|
   FileUtils.mkdir_p(["#{dir}/lib", "#{dir}/test"])
+  helper_source = <<~'RUBY'
+    module SurfaceProbe
+      def self.integer_type?(value)
+        value.is_a?(Integer)
+      end
+    end
+  RUBY
+  File.write("#{dir}/lib/SurfaceProbe.rb", helper_source)
+  TOPLEVEL_BINDING.eval(helper_source, "SurfaceProbe.rb")
   def source(body)
     "class ProbeRoot\n  @tag_name = \"probe-root\"\n#{body}\nend\n"
   end
@@ -49,8 +58,14 @@ end
   {
     'array_type' => '[].is_a?(Array)', 'hash_type' => '{}.is_a?(Hash)',
     'integer_type' => '1.is_a?(Integer)', 'float_type' => '1.0.is_a?(Float)',
+    'wide_integer_type' => '1099511627776.is_a?(Integer)',
+    'integer_not_float' => '!1.is_a?(Float)',
+    'qualified_type_helper' => 'SurfaceProbe.integer_type?(1099511627776)',
     'two_argument_slice' => 'a = [1,2,3,4]; n = 2; a[1,n].join(",")',
     'unshift' => 'a = [2,3]; a.unshift(1); a.join(",")',
+    'unshift_zero_arguments' => 'a = [2,3]; a.unshift; a.join(",")',
+    'unshift_multiple_arguments' => 'a = [3]; a.unshift(1,2); a.join(",")',
+    'unshift_alias' => 'a = [3]; alias_array = a; a.unshift(1,2); alias_array.join(",")',
     'computed_inclusive_slice' => 'a = [1,2,3,4]; n = 2; a[1..n].join(",")',
     'computed_exclusive_slice' => 'a = [1,2,3,4]; n = 3; a[1...n].join(",")',
     'negative_slice' => 'a = [1,2,3,4]; a[1..-1].join(",")',

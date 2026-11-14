@@ -112,9 +112,10 @@ test('feedback: is_a? matches Ruby value classes across VM zones, props, inherit
   });
   await withCompiledProject(fixture, async url => {
     await page.goto(url);
-    const expected = 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true';
+    const expected = 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true';
     await expect(page.locator('.init')).toHaveText(expected);
     await expect(page.locator('.binding')).toHaveText(expected);
+    await expect(page.locator('.each-type')).toHaveText(['true', 'true']);
     await page.locator('.check').click();
     await expect(page.locator('.event')).toHaveText(expected);
 
@@ -134,7 +135,7 @@ test('feedback: is_a? matches Ruby value classes across VM zones, props, inherit
     expect(errors[1].vmText).toContain('type mismatch');
     await page.locator('.check').click();
     await expect(page.locator('.event')).toHaveText(expected);
-  }, '<type-inspection items="[]" meta="{}"></type-inspection>');
+  }, '<type-inspection items="[1,1099511627776]" meta="{}"></type-inspection>');
 });
 
 test('feedback: unshift preserves order and prop snapshots while root replacement renders', async ({page}) => {

@@ -43,6 +43,7 @@ class TypeInspection < TypeInspectionBase
       self.is_a?(TypeInspectionBase),
       self.is_a?(Object),
       shadowed_constant == "lexical",
+      RubySurfaceHelpers.integer_type?(1099511627776),
       ![].is_a?(Hash),
       !({}).is_a?(Array),
       !1.0.is_a?(Integer),
@@ -72,6 +73,9 @@ class TypeInspection < TypeInspectionBase
         <output class="init">{@init_report}</output>
         <output class="binding">{report}</output>
         <output class="event">{@event_report}</output>
+        {each @items as value}
+          <output class="each-type">{RubySurfaceHelpers.integer_type?(value)}</output>
+        {end}
         <button class="check" onclick="{check}">Check</button>
         <button class="bad-arity" onclick="{bad_arity}">Bad arity</button>
         <button class="bad-type" onclick="{bad_type}">Bad type</button>

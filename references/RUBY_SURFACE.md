@@ -518,6 +518,56 @@ Rounding is implemented as small VM numeric operations. It does not load the
 number-formatting adapter or add a Ruby package dependency. The Float results
 are binary64 and should not be used as exact-money values.
 
+## Ruby type inspection
+
+`Object#is_a?(klass)` takes exactly one Class value and returns a Boolean. The
+VM resolves these canonical built-in identities: `Object`, `Array`, `Hash`,
+`Integer`, `Float`, `String`, `Symbol`, `TrueClass`, `FalseClass`, and
+`NilClass`. Integer and Float stay distinct, including boxed wide Integers.
+`Object` matches all supported Ruby values. User-defined classes retain their
+existing ancestor checks.
+
+Constant lookup keeps Ruby lexical and global constants ahead of built-in
+fallbacks, so a local constant named `Integer` keeps its authored meaning.
+Passing a non-Class value reports `type mismatch`; zero or multiple arguments
+report `wrong number of arguments`. Both errors include the authored Ruby
+location and leave later valid entries usable. The operation runs in the VM
+without a host adapter or per-call wrapper allocation. Its behavior is covered
+across initialization, component methods, template bindings and loops, event
+handlers, qualified helpers, and typed Array/Hash props in the
+[feedback fixture](../e2e/fixtures/feedback_review/lib/TypeInspection.rb).
+
+## Array#unshift
+
+`array.unshift` accepts zero through eight positional values, the VM's current
+call argument limit. Values are inserted at the front in argument order, and
+the method returns the same array:
+
+```ruby
+values = [3]
+same_array = values.unshift(1, 2) # values and same_array are [1, 2, 3]
+values.unshift                    # unchanged, returns values
+```
+
+The operation mutates its receiver. Aliases to the same array see the new
+elements, and inserted elements retain shallow identity. Scratch values stored
+in persistent arrays are promoted using the VM's existing state-copy rules;
+declared Array props remain private snapshots, so mutating a child's prop does
+not mutate the parent's array. Persistent collection writes keep their existing
+binding notifications. Computed values still invalidate only when a declared
+root changes; replace the owning root to publish nested edits to computed
+projections. This method adds no automatic deep mutation observation.
+
+Insertion uses the existing linked collection storage and bounded slot arenas.
+Slot exhaustion reports the normal scratch/state capacity error. If a
+multi-value call exhausts capacity after inserting some values, those earlier
+mutations may remain; Mochi does not promise transaction rollback. No values
+are silently dropped, and a later valid VM entry can continue.
+
+See the [feedback fixture](../e2e/fixtures/feedback_review/lib/UnshiftRoot.rb)
+for initialization, qualified-helper, event-handler, prop-isolation, and root
+replacement examples.
+
 ## Array indexing and slicing
 
 `array[index]` and `array.slice(index)` return one element, or `nil` outside
