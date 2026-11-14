@@ -223,6 +223,120 @@ test('feedback: timers cancel and storage survives reload', async ({page}) => {
   }, '<review-root></review-root>');
 });
 
+test('feedback: mount-owned timers fire once, repeat, cancel, and dispose', async ({page}) => {
+  const errors: any[] = [];
+  await page.addInitScript(() => {
+    (window as any).__timerErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__timerErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:00Z'));
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const timer = page.locator('timer-root');
+    await expect(timer.locator('.ticks')).toHaveText('0');
+
+    await timer.locator('.once').click();
+    await page.clock.runFor(0);
+    await expect(timer.locator('.ticks')).toHaveText('1');
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+
+    await timer.locator('.start').click();
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(1);
+    await page.clock.runFor(35);
+    await timer.locator('.stop').click();
+    const stoppedAt = await timer.locator('.ticks').textContent();
+    expect(Number(stoppedAt)).toBeGreaterThan(1);
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+    await page.clock.fastForward(50);
+    await expect(timer.locator('.ticks')).toHaveText(stoppedAt!);
+
+    await timer.locator('.start').click();
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(1);
+    const reusedTimer = await timer.elementHandle();
+    await timer.evaluate(element => element.remove());
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+    await page.evaluate(element => document.body.appendChild(element), reusedTimer);
+    await expect(timer.locator('.ticks')).toHaveText('0');
+    await page.clock.fastForward(50);
+    await expect(timer.locator('.ticks')).toHaveText('0');
+    expect(await page.evaluate(() => (window as any).__timerErrors)).toEqual([]);
+  }, '<timer-root></timer-root>');
+  expect(errors).toEqual([]);
+});
+
+test('feedback: invalid timer calls fail at their Ruby method and allocate no timer', async ({page}) => {
+  await page.addInitScript(() => {
+    (window as any).__timerErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__timerErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const timer = page.locator('timer-root');
+    for (const [button, expected] of [
+      ['.bad-delay', 'timer delay'],
+      ['.bad-delay-type', 'type mismatch'],
+      ['.long-delay', 'timer delay'],
+      ['.bad-callback', 'timer callback'],
+      ['.bad-callback-type', 'timer callback'],
+      ['.bad-callback-arity', 'wrong number of arguments'],
+      ['.bad-handle', 'timer handle'],
+    ]) {
+      await timer.locator(button).click();
+      await expect.poll(() => page.evaluate(() => (window as any).__timerErrors.length)).toBeGreaterThan(0);
+      const errors = await page.evaluate(() => (window as any).__timerErrors);
+      const error = errors[errors.length - 1];
+      expect(error.message).toContain(expected);
+      expect(error.source).toMatch(/TimerRoot\.rb:\d+/);
+      expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+    }
+  }, '<timer-root></timer-root>');
+});
+
+test('feedback: timer callback errors keep Ruby source and later callbacks recover', async ({page}) => {
+  await page.addInitScript(() => {
+    (window as any).__timerErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__timerErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    const timer = page.locator('timer-root');
+    await timer.locator('.fail-once').click();
+    await expect.poll(() => page.evaluate(() => (window as any).__timerErrors.length), { timeout: 1000 }).toBe(1);
+    const error = await page.evaluate(() => (window as any).__timerErrors[0]);
+    expect(error.phase).toBe('timer');
+    expect(error.message).toContain('division by zero');
+    expect(error.source).toMatch(/TimerRoot\.rb:\d+/);
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+
+    await timer.locator('.once').click();
+    await expect(timer.locator('.ticks')).toHaveText('1');
+    expect(await page.evaluate(() => (window as any).__timerErrors.length)).toBe(1);
+  }, '<timer-root></timer-root>');
+});
+
+test('feedback: a failed initializer drops its pending timer registration', async ({page}) => {
+  await page.addInitScript(() => {
+    (window as any).__timerErrors = [];
+    document.addEventListener('mochi:error', event => {
+      (window as any).__timerErrors.push((event as CustomEvent).detail);
+    });
+  });
+  await withCompiledProject(fixture, async url => {
+    await page.goto(url);
+    await expect.poll(() => page.evaluate(() => (window as any).__timerErrors.length)).toBe(1);
+    const error = await page.evaluate(() => (window as any).__timerErrors[0]);
+    expect(error.source).toMatch(/TimerRoot\.rb:\d+/);
+    expect(error.phase).toBe('mount');
+    expect(await page.evaluate(() => (window as any).MochiLoader.debugStats().timers)).toBe(0);
+  }, '<timer-failure></timer-failure>');
+});
+
 test('feedback: removing a conditional child while its descriptor is pending never mounts it later', async ({page}) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => release = resolve);

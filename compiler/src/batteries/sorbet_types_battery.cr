@@ -132,6 +132,15 @@ class SorbetTypesBat
       # Generated child-event emitters call this bridge. The loader owns the
       # payload contract, so the Sorbet stub accepts any Hash.
       module Mochi
+        def self.after(delay_ms, callback)
+        end
+
+        def self.every(delay_ms, callback)
+        end
+
+        def self.cancel_timer(handle)
+        end
+
         def self.subscribe(event_name, callback)
         end
 

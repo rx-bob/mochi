@@ -19,6 +19,7 @@ The sections below describe the current implementation and its contracts.
 - [Live attributes](#live-component-attributes) and [typed props](#declared-typed-props)
 - [Numbers](#numbers), [money](#money-helpers), and [formatting](#number-and-date-formatting)
 - [Host capability adapters](#host-capability-adapters)
+- [Mount-owned timers](references/TIMER_CONTRACT.md)
 - [Event modifiers and focus](#synchronous-event-modifiers-and-focus), [child/global events](#scoped-child-events), and [lifecycle](#component-lifecycle)
 - [Routing](#routing-and-history) and [storage](#storage-and-subscriptions)
 
@@ -133,6 +134,8 @@ binding-before-handler order, and target versus handler datasets. Optional
 [shortcuts](references/SHORTCUT_CONTRACT.md), and
 [downloads](references/DOWNLOAD_CONTRACT.md) retain owned lifetimes. They load
 before their component becomes interactive and are omitted when unused.
+The core [timer contract](references/TIMER_CONTRACT.md) documents delayed and
+repeating Ruby callbacks with automatic mount cleanup.
 
 [Files](references/DRAG_FILE_CONTRACT.md#bounded-byte-streaming) support bounded
 whole reads (48,000 bytes by default) and one-at-a-time binary chunks (8,192

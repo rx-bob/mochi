@@ -108,8 +108,9 @@ The host clock returns checked integer **Unix milliseconds**. `Time.now`
 divides by 1,000.0 exactly once to obtain binary64 seconds. Its source has
 millisecond resolution and follows wall-clock changes; it is not monotonic.
 Internal elapsed-duration measurements continue using their existing monotonic
-clock. No timers, scheduling API, calendar arithmetic, timezone database, or
-Date compatibility is added.
+clock. It adds no scheduling API, calendar arithmetic, timezone database, or
+Date compatibility; mount-owned scheduling is provided separately by
+[`Mochi.after` and `Mochi.every`](TIMER_CONTRACT.md).
 
 These Time values have no mutable local timezone mode. `utc` returns the same
 object and preserves its instant. Calendar constructors (`Time.new`,
@@ -444,6 +445,10 @@ end
 also check nested loops and `map` with `next value` against native Ruby results.
 
 ## Browser capability ownership
+
+Timers are mount-owned scheduling operations. See the
+[timer contract](TIMER_CONTRACT.md) for callback names, delay and handle
+validation, cancellation, disposal, and the Ruby polling example.
 
 Capability packages and adapters load before their consuming component becomes
 interactive. Registration APIs use static refs and Ruby callback names, not DOM

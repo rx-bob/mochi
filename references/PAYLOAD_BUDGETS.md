@@ -57,13 +57,26 @@ WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 417,537 | 133,957 | 3 |
-| Minimal initial | 421,215 | 135,662 | 7 |
-| Feature initial | 422,027 | 135,849 | 7 |
+| Core runtime | 419,360 | 134,604 | 3 |
+| Minimal initial | 423,038 | 136,309 | 7 |
+| Feature initial | 423,850 | 136,496 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 437,308 | 140,670 | 11 |
-| Network initial | 426,350 | 137,160 | 8 |
-| Network total | 426,350 | 137,160 | 8 |
+| Feature total | 439,131 | 141,317 | 11 |
+| Network initial | 428,173 | 137,807 | 8 |
+| Network total | 428,173 | 137,807 | 8 |
+
+### Mount-owned timer validation (E4.S1)
+
+The rebuilt core grows **1,823 raw / 647 gzip bytes** against the previous
+baseline. WASM grows **1,210 / 536** for exact timer argument validation,
+callback method lookup/arity checks, and mount-instance IDs on cancellation.
+The loader grows **613 / 111** to enforce cancellation ownership and report
+failed callback dispatches through the normal timer error path. The VM and
+loader share the existing timer bridge; no timer adapter, Ruby package,
+manifest entry, or capacity increase is added. This cost makes invalid timer
+calls source-located and prevents one mount from canceling another mount's
+timer. All core-containing ceilings increase by this measured delta only;
+later optional feature bytes and default capacities are unchanged.
 
 ### Lifecycle source diagnostics (completion audit)
 
@@ -512,9 +525,9 @@ Core runtime (current measured artifacts):
 
 | File | Raw | Gzip |
 | --- | ---: | ---: |
-| `mochi-gvm.wasm` | 178,783 | 81,439 |
+| `mochi-gvm.wasm` | 179,993 | 81,975 |
 | `mochi-gvm.js` | 8,658 | 3,631 |
-| `mochi-loader.js` | 230,096 | 48,887 |
+| `mochi-loader.js` | 230,709 | 48,998 |
 
 The pre-slicing VM build was 3,966 raw / 1,532 gzip bytes above its previous
 recorded core baseline. The shared update includes bounded aggregate block
@@ -534,9 +547,9 @@ Minimal initial (current measured artifacts):
 | `components/my-counter.chi` | 511 | 282 |
 | `components/my-counter.json` | 1,359 | 609 |
 
-Minimal initial is 421,215 / 135,662; formatting feature initial is 422,027 /
-135,849; formatting feature total is 437,308 / 140,670; and network initial /
-total is 426,350 / 137,160. The checked-in JSON budget matches these measured
+Minimal initial is 423,038 / 136,309; formatting feature initial is 423,850 /
+136,496; formatting feature total is 439,131 / 141,317; and network initial /
+total is 428,173 / 137,807. The checked-in JSON budget matches these measured
 artifacts.
 
 Feature initial adds only manifest metadata:

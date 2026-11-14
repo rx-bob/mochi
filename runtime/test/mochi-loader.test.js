@@ -2269,6 +2269,63 @@ test("unmount releases the owner's timer, route, storage, and global event subsc
   assert.equal(loader.debugStats().unmountedInstances, 0);
 });
 
+test("timer commands validate bounds and only cancel timers owned by the requesting mount", async () => {
+  const { loader, module, log } = await setup([COMPONENT]);
+  log.methods.add("increment");
+  const element = document.createElement("my-counter");
+  document.body.appendChild(element);
+  await element._mochiReady;
+
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  const scheduled = new Map();
+  const cleared = [];
+  const reported = [];
+  const intervalId = 1;
+  const onError = (event) => reported.push(event.detail);
+  document.addEventListener("mochi:error", onError);
+  global.setInterval = (callback, delay) => {
+    scheduled.set(intervalId, { callback, delay });
+    return intervalId;
+  };
+  global.clearInterval = (id) => {
+    cleared.push(id);
+    scheduled.delete(id);
+  };
+
+  const dispatch = (command) => {
+    module.queueEmit(JSON.stringify(command));
+    element._dispatchAction("increment");
+  };
+  try {
+    const owner = String(element._mochiInstance);
+    dispatch({ __host: "timer", id: 731, kind: "every", ms: 10, instance: owner, callback: "increment" });
+    assert.deepEqual(scheduled.get(intervalId).delay, 10);
+    assert.equal(loader.debugStats().timers, 1);
+
+    dispatch({ __host: "timer", id: 731, kind: "cancel", instance: "another-mount" });
+    assert.deepEqual(cleared, []);
+    assert.equal(loader.debugStats().timers, 1);
+
+    dispatch({ __host: "timer", id: 731, kind: "cancel", instance: owner });
+    dispatch({ __host: "timer", id: 731, kind: "cancel", instance: owner });
+    assert.deepEqual(cleared, [intervalId]);
+    assert.equal(loader.debugStats().timers, 0);
+
+    dispatch({ __host: "timer", id: 732, kind: "every", ms: -1, instance: owner, callback: "increment" });
+    assert.equal(loader.debugStats().timers, 0);
+    assert.equal(reported.length, 1);
+    assert.equal(reported[0].phase, "timer");
+    assert.match(reported[0].message, /invalid timer command/);
+  } finally {
+    document.removeEventListener("mochi:error", onError);
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+    element.remove();
+    await flushLifecycle();
+  }
+});
+
 test("unmounted hook failure still removes VM registrations", async () => {
   const { module, log } = await setup([COMPONENT]);
   log.methods.add("unmounted");

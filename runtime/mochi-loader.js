@@ -1722,10 +1722,20 @@
     if (hostKind === "timer") {
       var timerId = Number(entry.id);
       if (entry.kind === "cancel") {
-        clearTimerEntry(timerId);
+        var ownedTimer = state.timers.get(timerId);
+        if (ownedTimer && String(entry.instance || "") === ownedTimer.instance) {
+          clearTimerEntry(timerId);
+        }
         return;
       }
-      var ms = Math.max(0, Number(entry.ms) || 0);
+      var ms = Number(entry.ms);
+      if (!Number.isSafeInteger(timerId) || timerId <= 0 ||
+          !Number.isInteger(ms) || ms < 0 || ms > 2147483647 ||
+          (entry.kind !== "after" && entry.kind !== "every")) {
+        reportError(null, "timer", String(entry.callback || ""),
+          new Error("mochi-loader: invalid timer command"), module);
+        return;
+      }
       var instanceKey = String(entry.instance || "");
       var callbackName = String(entry.callback || "");
       if (!callbackName) return;
@@ -1744,7 +1754,9 @@
         }
         try {
           var symbol = intern(module, callbackName);
-          module._mochi_dispatch_event(element._mochiInstance, symbol);
+          if (module._mochi_dispatch_event(element._mochiInstance, symbol) !== 1) {
+            throw new Error("mochi-loader: timer callback failed for " + callbackName + ": " + lastError(module));
+          }
           applyPatches(element, module);
           drainEmits(module);
           drainFetches(module);
