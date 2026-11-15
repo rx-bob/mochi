@@ -1,6 +1,5 @@
 # typed: true
 require 'json'
-require "./lib/mochi.rb"
 
 class ItemList
 
@@ -21,7 +20,7 @@ class ItemList
   end
 
   def add_item_with_data(id, name, description)
-    item = `{ id: #{id}, name: #{name}, description: #{description} }`
+    item = {"id" => id, "name" => name, "description" => description}
     @items.push(item)
   end
 
@@ -140,7 +139,7 @@ class ItemList
     if @items.length > 0
       removed = @items.pop
       @counter = @counter - 1
-      item_name = `#{removed}.name`
+      item_name = removed["name"]
       puts "Removed item: #{item_name}"
     end
   end

@@ -1,7 +1,4 @@
 # typed: true
-require './lib/sorbet-types/sorbet.rb'
-require './lib/sorbet-types/browser.rb'
-require "./lib/mochi.rb"
 
 class PlusFive
   extend T::Sig

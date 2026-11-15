@@ -3,9 +3,6 @@
 # await: true
 require 'json'
 require "await"
-require './lib/sorbet-types/sorbet.rb'
-require './lib/sorbet-types/browser.rb'
-require "./lib/mochi.rb"
 
 class Counter
   extend T::Sig

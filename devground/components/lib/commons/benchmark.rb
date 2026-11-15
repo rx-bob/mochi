@@ -1,18 +1,17 @@
 # typed: true
-require "./lib/mochi.rb"
 
 class MochiBenchmark
   @tag_name = "mochi-benchmark"
   @rows
   @version
   @_next_id
-  @_tmp
+  @selected_id
 
   def initialize
     @rows = []
     @version = 0
     @_next_id = 1
-    @_tmp = nil
+    @selected_id = nil
   end
 
   def html
@@ -30,11 +29,11 @@ class MochiBenchmark
           </div>
         </div>
         <div class="test-data">
-          {each @rows as row, index}
-            <div class="row-item" data-testid="row">
-              <span class="col-id">{item.id}</span>
-              <span class="col-label"><a class="lbl" onclick="{select_row($element)}">{item.label}</a></span>
-              <span class="col-remove"><a class="remove" aria-label="remove" onclick="{remove_row_by_element($element)}">&#x2715;</a></span>
+          {each @rows as row, index, key: row["id"]}
+            <div class="row-item {if row["id"] == @selected_id}danger{end}" data-testid="row">
+              <span class="col-id">{row["id"]}</span>
+              <span class="col-label"><a class="lbl" data-id="{row["id"]}" onclick="{select_row($event)}">{row["label"]}</a></span>
+              <span class="col-remove"><a class="remove" data-id="{row["id"]}" aria-label="remove" onclick="{remove_row_by_event($event)}">&#x2715;</a></span>
             </div>
           {end}
         </div>
@@ -68,20 +67,14 @@ class MochiBenchmark
   def unmounted
   end
 
-  def select_row(el)
-    `(function(el) {
-      var row = el.closest('.row-item');
-      if (!row) return;
-      var all = row.closest('.test-data').querySelectorAll('.row-item.danger');
-      for (var i = 0; i < all.length; i++) all[i].classList.remove('danger');
-      row.classList.add('danger');
-    })(#{el})`
+  def select_row(event)
+    dataset = event["current_target_dataset"]
+    @selected_id = dataset["id"].to_i
   end
 
-  def remove_row_by_element(el)
-    row = `#{el}.closest('.row-item')`
-    id = `parseInt(#{row}.querySelector('.col-id').textContent)`
-    remove_row(id)
+  def remove_row_by_event(event)
+    dataset = event["current_target_dataset"]
+    remove_row(dataset["id"].to_i)
   end
 
   def run
@@ -99,37 +92,57 @@ class MochiBenchmark
   def add
     new_rows = make_rows(1000)
     @_next_id = @_next_id + 1000
-    `(function(rows, nr) { for (var i = 0; i < nr.length; i++) rows.push(nr[i]); })(#{@rows}, #{new_rows})`
+    rows = []
+    @rows.each { |row| rows.push(row) }
+    new_rows.each { |row| rows.push(row) }
+    @rows = rows
     @version = @version + 1
   end
 
   def update
-    `(function(rows) {
-      for (var i = 0; i < rows.length; i += 10)
-        rows[i].label = rows[i].label + ' !!!';
-    })(#{@rows})`
+    rows = []
+    index = 0
+    next_update = 0
+    while index < @rows.length
+      row = @rows[index]
+      if index == next_update
+        rows.push({"id" => row["id"], "label" => row["label"] + " !!!"})
+        next_update = next_update + 10
+      else
+        rows.push(row)
+      end
+      index = index + 1
+    end
+    @rows = rows
     @version = @version + 1
   end
 
   def clear
-    @rows = `[]`
+    @rows = []
     @_next_id = 1
+    @selected_id = nil
     @version = @version + 1
   end
 
   def swap_rows
-    `(function(rows) {
-      if (rows.length < 999) return;
-      var tmp = rows[1]; rows[1] = rows[998]; rows[998] = tmp;
-    })(#{@rows})`
+    if @rows.length >= 999
+      rows = []
+      @rows.each { |row| rows.push(row) }
+      temporary = rows[1]
+      rows[1] = rows[998]
+      rows[998] = temporary
+      @rows = rows
+    end
     @version = @version + 1
   end
 
   def remove_row(id)
-    `(function(rows, id) {
-      var i = rows.findIndex(function(r) { return r.id === id; });
-      if (i >= 0) rows.splice(i, 1);
-    })(#{@rows}, #{id})`
+    rows = []
+    @rows.each do |row|
+      rows.push(row) if row["id"] != id
+    end
+    @rows = rows
+    @selected_id = nil if @selected_id == id
     @version = @version + 1
   end
 
@@ -137,15 +150,13 @@ class MochiBenchmark
 
   def make_rows(count)
     start_id = @_next_id
-    `(function(self, n, sid) {
-      var adj = ["pretty","large","big","small","tall","short","long","handsome","plain","quaint","clean","elegant","easy","angry","crazy","helpful","mushy","odd","unsightly","adorable","important","inexpensive","cheap","expensive","fancy"];
-      var col = ["red","yellow","blue","green","pink","brown","purple","white","black","orange"];
-      var noun = ["table","chair","house","bbq","desk","car","pony","cookie","sandwich","burger","pizza","mouse","keyboard"];
-      var r = new Array(n);
-      for (var i = 0; i < n; i++)
-        r[i] = { id: sid + i, label: adj[(Math.random() * adj.length) | 0] + ' ' + col[(Math.random() * col.length) | 0] + ' ' + noun[(Math.random() * noun.length) | 0] };
-      self._tmp = r;
-    })(#{self}, #{count}, #{start_id})`
-    @_tmp
+    rows = []
+    index = 0
+    while index < count
+      id = start_id + index
+      rows.push({"id" => id, "label" => "row #{id}"})
+      index = index + 1
+    end
+    rows
   end
 end
