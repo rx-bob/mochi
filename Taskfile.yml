@@ -14,7 +14,7 @@ vars:
       if [ "$(uname -s)" = "Darwin" ]; then
         echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a -Wl,-ld_classic"'
       else
-        echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a"'
+        echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,--whole-archive,{{.ROOT_DIR}}/fragments/libs/libsorbet.a,--no-whole-archive"'
       fi
   COMPILER: '{{.ROOT_DIR}}/compiler/mochi'
   MOTESTPROJ: '{{.ROOT_DIR}}/compiler/motestproj'

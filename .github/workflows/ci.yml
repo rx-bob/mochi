@@ -142,7 +142,7 @@ jobs:
       - name: Build Mochi compiler
         run: |
           cd compiler
-          crystal build src/mochi.cr -Dstatic_sorbet -o mochi --link-flags="-L$GITHUB_WORKSPACE/fragments/libs -Wl,-force_load,$GITHUB_WORKSPACE/fragments/libs/libsorbet.a"
+          crystal build src/mochi.cr -Dstatic_sorbet -o mochi --link-flags="-L$GITHUB_WORKSPACE/fragments/libs -Wl,--whole-archive,$GITHUB_WORKSPACE/fragments/libs/libsorbet.a,--no-whole-archive"
 
       - name: Compile Mochi for E2E tests
         run: ./compiler/mochi -i devground/components -o devground/public
