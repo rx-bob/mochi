@@ -443,8 +443,22 @@ async function runCase(browser, browserName, baseUrl, testCase) {
           } else if (step.operation === "pointer_release") {
             if (!activePointer) throw new Error(`${origin}: pointer_release requires pointer_press`);
             const hadCapture = await page.evaluate(() => !!window.__mochiTestCaptureTarget());
+            if (hadCapture) {
+              await page.evaluate(({ id, x, y }) => {
+                const pointer = window.__mochiTestPointer;
+                const target = window.__mochiTestCaptureTarget();
+                if (!pointer || pointer.id !== id || !target || !target.isConnected) {
+                  throw new Error("test pointer capture target is no longer connected");
+                }
+                target.dispatchEvent(new PointerEvent("pointerup", {
+                  bubbles: true, composed: true, pointerId: id, pointerType: "mouse",
+                  isPrimary: true, button: 0, buttons: 0, clientX: x, clientY: y,
+                }));
+              }, activePointer);
+              await waitForPointerIdle(page);
+              await waitForPointerCaptureRelease(page);
+            }
             await page.mouse.up();
-            if (hadCapture) await waitForPointerCaptureRelease(page);
             activePointer = null;
             await waitForPointerIdle(page);
           } else if (step.operation === "pointer_cancel") {
