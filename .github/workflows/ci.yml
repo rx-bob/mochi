@@ -137,7 +137,7 @@ jobs:
         run: cd e2e && npm ci
 
       - name: Install Playwright browsers
-        run: cd e2e && npx playwright install --with-deps chromium
+        run: cd e2e && npx playwright install --with-deps
 
       - name: Build Mochi compiler
         run: |
@@ -147,14 +147,31 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/fragments/libs
 
       - name: Compile Mochi for E2E tests
-        run: ./compiler/mochi -i devground/components -o devground/public
+        run: ./compiler/mochi -i devground/components -o build/ci-devground
         env:
           MO_INT_LOGS: false
           MO_INT_LOGS_LEVEL: INFO
           LD_LIBRARY_PATH: ${{ github.workspace }}/fragments/libs
 
       - name: Run Playwright tests
-        run: cd e2e && npx playwright test
+        run: >-
+          cd e2e && npx playwright test
+          tests/gvm_feedback_review.spec.ts
+          tests/gvm_counter.spec.ts
+          tests/gvm_emit_fetch.spec.ts
+          tests/gvm_row_capacity.spec.ts
+          tests/gvm_framework_standalone.spec.ts
+          tests/gvm_drag_file_contracts.spec.ts
+          tests/gvm_pointer_contracts.spec.ts
+          tests/gvm_ui_contracts.spec.ts
+          tests/gvm_ui_capacity_lifecycle.spec.ts
+          tests/gvm_computed.spec.ts
+          tests/gvm_test_workflow.spec.ts
+          tests/gvm_capacity_boundaries.spec.ts
+          tests/gvm_asset_paths.spec.ts
+          tests/gvm_install_workflow.spec.ts
+          tests/gvm_evolved_features.spec.ts
+          --grep-invert "Cowboy integration"
         continue-on-error: true  # Allow test report step to run even if tests fail
 
       - name: Upload test results

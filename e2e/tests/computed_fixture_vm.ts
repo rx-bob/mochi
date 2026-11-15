@@ -7,7 +7,9 @@ import path from "node:path";
 // exports, artifacts and payload budgets contain no instrumentation.
 export function computedFixtureVM(methods: string[] = []): { directory: string; cleanup: () => void } {
   if (methods.some(name => !/^[a-z_][a-z0-9_]*$/.test(name))) throw new Error("invalid fixture method name");
-  const original = path.resolve(__dirname, "../../../mochi-gvm");
+  const original = process.env.MOCHI_GVM_DIR
+    ? path.resolve(process.env.MOCHI_GVM_DIR)
+    : path.resolve(__dirname, "../../../mochi-gvm");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-computed-vm-"));
   try {
     for (const name of ["src", "scripts"]) fs.cpSync(path.join(original, name), path.join(directory, name), { recursive: true });

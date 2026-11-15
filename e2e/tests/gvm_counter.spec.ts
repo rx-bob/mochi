@@ -25,7 +25,7 @@ let bundleDir = "";
 let workspaceDir = "";
 
 function fixtureProject(): string {
-  const motestproj = path.join(repoRoot, "compiler", "motestproj");
+  const motestproj = path.join(repoRoot, "e2e", "fixtures", "gvm_counter");
   const injectionMarker = path.join(workspaceDir, "shell-injection-marker");
   const dir = path.join(workspaceDir, `project with spaces;$(touch ${injectionMarker})`);
   fs.cpSync(motestproj, dir, { recursive: true });
