@@ -88,9 +88,13 @@ class CapacityArtifactBuilder
     {"goose", "emcc", "wasm-opt"}.each do |tool|
       process = Process.new(tool, ["--version"], output: Process::Redirect::Pipe, error: Process::Redirect::Pipe)
       digest.update(tool)
+      # Some toolchains emit one-time cache or environment diagnostics to
+      # stderr (notably emcc on its first run). Keep those out of the cache
+      # identity; only the stable version output describes the build input.
       digest.update(process.output.gets_to_end)
-      digest.update(process.error.gets_to_end)
-      process.wait
+      process.error.gets_to_end
+      status = process.wait
+      raise "Mochi capacity build requires #{tool} --version to succeed" unless status.success?
     rescue IO::Error
       raise "Mochi capacity build requires #{tool} on PATH"
     end

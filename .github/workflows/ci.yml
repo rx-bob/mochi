@@ -21,6 +21,20 @@ jobs:
         with:
           submodules: true
 
+      - name: Checkout mochi-gvm sources
+        uses: actions/checkout@v4
+        with:
+          repository: rx-bob/mochi-gvm
+          ref: fdb679c98264cfbc7e3defd18083b9883170d23d
+          path: mochi-gvm
+
+      - name: Checkout mruby source
+        uses: actions/checkout@v4
+        with:
+          repository: mruby/mruby
+          ref: 087da64f991d0ff82c2bbb6376532cbfa55056de
+          path: build_wasm/mruby/src
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -47,6 +61,36 @@ jobs:
           ruby-version: '3.3'
           bundler-cache: true
           working-directory: devground/components
+
+      - name: Build mruby host compiler
+        run: |
+          cd build_wasm/mruby/src
+          ruby minirake -j2
+          test -x build/host/bin/mrbc
+          echo "MRBC=$GITHUB_WORKSPACE/build_wasm/mruby/src/build/host/bin/mrbc" >> "$GITHUB_ENV"
+
+      - name: Setup Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: 6.0.9
+
+      - name: Setup Goose compiler
+        run: |
+          archive="$RUNNER_TEMP/goose-v2026.4-linux-x64.tar.gz"
+          curl -fsSL https://github.com/aardappel/goose/releases/download/v2026.4/goose-v2026.4-linux-x64.tar.gz -o "$archive"
+          echo "559ad7572df89fcd1273512d8679528bcdf876c252ec1f31608d3808b24125b3  $archive" | sha256sum --check
+          install_dir="$RUNNER_TEMP/goose-v2026.4"
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          goose_bin="$(find "$install_dir" -type f -name goose -perm -u+x -print -quit)"
+          test -n "$goose_bin"
+          echo "$(dirname "$goose_bin")" >> "$GITHUB_PATH"
+
+      - name: Build GVM runtime
+        run: |
+          cd mochi-gvm
+          goose run scripts/build_wasm.goose
+          echo "MOCHI_GVM_DIR=$GITHUB_WORKSPACE/mochi-gvm" >> "$GITHUB_ENV"
 
       - name: Install Crystal dependencies
         run: cd compiler && shards install
@@ -80,6 +124,9 @@ jobs:
           else
             echo "WARNING: JUnit XML file was not created"
           fi
+        env:
+          MOCHI_GVM_DIR: ${{ github.workspace }}/mochi-gvm
+          MRBC: ${{ github.workspace }}/build_wasm/mruby/src/build/host/bin/mrbc
 
       - name: Install Playwright dependencies
         run: cd e2e && npm ci
