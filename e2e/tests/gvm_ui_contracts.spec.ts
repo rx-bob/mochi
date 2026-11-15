@@ -119,7 +119,7 @@ test("clock and formatting stay optional; fixed wall clock uses seconds @ui-insp
   const { consoleErrors, pageErrors, settleConsole } = await captureErrors(page);
   await withCompiledProject(path.join(fixture, "probes/09-time"), async url => {
     await page.goto(url);
-    await expect(page.locator(".mounted-now")).toHaveText("1794571200.123:1794571200");
+    await expect(page.locator(".now")).toHaveText("");
     await expect(page.locator("output")).toHaveText("-1.25:-2:true");
     await page.locator(".now-button").click();
     await expect(page.locator(".now")).toHaveText("1794571200.123:1794571200");

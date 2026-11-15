@@ -3302,14 +3302,14 @@ end
     )).toBe(2);
     const floatInputError = await page.evaluate(() => (window as any).__mochiMoneyErrors[1]);
     expect(floatInputError.phase).toBe("event");
-    expect(floatInputError.message).toMatch(/MochiMoney#__require_integer: unknown method at lib\/MoneyLedger\.rb:/);
+    expect(floatInputError.message).toMatch(/MochiMoney#__require_integer: unknown method even\? at lib\/MoneyLedger\.rb:/);
     await host.locator("button.string-input").click();
     await expect.poll(async () => page.evaluate(
       () => (window as any).__mochiMoneyErrors.length,
     )).toBe(3);
     const stringInputError = await page.evaluate(() => (window as any).__mochiMoneyErrors[2]);
     expect(stringInputError.phase).toBe("event");
-    expect(stringInputError.message).toMatch(/MochiMoney#__require_integer: unknown method at lib\/MoneyLedger\.rb:/);
+    expect(stringInputError.message).toMatch(/MochiMoney#__require_integer: unknown method even\? at lib\/MoneyLedger\.rb:/);
     await host.locator("button.normalize-overflow").click();
     await expect.poll(async () => page.evaluate(
       () => (window as any).__mochiMoneyErrors.length,

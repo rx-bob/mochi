@@ -52,18 +52,29 @@ initial dependency closure. This makes `components/format-badge.json`,
 
 ## Baselines
 
-Measured 2026-11-14 on the repository toolchain, after rebuilding compiler and
+Measured 2026-11-15 on the repository toolchain, after rebuilding compiler and
 WASM from the current shared worktree:
 
 | Set | Raw bytes | Gzip bytes | Files |
 | --- | ---: | ---: | ---: |
-| Core runtime | 424,471 | 135,576 | 3 |
-| Minimal initial | 428,149 | 137,281 | 7 |
-| Feature initial | 428,961 | 137,468 | 7 |
+| Core runtime | 424,531 | 135,597 | 3 |
+| Minimal initial | 428,209 | 137,302 | 7 |
+| Feature initial | 429,021 | 137,489 | 7 |
 | Later feature load | 15,281 | 4,821 | 4 |
-| Feature total | 444,242 | 142,289 | 11 |
-| Network initial | 433,284 | 138,779 | 8 |
-| Network total | 433,284 | 138,779 | 8 |
+| Feature total | 444,302 | 142,310 | 11 |
+| Network initial | 433,344 | 138,800 | 8 |
+| Network total | 433,344 | 138,800 | 8 |
+
+### Stable generated host bridge properties (Ruby reliability audit)
+
+The generated GVM bridge now uses quoted public `Module` property names for
+host capability registration, owner lookup, and limits. This prevents Closure
+from renaming those properties when a consumer rebuilds the GVM with additional
+exports. Rebuilding changes the GVM JavaScript by **60 raw / 20 gzip bytes**;
+the complete core grows **60 raw / 21 gzip bytes**. The WASM raw size and all
+optional feature bytes remain unchanged. The 1 gzip byte difference in WASM
+comes from the regenerated artifact. The exact core-containing ceilings above
+include this measured compatibility cost.
 
 ### Trusted markup ranges (E6.S1)
 
