@@ -139,8 +139,13 @@ jobs:
       - name: Install Playwright browsers
         run: cd e2e && npx playwright install --with-deps chromium
 
+      - name: Build Mochi compiler
+        run: |
+          cd compiler
+          crystal build src/mochi.cr -Dstatic_sorbet -o mochi --link-flags="-L$GITHUB_WORKSPACE/fragments/libs -Wl,-force_load,$GITHUB_WORKSPACE/fragments/libs/libsorbet.a"
+
       - name: Compile Mochi for E2E tests
-        run: cd compiler && crystal run src/mochi.cr --link-flags="-L$GITHUB_WORKSPACE/fragments/libs" -- -i "../devground/components" -o "../devground/public"
+        run: ./compiler/mochi -i devground/components -o devground/public
         env:
           MO_INT_LOGS: false
           MO_INT_LOGS_LEVEL: INFO
