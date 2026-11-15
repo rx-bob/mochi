@@ -142,7 +142,9 @@ jobs:
       - name: Build Mochi compiler
         run: |
           cd compiler
-          crystal build src/mochi.cr -Dstatic_sorbet -o mochi --link-flags="-L$GITHUB_WORKSPACE/fragments/libs -Wl,--whole-archive,$GITHUB_WORKSPACE/fragments/libs/libsorbet.a,--no-whole-archive"
+          crystal build src/mochi.cr -o mochi --link-flags="-L$GITHUB_WORKSPACE/fragments/libs -Wl,-rpath,$GITHUB_WORKSPACE/fragments/libs"
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/fragments/libs
 
       - name: Compile Mochi for E2E tests
         run: ./compiler/mochi -i devground/components -o devground/public
