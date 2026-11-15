@@ -88,6 +88,10 @@ jobs:
 
       - name: Build GVM runtime
         run: |
+          export PATH="$EMSDK/upstream/bin:$PATH"
+          command -v emcc
+          command -v goose
+          command -v wasm-opt
           cd mochi-gvm
           goose run scripts/build_wasm.goose
           echo "MOCHI_GVM_DIR=$GITHUB_WORKSPACE/mochi-gvm" >> "$GITHUB_ENV"
