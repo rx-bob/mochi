@@ -178,6 +178,14 @@ Mochi::Test.test("cancel loss branch removal and unmount leave no graph gesture 
   pointer_press "[data-node='b'] circle"
   pointer_release
   assert_text ".undo-count", "0"
+  pointer_press "[data-node='b'] circle"
+  pointer_move_by 40, 20, steps: 8
+  pointer_lose_capture
+  assert_text ".drag-state", "idle"
+  assert_text ".terminal", "lost_capture"
+  assert_text ".undo-count", "0"
+  assert_attribute "[data-node='b']", "transform", "translate(180 50)"
+  assert_pointer_capture_released
   3.times do
     pointer_press "[data-node='b'] circle"
     pointer_move_by 60, 30, steps: 8
@@ -188,14 +196,6 @@ Mochi::Test.test("cancel loss branch removal and unmount leave no graph gesture 
     assert_text ".undo-count", "0"
     assert_attribute "[data-node='b']", "transform", "translate(180 50)"
     assert_attribute "[data-edge='ab']", "d", "M 40 50 L 180 50"
-    assert_pointer_capture_released
-    pointer_press "[data-node='b'] circle"
-    pointer_move_by 40, 20, steps: 8
-    pointer_lose_capture
-    assert_text ".drag-state", "idle"
-    assert_text ".terminal", "lost_capture"
-    assert_text ".undo-count", "0"
-    assert_attribute "[data-node='b']", "transform", "translate(180 50)"
     assert_pointer_capture_released
   end
   pointer_press "[data-node='b'] circle"
