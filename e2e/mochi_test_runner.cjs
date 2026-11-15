@@ -162,6 +162,10 @@ async function waitForPointerIdle(page) {
   }, null, { timeout: 5000 });
 }
 
+async function waitForPointerCaptureRelease(page) {
+  await page.waitForFunction(() => !window.__mochiTestCaptureTarget(), null, { timeout: 5000 });
+}
+
 // Keep all three browser diagnostic channels and consume them at each step.
 // Console Error arguments need explicit serialization: Firefox text() omits
 // their message. Promise entries preserve order without unhandled rejections.
@@ -438,7 +442,9 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             await waitForPointerIdle(page);
           } else if (step.operation === "pointer_release") {
             if (!activePointer) throw new Error(`${origin}: pointer_release requires pointer_press`);
+            const hadCapture = await page.evaluate(() => !!window.__mochiTestCaptureTarget());
             await page.mouse.up();
+            if (hadCapture) await waitForPointerCaptureRelease(page);
             activePointer = null;
             await waitForPointerIdle(page);
           } else if (step.operation === "pointer_cancel") {
@@ -454,6 +460,8 @@ async function runCase(browser, browserName, baseUrl, testCase) {
                 isPrimary: true, buttons: 0, clientX: x, clientY: y,
               }));
             }, activePointer);
+            await waitForPointerIdle(page);
+            await waitForPointerCaptureRelease(page);
             await page.mouse.up();
             activePointer = null;
             await waitForPointerIdle(page);

@@ -1320,7 +1320,7 @@ test("graph pointer ownership is lazy and releases on cancellation branch remova
         await expect(root.locator(".drag-state")).toHaveText("dragging");
         expect(await count()).toBe(1);
         expect(await root.locator('[data-node="b"]').evaluate(node => node.hasPointerCapture((window as any).__graphPointerId))).toBe(true);
-        await page.mouse.move(point.x + 40, point.y + 20, { steps: 5 });
+        await page.mouse.move(point.x + 40, point.y + 20);
         await expect(root.locator('[data-node="b"]')).toHaveAttribute("transform", "translate(220 70)");
         if (terminal === "closed") {
           await root.locator(".toggle").dispatchEvent("click");
