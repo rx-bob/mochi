@@ -501,6 +501,7 @@ const rubySuites: Record<string, string> = {
   "download_test.rb": "@ui-inspector",
   "inspector_test.rb": "@ui-inspector",
   "editable_graph_test.rb": "@ui-graph",
+  "dialog_test.rb": "@ui-form",
   "nested_form_test.rb": "@ui-form",
   "binding_actions_test.rb": "@ui-form",
 };

@@ -117,10 +117,10 @@ connects.
 
 ## Complete Ruby examples and contracts
 
-The [shared UI fixtures](e2e/fixtures/ui_contracts/README.md) provide three
-portable applications: a 480-record paginated inspector with filtered JSONL/CSV
-downloads, a keyed SVG graph with drag/zoom/undo, and a nested form with local
-drafts, Boolean props, typed events, and keyboard dialog behavior. Their authored
+The [shared UI fixtures](e2e/fixtures/ui_contracts/README.md) provide portable
+applications: a 480-record paginated inspector with filtered JSONL/CSV downloads,
+a keyed SVG graph with drag/zoom/undo, a nested form with local drafts, and a
+typed single-dialog recipe with keyboard focus behavior. Their authored
 scenarios use `mochi test`; no application JavaScript or external service is needed.
 
 Run `task framework:ui` for all three engines, or `task framework:ui:inspector`,

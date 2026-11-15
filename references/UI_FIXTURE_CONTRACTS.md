@@ -1,6 +1,6 @@
 # UI fixture contracts: 2026-11-13 feedback batch
 
-The three portable Ruby fixtures now exercise the supported contracts below.
+The portable Ruby fixtures now exercise the supported contracts below.
 Every report has a supported, intentional, or deferred disposition; this does
 not claim full Ruby compatibility or reproduction of every original product
 workload. No external application checkout is needed to build or run evidence.
@@ -56,6 +56,30 @@ different suite is linked. Each probe name links to its checked-in source.
 | `10-ruby-gaps.md` | **Fixed/supported:** local block `next`, postfix `next if`, map values and nested loop continuation. **Intentional rejection:** bare `redo` is an unsupported Ruby keyword, not a handler name. Nonlocal block return/break and rescue/ensure remain unsupported. | `feedback evidence` for [10-next](../e2e/fixtures/ui_contracts/probes/10-next) and [10-redo](../e2e/fixtures/ui_contracts/probes/10-redo); [helper scenarios](../e2e/fixtures/ui_contracts/probes/03-helper-contexts/test/helper_test.rb); `feedback evidence 03-unsupported-rescue: compiler diagnostic`. |
 | `11-boolean-typecheck.md` | **Fixed/supported:** required/default Boolean props work in build and typecheck, including conditional/keyed children; typed event mismatches reject before parent delivery and recover. The historical intermittent Sorbet process failure is not proven fixed. | `Boolean declarations typecheck and build: 11-boolean/11-boolean-contracts/shared-form`; `Ruby Boolean event contracts reject mismatches and recover`; [Boolean scenarios](../e2e/fixtures/ui_contracts/probes/11-boolean-contracts/test/boolean_test.rb). |
 | `12-assets-and-css-imports.md` | **Intentional supported layout:** `public/` stays under output `public/`; component-relative CSS under staged source roots and referenced-only project icons work. Missing imports fail. **Retained limitation:** project-root `styles/` is not staged; use `lib/styles/`. This is documented, not claimed repaired. | `feedback evidence` for [12-assets-css](../e2e/fixtures/ui_contracts/probes/12-assets-css) verifies `/public/probe.svg`, applied CSS, emitted `home.svg` and absent `unused.svg`; [12-missing-css](../e2e/fixtures/ui_contracts/probes/12-missing-css) and [12-root-css](../e2e/fixtures/ui_contracts/probes/12-root-css) intentionally assert build diagnostics; [asset paths](../e2e/tests/gvm_asset_paths.spec.ts). |
+
+## E6.S2 — Ruby single-dialog recipe
+
+[ConfirmDialog](../e2e/fixtures/ui_contracts/lib/ConfirmDialog.rb) owns its
+complete semantic markup and receives required String title/message props.
+The parent sends updates through declared props and receives distinct typed
+`confirm(accepted: Boolean)` and `cancel(reason: String)` events. Interpolated
+labels and user data stay text; this recipe does not pass arbitrary markup.
+
+The dialog sets initial focus to Cancel, places the existing focus-trap
+attribute on its custom-element host so the parent can capture opener focus,
+and registers Escape only while mounted. The
+parent saves opener focus on open, restores it on close if the opener remains,
+and moves focus to a stable fallback if the opener was removed. Conditional
+close/reopen exercises shortcut and child cleanup. The recipe covers one dialog
+at a time; nested overlay coordination, slots, renderer callbacks, and a generic
+dialog library remain deferred. Parent-content projection stays deferred until
+a concrete second use case defines binding ownership, CSS scope, event flow,
+child lifetime, and payload cost.
+
+[Ruby scenarios](../e2e/fixtures/ui_contracts/test/dialog_test.rb) verify
+keyboard confirmation and cancellation, safe live text updates, conditional
+reopen, and fallback focus after opener removal in Chromium, Firefox, and
+WebKit. See the [complete Ruby recipe](RUBY_SURFACE.md#a-single-dialog-recipe).
 
 ## Limits and evidence rules
 

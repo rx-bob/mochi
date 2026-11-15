@@ -358,6 +358,69 @@ focused input; Save and Cancel explicitly use `tabindex="0"` so WebKit's
 platform tab policy also includes those buttons. No custom keyboard handler
 replaces native Tab or Enter behavior.
 
+## A single-dialog recipe
+
+Keep the dialog's markup and keyboard behavior in a child component. Declare
+the values the parent controls as typed props and keep confirmation and
+cancellation as separate typed events:
+
+```ruby
+class ConfirmDialog
+  @tag_name = "confirm-dialog"
+  prop :title, String, required: true
+  prop :message, String, required: true
+  event :confirm, accepted: Boolean
+  event :cancel, reason: String
+
+  def mounted
+    MochiShortcuts.register("Escape", "shortcut_cancel",
+      {"scope" => "application", "active_ref" => "dialog", "prevent" => true, "allow_editable" => true})
+    Mochi.focus("cancel")
+  end
+
+  def confirm
+    emit("confirm", {"accepted" => true})
+  end
+
+  def cancel
+    emit("cancel", {"reason" => "button"})
+  end
+
+  def shortcut_cancel(result)
+    emit("cancel", {"reason" => "escape"}) if result["ok"]
+  end
+
+  def html
+    %Q{
+      <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1">
+        <h2 id="dialog-title">{@title}</h2>
+        <p>{@message}</p>
+        <button ref="cancel" type="button" tabindex="0" onclick="{cancel}">Cancel</button>
+        <button ref="confirm" type="button" tabindex="0" onclick="{confirm}">Confirm</button>
+      </section>
+    }
+  end
+end
+```
+
+The parent conditionally renders
+`<confirm-dialog ref="dialog" tabindex="-1" data-mochi-focus-trap title="{@title}" message="{@message}" on:confirm="{confirm_dialog($event)}" on:cancel="{cancel_dialog($event)}"></confirm-dialog>`
+and handles the two events independently. Call `Mochi.focus("dialog")` when
+opening to save the opener; restore it when closing if it still exists, or focus
+a stable fallback if the opener was removed. Put the trap on the child host so
+the parent can capture opener focus while the trap also walks into the child's
+shadow root. The child's named refs keep initial focus and Escape scoped to its
+mounted lifetime. The built-in trap handles Tab and Shift-Tab. Use ordinary
+interpolation for labels and user data so they remain text. [`Mochi.raw` is
+trusted markup, not a sanitizer or a substitute for content projection](API_MIGRATIONS.md#trusted-markup-composition);
+this pattern owns its markup and does not project parent content. Nested
+dialogs, slots, and a general overlay manager are outside this recipe.
+
+The [dialog fixture](../e2e/fixtures/ui_contracts/lib/ConfirmDialog.rb) and
+[Ruby scenarios](../e2e/fixtures/ui_contracts/test/dialog_test.rb) cover typed
+props/events, safe text updates, keyboard traversal, Escape, opener restoration,
+and fallback focus after trigger removal.
+
 ## Bound controls and explicit handlers
 
 `bind:value="{@draft}"` writes `@draft` on text input's `input` event;

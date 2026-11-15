@@ -1,6 +1,6 @@
 # Shared UI contract fixtures
 
-One portable Mochi project contains three Ruby applications. Components and
+One portable Mochi project contains four Ruby applications. Components and
 helpers live in `lib/`, authored browser scenarios in `test/`, and isolated
 feedback probes in `probes/`. No external application checkout, backend, or
 application JavaScript is required. Builds and browser servers use temporary
@@ -96,6 +96,19 @@ Tests: [nested_form_test.rb](test/nested_form_test.rb),
 [Boolean mismatch/recovery](probes/11-boolean-contracts/test/boolean_test.rb).
 Both shared form and Boolean probes build with `--typecheck`. Browser checks
 verify keyed identity and that adversarial labels create no extra elements.
+
+## Single dialog
+
+[ConfirmDialog](lib/ConfirmDialog.rb) owns its complete dialog markup, takes
+required typed title/message props, and emits separate typed confirm/cancel
+events. Its parent conditionally mounts it, supplies live text props, and owns
+opener restoration or a stable fallback when the opener disappears. Initial
+focus, native Tab/Shift-Tab trapping, Escape cancellation, conditional reopen,
+and safe rendering of hostile-looking text are covered without slots or raw
+parent markup.
+
+Tests: [dialog_test.rb](test/dialog_test.rb) runs in Chromium, Firefox, and
+WebKit through `task framework:ui:form`.
 
 ## Editable graph
 
