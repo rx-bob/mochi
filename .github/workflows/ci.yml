@@ -88,6 +88,7 @@ jobs:
 
       - name: Build GVM runtime
         run: |
+          echo "$EMSDK/upstream/bin" >> "$GITHUB_PATH"
           export PATH="$EMSDK/upstream/bin:$PATH"
           command -v emcc
           command -v goose
