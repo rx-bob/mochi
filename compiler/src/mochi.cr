@@ -25,6 +25,11 @@ require "./batteries/core_battery"
 require "./sorbet/sorbet"
 require "./tooling/dev_server"
 require "./tooling/ruby_test_runner"
+require "./tooling/lint_runner"
+
+if ARGV.first? == "lint"
+  exit LintRunner.new.run(ARGV[1..])
+end
 
 def self.get_attr(component, name) : String
   return `#{component}.element.getAttribute(#{name})`
@@ -107,6 +112,11 @@ OptionParser.parse do |p|
 
   p.on("test", "Run Ruby-authored component behavior tests in GVM") do
     is_ruby_test = true
+  end
+
+  p.on("lint", "Lint Ruby sources (run 'mochi lint --help' for lint options)") do
+    STDERR.puts "ERROR: 'lint' must be the first argument: mochi lint [options]"
+    exit 2
   end
 
   p.on("--browsers=BROWSERS", "Browsers for mochi test: chromium,firefox,webkit or all") do |value|

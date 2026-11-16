@@ -63,6 +63,10 @@ module TreeSitter
       LibTreeSitter.ts_node_has_error(@raw)
     end
 
+    def missing? : Bool
+      LibTreeSitter.ts_node_is_missing(@raw)
+    end
+
     def start_point : LibTreeSitter::TSPoint
       LibTreeSitter.ts_node_start_point(@raw)
     end

@@ -37,6 +37,7 @@
     fun ts_node_start_byte(node : TSNode) : UInt32
     fun ts_node_end_byte(node : TSNode) : UInt32
     fun ts_node_has_error(node : TSNode) : Bool
+    fun ts_node_is_missing(node : TSNode) : Bool
     fun ts_node_start_point(node : TSNode) : TSPoint
     fun ts_node_end_point(node : TSNode) : TSPoint
     fun ts_node_string(node : TSNode) : UInt8*
