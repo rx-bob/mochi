@@ -5,6 +5,7 @@ require "../lint/config"
 require "../lint/diagnostic"
 require "../lint/file_discovery"
 require "../lint/project_index"
+require "../lint/rules/accessibility"
 require "../lint/rules/child_props"
 require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
@@ -48,6 +49,7 @@ class LintRunner
         Lint::Diagnostics.sort(
           index.diagnostics +
           Lint::Rules::Handlers.diagnostics(index) +
+          Lint::Rules::Accessibility.diagnostics(index) +
           Lint::Rules::ChildProps.diagnostics(index) +
           Lint::Rules::PropWrites.diagnostics(index) +
           Lint::Rules::EventPayloads.diagnostics(index)

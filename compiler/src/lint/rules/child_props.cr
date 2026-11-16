@@ -6,6 +6,7 @@ require "set"
 require "../../html/template_expression"
 require "../diagnostic"
 require "../project_index"
+require "../template_elements"
 
 module Lint::Rules
   # Checks statically known child component tags against declared prop
@@ -18,25 +19,6 @@ module Lint::Rules
     FLOAT_TEXT       = /\A-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\z/
     SPECIAL_FLOATS   = Set{"Infinity", "-Infinity", "NaN"}
     MAX_SAFE_INTEGER = 9_007_199_254_740_991_i64
-
-    record ElementAttribute,
-      name : String,
-      start : Int32,
-      finish : Int32,
-      name_start : Int32,
-      name_end : Int32,
-      value_start : Int32,
-      value_end : Int32,
-      bare : Bool
-
-    record ChildElement,
-      tag : String,
-      start_byte : Int32,
-      name_start : Int32,
-      name_end : Int32,
-      finish : Int32,
-      attributes : Array(ElementAttribute),
-      dynamic_attributes : Bool
 
     def self.diagnostics(index : ProjectIndex) : Array(Diagnostic)
       return [] of Diagnostic unless index.config.enabled?(CHILD_PROPS)
@@ -54,7 +36,7 @@ module Lint::Rules
       parser = TemplateExpressionParser.new
 
       index.target_templates.each do |view|
-        scan_elements(view.text, parser).each do |element|
+        Lint::TemplateElements.scan(view.text, parser).elements.each do |element|
           child = index.tags[element.tag]?
           next unless child
           next if child.props.empty?
@@ -68,12 +50,12 @@ module Lint::Rules
 
     private def self.check_element(
       view : TemplateView,
-      element : ChildElement,
+      element : Lint::TemplateElements::Element,
       child : ClassInfo,
       parser : TemplateExpressionParser,
       issues : Array(SourceIssue),
     ) : Nil
-      attributes = {} of String => ElementAttribute
+      attributes = {} of String => Lint::TemplateElements::Attribute
       element.attributes.each do |attribute|
         attributes[prop_name(attribute.name)] = attribute
       end
@@ -235,215 +217,6 @@ module Lint::Rules
         end
       end
       nil
-    end
-
-    private def self.scan_elements(text : String, parser : TemplateExpressionParser) : Array(ChildElement)
-      elements = [] of ChildElement
-      index = 0
-
-      while index < text.bytesize
-        byte = text.byte_at(index)
-        if byte == 123_u8
-          index = skip_placeholder(text, index)
-          next
-        end
-
-        unless byte == 60_u8
-          index += 1
-          next
-        end
-
-        if text.byte_slice(index, Math.min(4, text.bytesize - index)) == "<!--"
-          ending = text.byte_index("-->", index)
-          index = ending ? ending + 3 : text.bytesize
-          next
-        end
-
-        if index + 1 >= text.bytesize
-          index += 1
-          next
-        end
-
-        next_byte = text.byte_at(index + 1)
-        if next_byte == 47_u8
-          index = skip_tag(text, index + 2)
-          next
-        end
-
-        unless letter?(next_byte)
-          index = next_byte == 33_u8 || next_byte == 63_u8 ? skip_tag(text, index + 2) : index + 1
-          next
-        end
-
-        element, next_index = scan_element(text, index, parser)
-        elements << element if element
-        index = next_index
-      end
-
-      elements
-    end
-
-    private def self.scan_element(text : String, start : Int32, parser : TemplateExpressionParser) : Tuple(ChildElement?, Int32)
-      index = start + 1
-      name_start = index
-      while index < text.bytesize && name_byte?(text.byte_at(index))
-        index += 1
-      end
-      name_end = index
-      tag = text.byte_slice(name_start, name_end - name_start).downcase
-
-      attributes = [] of ElementAttribute
-      dynamic_attributes = false
-      finish = text.bytesize
-
-      while index < text.bytesize
-        index = skip_whitespace(text, index)
-        break if index >= text.bytesize
-
-        byte = text.byte_at(index)
-        if byte == 62_u8
-          finish = index + 1
-          index = finish
-          break
-        end
-        if byte == 47_u8 && index + 1 < text.bytesize && text.byte_at(index + 1) == 62_u8
-          finish = index + 2
-          index = finish
-          break
-        end
-        if byte == 123_u8
-          dynamic_attributes = true
-          index = skip_placeholder(text, index)
-          next
-        end
-        unless name_byte?(byte)
-          index += 1
-          next
-        end
-
-        attribute_start = index
-        while index < text.bytesize && name_byte?(text.byte_at(index))
-          index += 1
-        end
-        attribute_name_end = index
-        attribute_name = text.byte_slice(attribute_start, attribute_name_end - attribute_start)
-        index = skip_whitespace(text, index)
-
-        value_start = index
-        value_end = index
-        bare = true
-
-        if index < text.bytesize && text.byte_at(index) == 61_u8
-          bare = false
-          index += 1
-          index = skip_whitespace(text, index)
-          if index < text.bytesize && (text.byte_at(index) == 34_u8 || text.byte_at(index) == 39_u8)
-            quote = text.byte_at(index)
-            index += 1
-            value_start = index
-            closed = false
-            while index < text.bytesize
-              current = text.byte_at(index)
-              if current == quote
-                value_end = index
-                index += 1
-                closed = true
-                break
-              elsif current == 123_u8
-                if close = TemplateExpressionParser.matching_brace(text, index)
-                  dynamic_attributes = true if hash_spread?(text, index, close, quoted: true, parser: parser)
-                  index = close + 1
-                else
-                  index += 1
-                end
-              else
-                index += 1
-              end
-            end
-            value_end = index unless closed
-          else
-            value_start = index
-            while index < text.bytesize
-              current = text.byte_at(index)
-              break if whitespace?(current) || current == 62_u8
-              break if current == 47_u8 && index + 1 < text.bytesize && text.byte_at(index + 1) == 62_u8
-              if current == 123_u8
-                if close = TemplateExpressionParser.matching_brace(text, index)
-                  dynamic_attributes = true if hash_spread?(text, index, close, quoted: false, parser: parser)
-                  index = close + 1
-                else
-                  index += 1
-                end
-              else
-                index += 1
-              end
-            end
-            value_end = index
-          end
-        end
-
-        attributes << ElementAttribute.new(
-          attribute_name,
-          attribute_start,
-          index,
-          attribute_start,
-          attribute_name_end,
-          value_start,
-          value_end,
-          bare,
-        )
-      end
-
-      {ChildElement.new(tag, start, name_start, name_end, finish, attributes, dynamic_attributes), index}
-    end
-
-    private def self.hash_spread?(
-      text : String,
-      index : Int32,
-      close : Int32,
-      quoted : Bool,
-      parser : TemplateExpressionParser,
-    ) : Bool
-      return false unless index + 1 < text.bytesize && text.byte_at(index + 1) == 123_u8
-      return true unless quoted
-      token = text.byte_slice(index, close - index + 1)
-      parser.hash_literal_intent?(token[1...-1])
-    end
-
-    private def self.skip_placeholder(text : String, index : Int32) : Int32
-      if close = TemplateExpressionParser.matching_brace(text, index)
-        close + 1
-      else
-        index + 1
-      end
-    end
-
-    private def self.skip_tag(text : String, index : Int32) : Int32
-      while index < text.bytesize
-        return index + 1 if text.byte_at(index) == 62_u8
-        index += 1
-      end
-      index
-    end
-
-    private def self.skip_whitespace(text : String, index : Int32) : Int32
-      while index < text.bytesize && whitespace?(text.byte_at(index))
-        index += 1
-      end
-      index
-    end
-
-    private def self.letter?(byte : UInt8) : Bool
-      (65_u8 <= byte <= 90_u8) || (97_u8 <= byte <= 122_u8)
-    end
-
-    private def self.name_byte?(byte : UInt8) : Bool
-      letter?(byte) || (48_u8 <= byte <= 57_u8) ||
-        byte == 95_u8 || byte == 45_u8 || byte == 58_u8 || byte == 46_u8
-    end
-
-    private def self.whitespace?(byte : UInt8) : Bool
-      byte == 32_u8 || byte == 9_u8 || byte == 10_u8 || byte == 13_u8 || byte == 12_u8
     end
   end
 end
