@@ -7,6 +7,7 @@ require "../lint/file_discovery"
 require "../lint/project_index"
 require "../lint/rules/accessibility"
 require "../lint/rules/child_props"
+require "../lint/rules/component_methods"
 require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
 require "../lint/rules/method_length"
@@ -51,6 +52,7 @@ class LintRunner
         Lint::Diagnostics.sort(
           index.diagnostics +
           Lint::Rules::Handlers.diagnostics(index) +
+          Lint::Rules::ComponentMethods.diagnostics(index) +
           Lint::Rules::MethodLength.diagnostics(index) +
           Lint::Rules::NestingDepth.diagnostics(index) +
           Lint::Rules::Accessibility.diagnostics(index) +
