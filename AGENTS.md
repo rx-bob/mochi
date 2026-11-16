@@ -57,6 +57,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task run` | Build the compiler and compile `compiler/motestproj` into `build_gvm` |
 | `task build` | Build the `compiler/mochi` binary |
 | `task specs` | Run the Crystal compiler specs |
+| `task lint` | Lint the explicit positive project inventory with the shipped default policy |
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
 | `task framework:e2e` | Run portable framework browser regressions, including all UI fixtures |
 | `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
@@ -68,7 +69,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task generate-batteries` | Regenerate the built-in battery sources |
 | `task runtime:test` | Run the loader and host adapter Node tests |
 | `task payload` | Check deterministic bundle membership and payload ceilings |
-| `task check` | Run compile-time gates, runtime tests, compiler specs, payload checks, GVM tests, and portable framework browser tests |
+| `task check` | Run compile-time gates, runtime tests, compiler specs, project lint, payload checks, GVM tests, and portable framework browser tests |
 
 ## CLI reference
 
@@ -107,6 +108,7 @@ build-time profile format and custom artifact workflow.
 
 * `mochi --initialize=PROJECT` creates the generated Ruby project.
 * `mochi -i INPUT -o OUTPUT [--typecheck]` builds an application bundle.
+* `mochi lint -i PROJECT [--format=json]` checks the project's Ruby sources and exits nonzero for any reported diagnostic.
 * `mochi test -i PROJECT [--browsers=chromium,firefox,webkit|all] [--test-file=FILE]` runs Ruby behavior tests; `FILE` is an existing `*_test.rb` path relative to `test/`.
 * `mochi dev --config=FILE --root=DIR` serves a local project.
 

@@ -146,6 +146,15 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/fragments/libs
 
+      - name: Lint positive Ruby projects
+        run: |
+          ./compiler/mochi lint -i e2e/fixtures/gvm_counter
+          ./compiler/mochi lint -i e2e/fixtures/ui_contracts
+          ./compiler/mochi lint -i e2e/fixtures/framework_contracts
+          ./compiler/mochi lint -i devground/components
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/fragments/libs
+
       - name: Compile Mochi for E2E tests
         run: ./compiler/mochi -i devground/components -o build/ci-devground
         env:

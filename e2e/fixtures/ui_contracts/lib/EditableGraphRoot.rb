@@ -443,6 +443,7 @@ class EditableGraphRoot
     @offset_y += 5
   end
 
+  # mochi-lint: disable-next components/prop-write -- fixture proves host attribute updates and local graph controls share one open state
   def toggle
     clear_wheel
     cancel_gesture("closed")

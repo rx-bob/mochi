@@ -92,6 +92,20 @@ tasks:
         if [ "$created" -eq 1 ]; then rm -f ../fragments/libs/libtree-sitter.0.27.dylib; fi
         exit $status
 
+  lint:
+    desc: Lint the explicit positive project inventory
+    deps:
+      - build
+    cmds:
+      - |
+        set -e
+        {{.FRAG_CONFIG}}
+        "{{.COMPILER}}" lint -i "{{.MOTESTPROJ}}"
+        "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/e2e/fixtures/ui_contracts"
+        "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/e2e/fixtures/framework_contracts"
+        "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/e2e/fixtures/gvm_counter"
+        "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/devground/components"
+
   run:
     desc: Build the compiler and compile motestproj into build_gvm
     deps:
@@ -182,12 +196,13 @@ tasks:
       - node scripts/compile_time_gate.cjs
 
   check:
-    desc: Run compile-time gate, then compiler, payload, runtime, GVM, browser, and app checks
+    desc: Run compile-time gate, then compiler, lint, payload, runtime, GVM, browser, and app checks
     cmds:
       - task: compile-time:test
       - task: compile-time:framework
       - task: runtime:test
       - task: specs
+      - task: lint
       - task: payload
       - task: gvm:test
       - task: framework:e2e

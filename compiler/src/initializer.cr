@@ -17,6 +17,7 @@ class Initializer
       Dir.mkdir_p(test_path)
 
       File.write("#{proj_path}/Taskfile.yml", generate_taskfile)
+      File.write("#{proj_path}/.mochi-lint.yml", generate_lint_config)
       File.write("#{proj_path}/Gemfile", generate_gemfile)
       File.write("#{proj_path}/index.html", generate_index_html)
       File.write("#{proj_path}/dev_server_config.json", generate_dev_server_config)
@@ -35,14 +36,56 @@ class Initializer
         desc: Build this Ruby application with the installed Mochi compiler
         cmds:
           - mochi -i "./" -o "./build"
+      lint:
+        desc: Check Ruby sources with this project's lint policy
+        cmds:
+          - mochi lint -i "./"
       test:
         desc: Run Ruby component behavior tests in the browser
         cmds:
           - mochi test -i "./"
+      check:
+        desc: Run lint and then Ruby behavior tests
+        cmds:
+          - task: lint
+          - task: test
       dev:
         desc: Serve the built application at http://127.0.0.1:27490
         cmds:
           - mochi dev --config=./dev_server_config.json --root=./
+    YML
+  end
+
+  def generate_lint_config : String
+    <<-'YML'
+    version: 1
+
+    # Lint the Ruby that ships in this project. Globs are relative to this file.
+    include:
+      - "lib/**/*.rb"
+
+    # These are the standard Mochi defaults. Change a severity or limit only
+    # when this project intentionally needs a different policy.
+    rules:
+      correctness/unknown-handler: error
+      correctness/timer-callback: error
+      correctness/child-props: error
+      correctness/event-payload: error
+      components/prop-write: warning
+      metrics/method-length:
+        severity: warning
+        max: 60
+      metrics/nesting-depth:
+        severity: warning
+        max: 4
+      metrics/component-methods:
+        severity: warning
+        max: 40
+      accessibility/control-name: warning
+      accessibility/keyboard-activation: warning
+      templates/unstable-key: off
+      migration/css-timer: off
+      money/float-to-minor-units: off
     YML
   end
 
@@ -72,6 +115,8 @@ class Initializer
     mochi test -i .
     mochi dev --config=./dev_server_config.json --root=./
     ```
+
+    Run `task check` to lint the project and then run its Ruby behavior tests. `task lint` reads `.mochi-lint.yml`, which records the standard rule severities and metric limits. `task build` compiles the application without running either check.
 
     Open <http://127.0.0.1:27490>. The starter compiles to a GVM bundle: the loader reads a manifest, then loads each component's descriptor and `.chi` bytecode when it is used. No app-authored JavaScript is needed.
 

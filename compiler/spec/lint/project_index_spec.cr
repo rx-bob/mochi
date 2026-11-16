@@ -213,6 +213,29 @@ describe Lint::ProjectIndex do
     end
   end
 
+  it "keeps Ruby escapes inside template expressions for validation" do
+    LintProjectIndexSpecSupport.with_project do |root|
+      LintProjectIndexSpecSupport.write(root, "lib/EscapedExpression.rb", <<-'RUBY')
+        class EscapedExpression
+          @tag_name = "escaped-expression"
+
+          def html
+            %Q{<button onclick="{handler("quote: \"x\"")}">Read escaped quotes</button>}
+          end
+        end
+        RUBY
+
+      index, _config = LintProjectIndexSpecSupport.build(root)
+      begin
+        template = index.target_templates.first
+        template.expressions.first.source.should eq %q(handler("quote: \"x\""))
+        index.diagnostics.should be_empty
+      ensure
+        index.close
+      end
+    end
+  end
+
   it "maps repeated identical expressions to distinct authored locations" do
     LintProjectIndexSpecSupport.with_project do |root|
       LintProjectIndexSpecSupport.write(root, "lib/Repeated.rb", <<-RUBY)

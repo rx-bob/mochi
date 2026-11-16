@@ -12,6 +12,7 @@ class GroupedPropsChild
     @initial_note = @metadata["note"]
   end
 
+  # mochi-lint: disable-next components/prop-write -- fixture proves child-local mutations cannot change a parent's declared prop snapshot
   def change
     @metadata["note"] = "child-only"
     @values[0] = "child-only"

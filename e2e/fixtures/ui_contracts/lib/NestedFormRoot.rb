@@ -44,6 +44,7 @@ class NestedFormRoot
     end
   end
 
+  # mochi-lint: disable-next components/prop-write -- fixture proves host attribute updates and local dialog controls share one open state
   def close_form
     @open = false
     if @focus_return
@@ -62,6 +63,7 @@ class NestedFormRoot
     {"id" => group["id"], "label" => group["label"], "fields" => fields, "enabled" => enabled}
   end
 
+  # mochi-lint: disable-next components/prop-write -- fixture proves host attribute updates and local dialog controls share one open state
   def toggle
     if @open
       close_form

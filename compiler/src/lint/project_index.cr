@@ -264,8 +264,17 @@ module Lint
 
     # Ruby literal escapes are decoded only for the template scanner. The
     # offset table maps every decoded byte back to its authored raw byte, so
-    # escaped quotes or newlines cannot shift a later diagnostic.
+    # escaped quotes or newlines cannot shift a later diagnostic. Bytes inside
+    # a `{...}` placeholder stay exactly as authored: those are Ruby source,
+    # not template text, and the compiler validates the same expression.
     private def self.decode_template(raw : String, single_quoted : Bool) : Tuple(String, Array(Int32))
+      expression_ranges = begin
+        TemplateExpressionParser.new.scan(raw, "template", [] of String, validate: false)
+      rescue TemplateExpressionError
+        [] of TemplateExpression
+      end
+      range_index = 0
+
       bytes = [] of UInt8
       offsets = [] of Int32
       index = 0
@@ -276,6 +285,16 @@ module Lint
       end
 
       while index < raw.bytesize
+        while range_index < expression_ranges.size && index >= expression_ranges[range_index].template_end
+          range_index += 1
+        end
+        if (expression = expression_ranges[range_index]?) &&
+           index >= expression.template_start && index < expression.template_end
+          append.call(raw.byte_at(index), index)
+          index += 1
+          next
+        end
+
         byte = raw.byte_at(index)
         unless byte == 92_u8 && index + 1 < raw.bytesize
           append.call(byte, index)

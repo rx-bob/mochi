@@ -28,7 +28,6 @@ bundle.js
 compiler/lib
 compiler/mochi
 compiler/mochi.dwarf
-compiler/motestproj
 compiler/build
 compiler/src/generated
 /compiler/src/sorbet/test_simple.dwarf
@@ -59,3 +58,4 @@ todo/
 done/
 inprogress/
 poc_yiseq/
+compiler/motestproj/
