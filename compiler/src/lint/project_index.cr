@@ -54,6 +54,7 @@ module Lint
     getter index_name : String
     getter declared_index : String?
     getter key_expression : String?
+    getter items_expression : String
     getter start_byte : Int32
     getter end_byte : Int32
     getter content_start_byte : Int32
@@ -66,6 +67,7 @@ module Lint
       @index_name : String,
       @declared_index : String?,
       @key_expression : String?,
+      @items_expression : String,
       @start_byte : Int32,
       @end_byte : Int32,
       @content_start_byte : Int32,
@@ -496,6 +498,7 @@ module Lint
         index_name,
         loop_def.index_name,
         loop_def.key_expression,
+        loop_def.array_name,
         start_byte,
         end_byte,
         content_start,

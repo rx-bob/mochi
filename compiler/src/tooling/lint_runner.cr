@@ -13,6 +13,7 @@ require "../lint/rules/handlers"
 require "../lint/rules/method_length"
 require "../lint/rules/nesting_depth"
 require "../lint/rules/prop_writes"
+require "../lint/rules/row_identity"
 
 class LintRunner
   SYNTAX_RULE = Lint::SYNTAX_RULE
@@ -58,6 +59,7 @@ class LintRunner
           Lint::Rules::Accessibility.diagnostics(index) +
           Lint::Rules::ChildProps.diagnostics(index) +
           Lint::Rules::PropWrites.diagnostics(index) +
+          Lint::Rules::RowIdentity.diagnostics(index) +
           Lint::Rules::EventPayloads.diagnostics(index)
         )
       ensure
