@@ -5,6 +5,7 @@ require "../lint/config"
 require "../lint/diagnostic"
 require "../lint/file_discovery"
 require "../lint/project_index"
+require "../lint/rules/handlers"
 
 class LintRunner
   SYNTAX_RULE = Lint::SYNTAX_RULE
@@ -41,7 +42,9 @@ class LintRunner
     diagnostics = begin
       index = Lint::ProjectIndex.build(files, config)
       begin
-        index.diagnostics
+        Lint::Diagnostics.sort(
+          index.diagnostics + Lint::Rules::Handlers.diagnostics(index)
+        )
       ensure
         index.close
       end

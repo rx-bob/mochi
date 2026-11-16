@@ -13,6 +13,22 @@ module Lint
     end
   end
 
+  module Diagnostics
+    def self.sort(diagnostics : Array(Diagnostic)) : Array(Diagnostic)
+      diagnostics.sort_by do |diagnostic|
+        {
+          diagnostic.path,
+          diagnostic.start_byte,
+          diagnostic.rule,
+          diagnostic.message,
+          diagnostic.end_byte,
+          diagnostic.severity.label,
+          diagnostic.suggestion || "",
+        }
+      end
+    end
+  end
+
   class Diagnostic
     getter path : String
     getter start_line : Int32

@@ -20,9 +20,10 @@ module Lint
     start_byte : Int32,
     end_byte : Int32,
     message : String,
-    rule : String = ANALYSIS_RULE do
+    rule : String = ANALYSIS_RULE,
+    suggestion : String? = nil do
     def diagnostic(severity : Severity) : Diagnostic
-      map.diagnostic(@start_byte, @end_byte, severity, @rule, @message)
+      map.diagnostic(@start_byte, @end_byte, severity, @rule, @message, @suggestion)
     end
   end
 
@@ -788,7 +789,7 @@ module Lint
     end
 
     def diagnostics : Array(Diagnostic)
-      @issues.compact_map do |issue|
+      diagnostics = @issues.compact_map do |issue|
         severity = if issue.rule.in?(SYNTAX_RULE, ANALYSIS_RULE)
                      Severity::Error
                    else
@@ -796,17 +797,8 @@ module Lint
                      settings ? settings.severity : Severity::Error
                    end
         severity ? issue.diagnostic(severity) : nil
-      end.sort_by do |diagnostic|
-        {
-          diagnostic.path,
-          diagnostic.start_byte,
-          diagnostic.rule,
-          diagnostic.message,
-          diagnostic.end_byte,
-          diagnostic.severity.label,
-          diagnostic.suggestion || "",
-        }
       end
+      Diagnostics.sort(diagnostics)
     end
 
     def close : Nil
