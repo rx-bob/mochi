@@ -112,11 +112,14 @@ class Initializer
 
     ```sh
     mochi -i . -o ./build
+    mochi lint -i .
     mochi test -i .
     mochi dev --config=./dev_server_config.json --root=./
     ```
 
     Run `task check` to lint the project and then run its Ruby behavior tests. `task lint` reads `.mochi-lint.yml`, which records the standard rule severities and metric limits. `task build` compiles the application without running either check.
+
+    Ordinary compilation and `mochi dev` do not run lint. Run `task lint` or `mochi lint -i .` explicitly, and let `task check` or CI enforce it. See the [lint contract](https://github.com/yampug/mochi/blob/main/references/LINT_CONTRACT.md) for every rule, exit code, and suppression form.
 
     Open <http://127.0.0.1:27490>. The starter compiles to a GVM bundle: the loader reads a manifest, then loads each component's descriptor and `.chi` bytecode when it is used. No app-authored JavaScript is needed.
 

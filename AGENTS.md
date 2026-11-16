@@ -13,6 +13,7 @@ The sections below describe the current implementation and its contracts.
 ## Guide index
 
 - [Ruby task guide](references/RUBY_TASK_GUIDE.md): timers, storage, downloads, events, datasets, shortcuts, and screen lifetime recipes
+- [Lint contract](references/LINT_CONTRACT.md): CLI, configuration roots, exit codes, rule defaults, complexity definitions, static-analysis limits, and suppressions
 - [Build from source](#building-mochi-from-source), [tasks](#compiler-tasks), and [CLI / development installation](#cli-reference)
 - [Complete Ruby examples and contracts](#complete-ruby-examples-and-contracts)
 - [Shared styles](#shared-component-styles), [public assets](#public-assets), and [icons](#icons)
@@ -57,7 +58,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task run` | Build the compiler and compile `compiler/motestproj` into `build_gvm` |
 | `task build` | Build the `compiler/mochi` binary |
 | `task specs` | Run the Crystal compiler specs |
-| `task lint` | Lint the explicit positive project inventory with the shipped default policy |
+| `task lint` | Lint the explicit positive project inventory using each project's configuration |
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
 | `task framework:e2e` | Run portable framework browser regressions, including all UI fixtures |
 | `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
@@ -108,9 +109,15 @@ build-time profile format and custom artifact workflow.
 
 * `mochi --initialize=PROJECT` creates the generated Ruby project.
 * `mochi -i INPUT -o OUTPUT [--typecheck]` builds an application bundle.
-* `mochi lint -i PROJECT [--format=json]` checks the project's Ruby sources and exits nonzero for any reported diagnostic.
+* `mochi lint [-i PROJECT] [--config=PATH] [--format=text|json] [--help]` checks the project's Ruby sources; it exits 0 when clean, 1 for any warning or error, and 2 for invocation, configuration, or I/O failure.
 * `mochi test -i PROJECT [--browsers=chromium,firefox,webkit|all] [--test-file=FILE]` runs Ruby behavior tests; `FILE` is an existing `*_test.rb` path relative to `test/`.
 * `mochi dev --config=FILE --root=DIR` serves a local project.
+
+Ordinary compilation, `mochi dev`, and `mochi test` do not run lint. The
+strict gate is the explicit `task lint`, `task check`, or CI step. A generated
+project records the standard policy in `.mochi-lint.yml`; see the
+[lint contract](references/LINT_CONTRACT.md) for every rule, option, exit code,
+and suppression form.
 
 The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from the
 entry page; it validates the manifest and fetches a component's descriptor,

@@ -15,18 +15,24 @@ module Lint
   end
 
   module Diagnostics
+    # Paths are project-relative and already normalized by FileDiscovery.
+    # The input position is the final tie-breaker so the order is stable even
+    # when two passes produce otherwise identical records.
     def self.sort(diagnostics : Array(Diagnostic)) : Array(Diagnostic)
-      diagnostics.sort_by do |diagnostic|
-        {
-          diagnostic.path,
-          diagnostic.start_byte,
-          diagnostic.rule,
-          diagnostic.message,
-          diagnostic.end_byte,
-          diagnostic.severity.label,
-          diagnostic.suggestion || "",
-        }
-      end
+      diagnostics.map_with_index { |diagnostic, index| {diagnostic, index} }
+        .sort_by do |(diagnostic, index)|
+          {
+            diagnostic.path,
+            diagnostic.start_byte,
+            diagnostic.rule,
+            diagnostic.message,
+            diagnostic.end_byte,
+            diagnostic.severity.label,
+            diagnostic.suggestion || "",
+            index,
+          }
+        end
+        .map(&.first)
     end
   end
 

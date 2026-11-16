@@ -41,12 +41,21 @@ cd ..
 mochi --initialize=hello_mochi
 cd hello_mochi
 mochi -i . -o ./build
+mochi lint -i .
 mochi test -i .
 mochi dev --config=./dev_server_config.json --root=./
 ```
 
 Open <http://127.0.0.1:27490>. The generated project includes components in
-`lib/`, Ruby behavior tests in `test/`, and an HTML entry page.
+`lib/`, Ruby behavior tests in `test/`, an HTML entry page, and a
+`.mochi-lint.yml` policy with `task lint` and `task check` commands.
+
+`mochi lint` checks the Ruby sources without building or running the
+application. Compilation and `mochi dev` do not run it automatically. Run
+`task lint` or `mochi lint -i .` explicitly, and let `task check` or CI enforce
+it. Every enabled warning or error is blocking, and the command exits nonzero
+for either. See the [lint contract](references/LINT_CONTRACT.md) for
+configuration, exit codes, rule defaults, and suppression forms.
 
 `mochi test` runs in Chromium, Firefox, and WebKit. Use
 `mochi test -i . --browsers=chromium` for a single engine, or add `--typecheck`
@@ -85,6 +94,7 @@ page. The generated starter already includes a counter and a test to try.
 ## Learn More
 
 - [Ruby task guide](references/RUBY_TASK_GUIDE.md): recipes for timers, preferences, downloads, events, datasets, shortcuts, and screen lifetimes.
+- [Lint contract](references/LINT_CONTRACT.md): CLI, configuration, exit codes, rule defaults, and inline suppressions.
 - [Ruby examples](e2e/fixtures/ui_contracts/README.md): a record inspector, SVG graph editor, and nested form.
 - [Supported Ruby](references/RUBY_SURFACE.md): available APIs and current limits.
 - [Project guide](AGENTS.md): styling, props, events, routing, capabilities, and contributor commands.
