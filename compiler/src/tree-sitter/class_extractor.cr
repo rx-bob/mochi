@@ -62,8 +62,25 @@ module TreeSitter
       superclass_node = class_node.child_by_field_name("superclass")
       return nil unless superclass_node
 
-      # Superclass node contains the parent class name
-      superclass_node.text.strip
+      constant_name(superclass_node)
+    end
+
+    # Extracts the syntax name of a class or module constant without the
+    # `"< "` prefix Tree-sitter includes on the `superclass` wrapper node.
+    def self.constant_name(node : Node) : String?
+      case node.type
+      when "constant", "scope_resolution"
+        node.text.lchop("::")
+      when "superclass"
+        node.each_named_child do |child|
+          if name = constant_name(child)
+            return name
+          end
+        end
+        nil
+      else
+        nil
+      end
     end
 
     private def self.visit_declarations(node : Node, enclosing : Array(Node), results : Array(ClassDecl))

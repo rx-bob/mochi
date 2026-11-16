@@ -326,4 +326,78 @@ describe LintRunner do
       stderr.should contain("no Ruby source files matched")
     end
   end
+
+  it "reports syntax columns as Unicode characters rather than UTF-8 bytes" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/UnicodeSyntax.rb", <<-RUBY)
+        class UnicodeSyntax
+          def html
+            "é" )
+          end
+        end
+        RUBY
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+
+      status.should eq 1
+      stderr.should eq ""
+      stdout.should start_with("lib/UnicodeSyntax.rb:3:9: error ruby/syntax:")
+    end
+  end
+
+  it "reports malformed template source as an analysis limitation" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/MalformedTemplate.rb", <<-RUBY)
+        class MalformedTemplate
+          @tag_name = "malformed-template"
+
+          def html
+            "<p>{@name</p>"
+          end
+        end
+        RUBY
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+
+      status.should eq 1
+      stderr.should eq ""
+      stdout.should contain("error analysis/limitation:")
+      stdout.should contain("unclosed template placeholder")
+    end
+  end
+
+  it "does not emit diagnostics from excluded support files" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/support.rb", <<-RUBY)
+        class SupportWidget
+          @tag_name = "support-widget"
+
+          def html
+            "<p>{@broken</p>"
+          end
+        end
+        RUBY
+      LintCliSpecSupport.write_source(root, "lib/TargetWidget.rb", <<-RUBY)
+        require_relative "support"
+
+        class TargetWidget
+          @tag_name = "target-widget"
+
+          def html
+            %Q{<p>ok</p>}
+          end
+        end
+        RUBY
+      File.write(File.join(root, ".mochi-lint.yml"), <<-YAML)
+        version: 1
+        include: ["lib/TargetWidget.rb"]
+        YAML
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+
+      status.should eq 0
+      stdout.should eq ""
+      stderr.should eq ""
+    end
+  end
 end

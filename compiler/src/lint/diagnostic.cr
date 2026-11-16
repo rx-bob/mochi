@@ -1,6 +1,9 @@
 require "json"
 
 module Lint
+  SYNTAX_RULE   = "ruby/syntax"
+  ANALYSIS_RULE = "analysis/limitation"
+
   enum Severity
     Error
     Warning

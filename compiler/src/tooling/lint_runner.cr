@@ -4,10 +4,10 @@ require "option_parser"
 require "../lint/config"
 require "../lint/diagnostic"
 require "../lint/file_discovery"
-require "../tree-sitter/ruby_parser"
+require "../lint/project_index"
 
 class LintRunner
-  SYNTAX_RULE = "ruby/syntax"
+  SYNTAX_RULE = Lint::SYNTAX_RULE
 
   class InvocationError < Exception
   end
@@ -38,7 +38,14 @@ class LintRunner
       raise InvocationError.new("no Ruby source files matched the lint configuration for #{config.project_root}")
     end
 
-    diagnostics = lint_files(files, config)
+    diagnostics = begin
+      index = Lint::ProjectIndex.build(files, config)
+      begin
+        index.diagnostics
+      ensure
+        index.close
+      end
+    end
     if options.format == "json"
       output.puts render_json(diagnostics)
     else
@@ -51,6 +58,9 @@ class LintRunner
     2
   rescue ex : InvocationError
     error.puts "mochi lint: #{ex.message}"
+    2
+  rescue ex : File::Error
+    error.puts "mochi lint: cannot read source: #{ex.message}"
     2
   rescue ex
     error.puts "mochi lint: internal error: #{ex.message}"
@@ -114,109 +124,6 @@ class LintRunner
       raise InvocationError.new("project directory cannot be a symlink: #{requested}")
     end
     File.realpath(root)
-  end
-
-  private def lint_files(files : Array(Lint::SourceFile), config : Lint::Config) : Array(Lint::Diagnostic)
-    diagnostics = [] of Lint::Diagnostic
-    parser = TreeSitter::RubyParser.new
-
-    files.each do |file|
-      source = begin
-        File.read(file.absolute_path)
-      rescue ex
-        raise InvocationError.new("cannot read #{file.relative_path}: #{ex.message}")
-      end
-      diagnostics.concat(syntax_diagnostics(source, file.relative_path, parser, config))
-    end
-
-    diagnostics.sort_by! do |diagnostic|
-      {
-        diagnostic.path,
-        diagnostic.start_byte,
-        diagnostic.rule,
-        diagnostic.message,
-        diagnostic.end_byte,
-        diagnostic.severity.label,
-        diagnostic.suggestion || "",
-      }
-    end
-    diagnostics
-  end
-
-  private def syntax_diagnostics(
-    source : String,
-    relative_path : String,
-    parser : TreeSitter::RubyParser,
-    config : Lint::Config,
-  ) : Array(Lint::Diagnostic)
-    return [] of Lint::Diagnostic unless config.enabled?(SYNTAX_RULE)
-
-    severity = config.severity_for(SYNTAX_RULE) || Lint::Severity::Error
-    tree = parser.parse(source)
-    root = tree.root_node
-    return [] of Lint::Diagnostic unless root.has_error?
-
-    diagnostic = first_syntax_error(root, relative_path, severity) ||
-                 diagnostic_for(root, relative_path, severity, "Ruby syntax error")
-    [diagnostic]
-  end
-
-  private def first_syntax_error(
-    node : TreeSitter::Node,
-    relative_path : String,
-    severity : Lint::Severity,
-  ) : Lint::Diagnostic?
-    return nil if node.null?
-
-    if node.type == "ERROR"
-      missing = first_missing(node)
-      if missing
-        return diagnostic_for(missing, relative_path, severity, "missing '#{missing.type}'")
-      end
-      return diagnostic_for(node, relative_path, severity, "Ruby syntax error")
-    end
-
-    if node.missing?
-      return diagnostic_for(node, relative_path, severity, "missing '#{node.type}'")
-    end
-
-    node.each_child do |child|
-      found = first_syntax_error(child, relative_path, severity)
-      return found if found
-    end
-    nil
-  end
-
-  private def first_missing(node : TreeSitter::Node) : TreeSitter::Node?
-    return node if node.missing?
-
-    node.each_child do |child|
-      found = first_missing(child)
-      return found if found
-    end
-    nil
-  end
-
-  private def diagnostic_for(
-    node : TreeSitter::Node,
-    relative_path : String,
-    severity : Lint::Severity,
-    message : String,
-  ) : Lint::Diagnostic
-    start_point = node.start_point
-    end_point = node.end_point
-    Lint::Diagnostic.new(
-      path: relative_path,
-      start_line: start_point.row.to_i + 1,
-      start_column: start_point.column.to_i + 1,
-      end_line: end_point.row.to_i + 1,
-      end_column: end_point.column.to_i + 1,
-      start_byte: node.start_byte,
-      end_byte: node.end_byte,
-      severity: severity,
-      rule: SYNTAX_RULE,
-      message: message,
-    )
   end
 
   private def render_json(diagnostics : Array(Lint::Diagnostic)) : String

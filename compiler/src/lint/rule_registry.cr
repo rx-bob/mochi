@@ -83,6 +83,12 @@ module Lint
         "Ruby syntax and Tree-sitter recovery errors",
         configurable: false,
       ),
+      "analysis/limitation" => RuleDefinition.new(
+        "analysis/limitation",
+        RuleLevel::Error,
+        "Source that lint cannot analyze with an exact original location",
+        configurable: false,
+      ),
       "correctness/unknown-handler" => RuleDefinition.new(
         "correctness/unknown-handler",
         RuleLevel::Error,

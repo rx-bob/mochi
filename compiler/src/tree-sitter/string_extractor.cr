@@ -3,7 +3,6 @@ require "./bindings"
 
 module TreeSitter
   class StringExtractor
-
     def self.extract_raw_string_from_def_body(body : Array(String), name : String) : String
       method_source = body.join("\n")
 
@@ -29,18 +28,58 @@ module TreeSitter
       return extract_string_content(string_node)
     end
 
-    # Returns the byte range of the literal's contents (without Ruby quote or
-    # percent delimiters) in the original source. Callers use this to map
-    # template spans back to the user's file.
-    def self.string_source_range(method_node : Node) : Tuple(Int32, Int32)?
+    # Returns the raw byte range of one literal node's contents. This is the
+    # string-node counterpart to `string_source_range`, used by lint's
+    # tolerant literal-require scanner.
+    def self.string_content_range(string_node : Node) : Tuple(Int32, Int32)?
+      content_range(string_node)
+    end
+
+    # Returns the literal node chosen for a method body. Lint keeps this node
+    # so it can map template bytes back to the authored source without
+    # searching for repeated text.
+    def self.string_node_from_method_node(method_node : Node) : Node?
       return nil unless method_node.type == "method"
 
       body_node = method_node.child_by_field_name("body")
       return nil unless body_node
 
-      string_node = find_string_in_body(body_node)
+      find_string_in_body(body_node)
+    end
+
+    # Returns the byte range of the literal's contents (without Ruby quote or
+    # percent delimiters) in the original source. Heredoc content excludes its
+    # terminator so a template scanner never sees the `HTML` label as markup.
+    def self.template_content_range(method_node : Node) : Tuple(Int32, Int32)?
+      string_node = string_node_from_method_node(method_node)
       return nil unless string_node
 
+      content_range(string_node)
+    end
+
+    # Returns the literal content range plus whether Ruby treats backslash
+    # sequences as escapes. Lint uses raw bytes for source ranges and decodes
+    # only its scanner copy, so escaped quotes cannot hide later placeholders.
+    def self.template_content_info(method_node : Node) : Tuple(Int32, Int32, Bool)?
+      string_node = string_node_from_method_node(method_node)
+      return nil unless string_node
+      range = content_range(string_node)
+      return nil unless range
+
+      {range[0], range[1], single_quoted_literal?(method_node, string_node)}
+    end
+
+    # Returns the byte range of the literal's contents (without Ruby quote or
+    # percent delimiters) in the original source. Callers use this to map
+    # template spans back to the user's file.
+    def self.string_source_range(method_node : Node) : Tuple(Int32, Int32)?
+      string_node = string_node_from_method_node(method_node)
+      return nil unless string_node
+
+      content_range(string_node)
+    end
+
+    private def self.content_range(string_node : Node) : Tuple(Int32, Int32)?
       text = string_node.text
       start_byte = string_node.start_byte
       end_byte = string_node.end_byte
@@ -50,16 +89,65 @@ module TreeSitter
         delimiter = text.byte_at(2)
         closing = case delimiter
                   when 123_u8 then 125_u8
-                  when 91_u8 then 93_u8
-                  when 40_u8 then 41_u8
-                  when 60_u8 then 62_u8
-                  else delimiter
+                  when  91_u8 then 93_u8
+                  when  40_u8 then 41_u8
+                  when  60_u8 then 62_u8
+                  else             delimiter
                   end
         return {start_byte + 3, end_byte - 1} if text.byte_at(text.bytesize - 1) == closing
+      elsif text.starts_with?("%") && text.bytesize >= 3 && bare_percent_literal?(text)
+        delimiter = text.byte_at(1)
+        closing = case delimiter
+                  when 123_u8 then 125_u8
+                  when  91_u8 then 93_u8
+                  when  40_u8 then 41_u8
+                  when  60_u8 then 62_u8
+                  else             delimiter
+                  end
+        return {start_byte + 2, end_byte - 1} if text.byte_at(text.bytesize - 1) == closing
       elsif text.starts_with?('"') || text.starts_with?('\'')
         return {start_byte + 1, end_byte - 1}
       elsif string_node.type.starts_with?("heredoc")
-        return {start_byte, end_byte}
+        content = first_heredoc_content(string_node)
+        return {content.start_byte, content.end_byte} if content
+      end
+
+      nil
+    end
+
+    private def self.bare_percent_literal?(text : String) : Bool
+      delimiter = text.byte_at(1)
+      return false if (65_u8 <= delimiter <= 90_u8) || (97_u8 <= delimiter <= 122_u8)
+      return false if (48_u8 <= delimiter <= 57_u8) || delimiter == 32_u8
+      true
+    end
+
+    private def self.single_quoted_literal?(method_node : Node, string_node : Node) : Bool
+      text = string_node.text
+      return true if text.starts_with?("'") || text.starts_with?("%q")
+      return false unless string_node.type.starts_with?("heredoc")
+
+      heredoc_beginning(method_node).try(&.text.includes?("'")) || false
+    end
+
+    private def self.heredoc_beginning(node : Node) : Node?
+      return node if node.type == "heredoc_beginning"
+
+      node.each_named_child do |child|
+        if found = heredoc_beginning(child)
+          return found
+        end
+      end
+      nil
+    end
+
+    private def self.first_heredoc_content(node : Node) : Node?
+      return node if node.type == "heredoc_content"
+
+      node.each_named_child do |child|
+        if content = first_heredoc_content(child)
+          return content
+        end
       end
 
       nil
@@ -84,23 +172,20 @@ module TreeSitter
         case first_child.type
         when "string"
           return first_child
-
         when "heredoc_body"
           return first_child
-
         when "array"
           return first_child
-
         when "return"
-          arg_node = first_child.named_child(0)
-          if arg_node && (arg_node.type == "string" || arg_node.type.starts_with?("heredoc"))
-            return arg_node
+          if found = find_first_string_node(first_child)
+            return found
           end
-
         when "call"
           receiver = first_child.child_by_field_name("receiver")
-          if receiver && (receiver.type == "string" || receiver.type.starts_with?("heredoc"))
-            return receiver
+          if receiver
+            if found = find_first_string_node(receiver)
+              return found
+            end
           end
         end
       end
@@ -109,7 +194,7 @@ module TreeSitter
     end
 
     private def self.find_first_string_node(node : Node) : Node?
-      return node if node.type == "string" || node.type.starts_with?("heredoc")
+      return node if node.type == "string" || node.type.in?("heredoc_body", "heredoc_content")
 
       node.each_named_child do |child|
         if result = find_first_string_node(child)
@@ -200,6 +285,5 @@ module TreeSitter
 
       return inner_body
     end
-
   end
 end

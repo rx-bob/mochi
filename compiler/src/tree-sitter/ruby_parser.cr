@@ -6,7 +6,7 @@ module TreeSitter
     getter source : String
 
     def initialize(@raw : LibTreeSitter::TSNode, @source : String)
-      end
+    end
 
     def type : String
       ptr = LibTreeSitter.ts_node_type(@raw)
@@ -37,11 +37,11 @@ module TreeSitter
 
     def child_by_field_name(field_name : String) : Node?
       raw_child = LibTreeSitter.ts_node_child_by_field_name(
-      @raw,
-      field_name.to_unsafe,
-      field_name.bytesize.to_u32
+        @raw,
+        field_name.to_unsafe,
+        field_name.bytesize.to_u32
       )
-        return nil if LibTreeSitter.ts_node_is_null(raw_child)
+      return nil if LibTreeSitter.ts_node_is_null(raw_child)
       Node.new(raw_child, @source)
     end
 
@@ -96,44 +96,63 @@ module TreeSitter
   end
 
   class RubyParser
+    class_property on_parse : Proc(String, Nil)? = nil
+    property on_parse : Proc(String, Nil)? = nil
+
     @parser : LibTreeSitter::Parser
+    @closed = false
 
     def initialize
       @parser = LibTreeSitter.ts_parser_new
       language = LibTreeSitterRuby.tree_sitter_ruby
       success = LibTreeSitter.ts_parser_set_language(@parser, language)
-        raise "Failed to set Ruby language" unless success
+      raise "Failed to set Ruby language" unless success
     end
 
     def parse(source : String) : Tree
+      @on_parse.try(&.call(source))
+      RubyParser.on_parse.try(&.call(source))
       tree_ptr = LibTreeSitter.ts_parser_parse_string(
-      @parser,
-      nil,
-      source.to_unsafe,
-      source.bytesize.to_u32
+        @parser,
+        nil,
+        source.to_unsafe,
+        source.bytesize.to_u32
       )
       Tree.new(tree_ptr, source)
     end
 
-    def finalize
+    def close : Nil
+      return if @closed
+      @closed = true
       LibTreeSitter.ts_parser_delete(@parser)
+    end
+
+    def finalize
+      close
     end
   end
 
   class Tree
     @tree : LibTreeSitter::Tree
     @source : String
+    @closed = false
 
     def initialize(@tree : LibTreeSitter::Tree, @source : String)
-      end
+    end
 
     def root_node : Node
       raw_node = LibTreeSitter.ts_tree_root_node(@tree)
       Node.new(raw_node, @source)
     end
 
-    def finalize
+    def close : Nil
+      return if @closed
+      @closed = true
       LibTreeSitter.ts_tree_delete(@tree)
+    end
+
+    def finalize
+      close
     end
   end
 end
