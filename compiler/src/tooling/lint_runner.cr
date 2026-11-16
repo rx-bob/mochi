@@ -5,6 +5,7 @@ require "../lint/config"
 require "../lint/diagnostic"
 require "../lint/file_discovery"
 require "../lint/project_index"
+require "../lint/suppressions"
 require "../lint/rules/accessibility"
 require "../lint/rules/child_props"
 require "../lint/rules/component_methods"
@@ -50,7 +51,7 @@ class LintRunner
     diagnostics = begin
       index = Lint::ProjectIndex.build(files, config)
       begin
-        Lint::Diagnostics.sort(
+        raw_diagnostics =
           index.diagnostics +
           Lint::Rules::Handlers.diagnostics(index) +
           Lint::Rules::ComponentMethods.diagnostics(index) +
@@ -61,7 +62,7 @@ class LintRunner
           Lint::Rules::PropWrites.diagnostics(index) +
           Lint::Rules::RowIdentity.diagnostics(index) +
           Lint::Rules::EventPayloads.diagnostics(index)
-        )
+        Lint::Suppressions.apply(index, raw_diagnostics)
       ensure
         index.close
       end

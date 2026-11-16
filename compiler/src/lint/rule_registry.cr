@@ -89,6 +89,12 @@ module Lint
         "Source that lint cannot analyze with an exact original location",
         configurable: false,
       ),
+      "lint/suppression" => RuleDefinition.new(
+        "lint/suppression",
+        RuleLevel::Error,
+        "Inline suppression directives are valid, narrow, and still needed",
+        configurable: false,
+      ),
       "correctness/unknown-handler" => RuleDefinition.new(
         "correctness/unknown-handler",
         RuleLevel::Error,
