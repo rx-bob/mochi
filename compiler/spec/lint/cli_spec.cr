@@ -176,6 +176,68 @@ describe LintRunner do
     end
   end
 
+  it "finds a config from a nested working directory and reports the same paths as explicit config" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/BrokenWidget.rb", LintCliSpecSupport::INVALID_COMPONENT)
+      File.write(File.join(root, ".mochi-lint.yml"), "version: 1\n")
+      nested = File.join(root, "lib", "nested")
+      Dir.mkdir_p(nested)
+
+      discovered_status, discovered_output, discovered_stderr = LintCliSpecSupport.run_lint(nested)
+      explicit_status, explicit_output, explicit_stderr = LintCliSpecSupport.run_lint(
+        nested,
+        ["-i", root, "--config", File.join(root, ".mochi-lint.yml")],
+      )
+
+      discovered_status.should eq 1
+      explicit_status.should eq 1
+      discovered_stderr.should eq ""
+      explicit_stderr.should eq ""
+      discovered_output.should eq explicit_output
+      discovered_output.lines.first.should start_with("lib/BrokenWidget.rb:")
+    end
+  end
+
+  it "honors include and exclude lists from the config" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "src/keep.rb", LintCliSpecSupport::VALID_COMPONENT)
+      LintCliSpecSupport.write_source(root, "src/drop.rb", LintCliSpecSupport::INVALID_COMPONENT)
+      LintCliSpecSupport.write_source(root, "lib/ignored.rb", LintCliSpecSupport::INVALID_COMPONENT)
+      File.write(File.join(root, ".mochi-lint.yml"), <<-YAML)
+        version: 1
+        include: ["src/**/*.rb"]
+        exclude: ["src/drop.rb"]
+        YAML
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+
+      status.should eq 0
+      stdout.should eq ""
+      stderr.should eq ""
+    end
+  end
+
+  it "reports invalid config at its source location with exit 2" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/GoodWidget.rb", LintCliSpecSupport::VALID_COMPONENT)
+      config_path = File.join(root, ".mochi-lint.yml")
+      File.write(config_path, <<-YAML)
+        version: 1
+        rules:
+          unknown/rule: warning
+        YAML
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+
+      status.should eq 2
+      stdout.should eq ""
+      stderr.should contain("mochi lint:")
+      stderr.should contain(File.realpath(config_path))
+      stderr.should contain("unknown rule 'unknown/rule'")
+      stderr.should match(/:\d+:\d+: unknown rule/)
+    end
+  end
+
   it "sorts independent file diagnostics deterministically" do
     LintCliSpecSupport.with_project do |root|
       LintCliSpecSupport.write_source(root, "lib/z_last.rb", LintCliSpecSupport::INVALID_COMPONENT)
@@ -261,7 +323,7 @@ describe LintRunner do
 
       status.should eq 2
       stdout.should eq ""
-      stderr.should contain("no Ruby source files found")
+      stderr.should contain("no Ruby source files matched")
     end
   end
 end

@@ -1,8 +1,9 @@
 require "json"
 require "option_parser"
-require "path"
 
+require "../lint/config"
 require "../lint/diagnostic"
+require "../lint/file_discovery"
 require "../tree-sitter/ruby_parser"
 
 class LintRunner
@@ -30,14 +31,14 @@ class LintRunner
       return 0
     end
 
-    validate_config!(options.config, working_directory)
     project_root = resolve_project(options.project, working_directory)
-    files = discover_files(project_root)
+    config = Lint::Config.load(project_root, !options.project.nil?, options.config, working_directory)
+    files = Lint::FileDiscovery.discover(config.project_root, config)
     if files.empty?
-      raise InvocationError.new("no Ruby source files found under #{File.join(project_root, "lib")}")
+      raise InvocationError.new("no Ruby source files matched the lint configuration for #{config.project_root}")
     end
 
-    diagnostics = lint_files(files, project_root)
+    diagnostics = lint_files(files, config)
     if options.format == "json"
       output.puts render_json(diagnostics)
     else
@@ -45,6 +46,9 @@ class LintRunner
     end
 
     diagnostics.empty? ? 0 : 1
+  rescue ex : Lint::ConfigError
+    error.puts "mochi lint: #{ex.location}: #{ex.message}"
+    2
   rescue ex : InvocationError
     error.puts "mochi lint: #{ex.message}"
     2
@@ -100,15 +104,6 @@ class LintRunner
     value
   end
 
-  private def validate_config!(config : String?, working_directory : String) : Nil
-    return unless config
-
-    path = File.expand_path(config, working_directory)
-    unless File.file?(path)
-      raise InvocationError.new("config file not found: #{config}")
-    end
-  end
-
   private def resolve_project(project : String?, working_directory : String) : String
     requested = project || working_directory
     root = File.expand_path(project || ".", working_directory)
@@ -118,42 +113,20 @@ class LintRunner
     if File.symlink?(root)
       raise InvocationError.new("project directory cannot be a symlink: #{requested}")
     end
-    root
+    File.realpath(root)
   end
 
-  private def discover_files(project_root : String) : Array(String)
-    lib_root = File.join(project_root, "lib")
-    files = [] of String
-    collect_source_files(lib_root, files) if Dir.exists?(lib_root) && !File.symlink?(lib_root)
-    files.sort!
-    files
-  end
-
-  private def collect_source_files(directory : String, files : Array(String)) : Nil
-    Dir.children(directory).sort.each do |name|
-      path = File.join(directory, name)
-      next if File.symlink?(path)
-
-      if File.directory?(path)
-        collect_source_files(path, files)
-      elsif File.file?(path) && File.extname(path).downcase == ".rb"
-        files << path
-      end
-    end
-  end
-
-  private def lint_files(files : Array(String), project_root : String) : Array(Lint::Diagnostic)
+  private def lint_files(files : Array(Lint::SourceFile), config : Lint::Config) : Array(Lint::Diagnostic)
     diagnostics = [] of Lint::Diagnostic
     parser = TreeSitter::RubyParser.new
 
-    files.each do |absolute_path|
-      relative_path = Path[absolute_path].relative_to(project_root).to_s
+    files.each do |file|
       source = begin
-        File.read(absolute_path)
+        File.read(file.absolute_path)
       rescue ex
-        raise InvocationError.new("cannot read #{relative_path}: #{ex.message}")
+        raise InvocationError.new("cannot read #{file.relative_path}: #{ex.message}")
       end
-      diagnostics.concat(syntax_diagnostics(source, relative_path, parser))
+      diagnostics.concat(syntax_diagnostics(source, file.relative_path, parser, config))
     end
 
     diagnostics.sort_by! do |diagnostic|
@@ -174,36 +147,41 @@ class LintRunner
     source : String,
     relative_path : String,
     parser : TreeSitter::RubyParser,
+    config : Lint::Config,
   ) : Array(Lint::Diagnostic)
+    return [] of Lint::Diagnostic unless config.enabled?(SYNTAX_RULE)
+
+    severity = config.severity_for(SYNTAX_RULE) || Lint::Severity::Error
     tree = parser.parse(source)
     root = tree.root_node
     return [] of Lint::Diagnostic unless root.has_error?
 
-    diagnostic = first_syntax_error(root, relative_path) ||
-                 diagnostic_for(root, relative_path, "Ruby syntax error")
+    diagnostic = first_syntax_error(root, relative_path, severity) ||
+                 diagnostic_for(root, relative_path, severity, "Ruby syntax error")
     [diagnostic]
   end
 
   private def first_syntax_error(
     node : TreeSitter::Node,
     relative_path : String,
+    severity : Lint::Severity,
   ) : Lint::Diagnostic?
     return nil if node.null?
 
     if node.type == "ERROR"
       missing = first_missing(node)
       if missing
-        return diagnostic_for(missing, relative_path, "missing '#{missing.type}'")
+        return diagnostic_for(missing, relative_path, severity, "missing '#{missing.type}'")
       end
-      return diagnostic_for(node, relative_path, "Ruby syntax error")
+      return diagnostic_for(node, relative_path, severity, "Ruby syntax error")
     end
 
     if node.missing?
-      return diagnostic_for(node, relative_path, "missing '#{node.type}'")
+      return diagnostic_for(node, relative_path, severity, "missing '#{node.type}'")
     end
 
     node.each_child do |child|
-      found = first_syntax_error(child, relative_path)
+      found = first_syntax_error(child, relative_path, severity)
       return found if found
     end
     nil
@@ -222,6 +200,7 @@ class LintRunner
   private def diagnostic_for(
     node : TreeSitter::Node,
     relative_path : String,
+    severity : Lint::Severity,
     message : String,
   ) : Lint::Diagnostic
     start_point = node.start_point
@@ -234,7 +213,7 @@ class LintRunner
       end_column: end_point.column.to_i + 1,
       start_byte: node.start_byte,
       end_byte: node.end_byte,
-      severity: Lint::Severity::Error,
+      severity: severity,
       rule: SYNTAX_RULE,
       message: message,
     )
