@@ -6,7 +6,9 @@ require "../lint/diagnostic"
 require "../lint/file_discovery"
 require "../lint/project_index"
 require "../lint/rules/child_props"
+require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
+require "../lint/rules/prop_writes"
 
 class LintRunner
   SYNTAX_RULE = Lint::SYNTAX_RULE
@@ -46,7 +48,9 @@ class LintRunner
         Lint::Diagnostics.sort(
           index.diagnostics +
           Lint::Rules::Handlers.diagnostics(index) +
-          Lint::Rules::ChildProps.diagnostics(index)
+          Lint::Rules::ChildProps.diagnostics(index) +
+          Lint::Rules::PropWrites.diagnostics(index) +
+          Lint::Rules::EventPayloads.diagnostics(index)
         )
       ensure
         index.close
