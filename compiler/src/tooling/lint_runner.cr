@@ -12,9 +12,11 @@ require "../lint/rules/component_methods"
 require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
 require "../lint/rules/method_length"
+require "../lint/rules/money_advice"
 require "../lint/rules/nesting_depth"
 require "../lint/rules/prop_writes"
 require "../lint/rules/row_identity"
+require "../lint/rules/timer_advice"
 
 class LintRunner
   SYNTAX_RULE = Lint::SYNTAX_RULE
@@ -61,6 +63,8 @@ class LintRunner
           Lint::Rules::ChildProps.diagnostics(index) +
           Lint::Rules::PropWrites.diagnostics(index) +
           Lint::Rules::RowIdentity.diagnostics(index) +
+          Lint::Rules::TimerAdvice.diagnostics(index) +
+          Lint::Rules::MoneyAdvice.diagnostics(index) +
           Lint::Rules::EventPayloads.diagnostics(index)
         Lint::Suppressions.apply(index, raw_diagnostics)
       ensure
