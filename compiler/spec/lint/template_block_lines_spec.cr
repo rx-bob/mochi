@@ -199,6 +199,67 @@ describe Lint::Rules::TemplateBlockLines do
     end
   end
 
+  it "rejects closing end that is not aligned with the opening expression" do
+    LintTemplateBlockLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          @tag_name = "widget"
+          @open = false
+
+          def html
+            %Q{
+              {if @open}
+                <p>Open</p>
+                {end}
+            }
+          end
+        end
+        RUBY
+      LintTemplateBlockLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/template-block-lines" => "warning"}
+      diagnostics = LintTemplateBlockLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 1
+      diagnostic = diagnostics.first
+      diagnostic.start_line.should eq 9
+      diagnostic.message.should eq "template block marker indentation does not match its opening expression"
+      diagnostic.suggestion.should eq "Align the block marker with the opening expression."
+    end
+  end
+
+  it "rejects else and elsif markers that are not aligned with the opening expression" do
+    LintTemplateBlockLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          @tag_name = "widget"
+          @open = false
+          @ready = false
+
+          def html
+            %Q{
+              {if @open}
+                <p>Open</p>
+                {elsif @ready}
+                <p>Ready</p>
+                {else}
+                <p>Closed</p>
+              {end}
+            }
+          end
+        end
+        RUBY
+      LintTemplateBlockLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/template-block-lines" => "warning"}
+      diagnostics = LintTemplateBlockLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 2
+      diagnostics.map(&.start_line).should eq [10, 12]
+      diagnostics.each do |diagnostic|
+        diagnostic.message.should eq "template block marker indentation does not match its opening expression"
+      end
+    end
+  end
+
   it "ignores blocks inside attribute values and HTML comments" do
     LintTemplateBlockLinesSpecSupport.with_project do |root|
       source = <<-RUBY

@@ -5,23 +5,27 @@ require "../project_index"
 module Lint::Rules
   # Rejects block markup that shares a source line with block content. Opening
   # expressions, branch markers, and the closing `end` must each be alone on
-  # their line. Attribute-value blocks and HTML comments are skipped because
-  # they are inline fragments rather than block markup.
+  # their line, and closing markers must align with the opening expression.
+  # Attribute-value blocks and HTML comments are skipped because they are
+  # inline fragments rather than block markup.
   module TemplateBlockLines
     RULE    = "style/template-block-lines"
     OPENERS = Set{"if", "unless", "each", "with"}
     BLOCKS  = Set{"if", "unless", "each"}
 
-    MESSAGE    = "template block shares a line with block content"
-    SUGGESTION = "Put the opening expression, block body, and closing {end} on separate lines."
+    MESSAGE           = "template block shares a line with block content"
+    SUGGESTION        = "Put the opening expression, block body, and closing {end} on separate lines."
+    INDENT_MESSAGE    = "template block marker indentation does not match its opening expression"
+    INDENT_SUGGESTION = "Align the block marker with the opening expression."
 
     class Block
       getter start : Int32
       getter finish : Int32
       getter kind : String
+      getter column : Int32
       property flagged = false
 
-      def initialize(@start, @finish, @kind)
+      def initialize(@start, @finish, @kind, @column)
       end
     end
 
@@ -66,22 +70,32 @@ module Lint::Rules
             next if inside_attribute?(attribute_ranges, start)
 
             if kind = opener_kind(source)
-              block = Block.new(start, finish, kind)
+              block = Block.new(start, finish, kind, column(view, start, finish))
               if BLOCKS.includes?(kind) && !alone_on_line?(view, start, finish)
                 block.flagged = true
                 issues << issue(view, start, finish)
               end
               stack << block
             elsif branch_marker?(source)
-              if !stack.empty? && !alone_on_line?(view, start, finish)
-                issues << issue(view, start, finish)
+              block = stack.last?
+              if block && BLOCKS.includes?(block.kind)
+                if !alone_on_line?(view, start, finish)
+                  issues << issue(view, start, finish)
+                elsif column(view, start, finish) != block.column
+                  issues << issue(view, start, finish, INDENT_MESSAGE, INDENT_SUGGESTION)
+                end
               end
             elsif source == "end"
               next if stack.empty?
               block = stack.pop
               next unless BLOCKS.includes?(block.kind)
               next if block.flagged
-              issues << issue(view, start, finish) unless alone_on_line?(view, start, finish)
+
+              if !alone_on_line?(view, start, finish)
+                issues << issue(view, start, finish)
+              elsif column(view, start, finish) != block.column
+                issues << issue(view, start, finish, INDENT_MESSAGE, INDENT_SUGGESTION)
+              end
             end
           else
             index += 1
@@ -92,17 +106,27 @@ module Lint::Rules
       Diagnostics.sort(issues.map { |issue| issue.diagnostic(severity) })
     end
 
-    private def self.issue(view : TemplateView, start : Int32, finish : Int32) : SourceIssue
+    private def self.issue(
+      view : TemplateView,
+      start : Int32,
+      finish : Int32,
+      message : String = MESSAGE,
+      suggestion : String = SUGGESTION,
+    ) : SourceIssue
       range = view.source_range(start, finish)
       SourceIssue.new(
         view.unit_path,
         view.map,
         range.start_byte,
         range.end_byte,
-        MESSAGE,
+        message,
         RULE,
-        SUGGESTION,
+        suggestion,
       )
+    end
+
+    private def self.column(view : TemplateView, start : Int32, finish : Int32) : Int32
+      view.map.position(view.source_range(start, finish).start_byte).column
     end
 
     private def self.alone_on_line?(view : TemplateView, start : Int32, finish : Int32) : Bool
