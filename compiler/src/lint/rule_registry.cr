@@ -153,6 +153,11 @@ module Lint
         RuleLevel::Warning,
         "Template blocks put their closing end on a separate line",
       ),
+      "style/template-element-indent" => RuleDefinition.new(
+        "style/template-element-indent",
+        RuleLevel::Warning,
+        "Template element closing tags align with their opening tags",
+      ),
       "metrics/nesting-depth" => RuleDefinition.new(
         "metrics/nesting-depth",
         RuleLevel::Warning,

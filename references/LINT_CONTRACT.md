@@ -96,6 +96,7 @@ rules:
     max: 10
   style/css-declaration-lines: warning
   style/template-block-lines: warning
+  style/template-element-indent: warning
   accessibility/control-name: warning
   accessibility/keyboard-activation: warning
   templates/unstable-key: off
@@ -216,6 +217,7 @@ is moved to a different checkout root.
 | `metrics/line-length` | `off` | `max: 120` | Ruby method lines stay within the configured character width |
 | `style/css-declaration-lines` | `warning` | none | Component CSS separates declarations from braces and aligns closing braces |
 | `style/template-block-lines` | `warning` | none | Template `if`, `unless`, and `each` blocks close on a separate line |
+| `style/template-element-indent` | `warning` | none | Multi-line template element closing tags align with their opening tags |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
 | `metrics/class-variables` | `warning` | `max: 10` | Component classes stay within the configured authored state limit |
@@ -340,6 +342,12 @@ the block body between them and move the closing `{end}` to its own line.
 Blocks inside an attribute value and literal examples inside HTML comments are
 ignored because they are inline fragments rather than block markup. Nested
 blocks are matched by their own `{end}`.
+
+`style/template-element-indent` reports a multi-line element whose closing tag
+starts at a different column from its opening tag. The opening tag must begin
+its source line; inline elements, void elements, self-closing elements, and
+elements opened partway through a line are ignored. Put the closing tag at the
+same leading indentation as the opening tag. Reports cover the closing tag.
 
 `metrics/nesting-depth` starts at depth 0 inside a method body and adds one for
 each `if`, `unless`, `case`, `case_match`, `while`, `until`, `for`, `rescue`,

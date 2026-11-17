@@ -23,6 +23,7 @@ require "../lint/rules/package_files"
 require "../lint/rules/prop_writes"
 require "../lint/rules/row_identity"
 require "../lint/rules/template_block_lines"
+require "../lint/rules/template_element_indent"
 require "../lint/rules/timer_advice"
 
 class LintRunner
@@ -71,6 +72,7 @@ class LintRunner
           Lint::Rules::LineLength.diagnostics(index) +
           Lint::Rules::CssDeclarationLines.diagnostics(index) +
           Lint::Rules::TemplateBlockLines.diagnostics(index) +
+          Lint::Rules::TemplateElementIndent.diagnostics(index) +
           Lint::Rules::NestingDepth.diagnostics(index) +
           Lint::Rules::PackageFiles.diagnostics(index) +
           Lint::Rules::Accessibility.diagnostics(index) +

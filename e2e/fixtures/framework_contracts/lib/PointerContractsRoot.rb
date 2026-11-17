@@ -87,7 +87,9 @@ class PointerContractsRoot
                onlostpointercapture="{lost_drag($event)}">
         <button class="handle" data-mochi-ref="handle"
                 onpointerdown="{start_drag($event)}"
-                onkeydown="{move_keyboard($event)}">Drag</button>
+                onkeydown="{move_keyboard($event)}">
+          Drag
+        </button>
         <output class="position">{@x},{@y}</output>
         <output class="delta">{@delta_x},{@delta_y}</output>
         <output class="identity">{@pointer_type}:{@pointer_id}:{@primary}</output>

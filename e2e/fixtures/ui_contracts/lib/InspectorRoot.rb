@@ -194,14 +194,16 @@ class InspectorRoot
       <output class="export-status">{@export_status}</output>
       <output class="json-sample">{@json_sample}</output>
       <output class="json-roundtrip">{@json_roundtrip}</output>
-      <table><tbody>
-        {each visible_records as record, key: record["id"]}
-          <tr class="record" data-id="{record['id']}" onclick="{select_record($event)}">
-            <td><button><span class="message" data-part="message">{record["message"]}</span></button></td>
-            <td class="severity">{record["severity"]}</td>
-          </tr>
-        {end}
-      </tbody></table>
+      <table>
+        <tbody>
+          {each visible_records as record, key: record["id"]}
+            <tr class="record" data-id="{record['id']}" onclick="{select_record($event)}">
+              <td><button><span class="message" data-part="message">{record["message"]}</span></button></td>
+              <td class="severity">{record["severity"]}</td>
+            </tr>
+          {end}
+        </tbody>
+      </table>
       <p>Selected <span class="selected-id">{@selected_id}</span></p>
       {if @show_details}
         <p class="selected-detail">{selected_detail}</p>

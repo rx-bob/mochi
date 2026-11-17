@@ -86,6 +86,7 @@ class Initializer
         max: 120
       style/css-declaration-lines: warning
       style/template-block-lines: warning
+      style/template-element-indent: warning
       metrics/nesting-depth:
         severity: warning
         max: 4

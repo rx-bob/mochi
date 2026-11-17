@@ -49,7 +49,9 @@ class RowScopeRoot
       {each @rows as row, index, key: row["id"]}
         <button class="row {if row['active']}active{else}inactive{end}"
                 onclick="{choose(row["id"], index)}" data-row="{row["id"]}"
-                title="{row_title(row["id"])}">{row["label"]}{suffix}</button>
+                title="{row_title(row["id"])}">
+          {row["label"]}{suffix}
+        </button>
         <span data-row="{row["id"]}" class={{"selected" => row["selected"], "zero" => index == 0}}></span>
       {end}
     }
