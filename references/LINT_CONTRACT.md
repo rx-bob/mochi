@@ -62,7 +62,7 @@ The project and config roots interact as follows:
 
 ## Configuration schema
 
-A generated project uses the standard policy:
+The standard policy is:
 
 ```yaml mochi-lint-config
 version: 1
@@ -88,6 +88,16 @@ rules:
   templates/unstable-key: off
   migration/css-timer: off
   money/float-to-minor-units: off
+```
+
+A generated project uses this policy and additionally enables the opt-in
+line-length rule:
+
+```yaml
+rules:
+  metrics/line-length:
+    severity: warning
+    max: 120
 ```
 
 The strict schema is:
@@ -186,6 +196,7 @@ is moved to a different checkout root.
 | `correctness/event-payload` | `error` | none | Declared child event payloads and `on:` connections match schemas |
 | `components/prop-write` | `warning` | none | Declared props remain read-only input snapshots |
 | `metrics/method-length` | `warning` | `max: 60` | Ruby method bodies stay within the configured line limit |
+| `metrics/line-length` | `off` | `max: 120` | Ruby method lines stay within the configured character width |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
 | `accessibility/control-name` | `warning` | none | Interactive controls have an accessible name |
@@ -264,6 +275,15 @@ counted. Embedded HTML, CSS, and data therefore do not inflate Ruby logic. A
 single-line method with a body counts as one. Instance and singleton methods in
 selected source are inspected. A method is reported when that count is greater
 than `max`.
+
+`metrics/line-length` is an opt-in style rule, off by default. When enabled, it
+checks every line of selected methods, including their signatures, comments, and
+embedded template or data text. A line is reported when its Unicode character
+count is greater than `max`; tabs count as one character and line endings are
+excluded. The diagnostic covers the overlong line. Enable it in a project
+policy with `severity: warning` and the desired `max`; the generated starter
+project enables `max: 120`. A method directive suppresses every line-length
+report inside that method.
 
 `metrics/nesting-depth` starts at depth 0 inside a method body and adds one for
 each `if`, `unless`, `case`, `case_match`, `while`, `until`, `for`, `rescue`,

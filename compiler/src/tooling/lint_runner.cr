@@ -11,6 +11,7 @@ require "../lint/rules/child_props"
 require "../lint/rules/component_methods"
 require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
+require "../lint/rules/line_length"
 require "../lint/rules/method_length"
 require "../lint/rules/money_advice"
 require "../lint/rules/nesting_depth"
@@ -58,6 +59,7 @@ class LintRunner
           Lint::Rules::Handlers.diagnostics(index) +
           Lint::Rules::ComponentMethods.diagnostics(index) +
           Lint::Rules::MethodLength.diagnostics(index) +
+          Lint::Rules::LineLength.diagnostics(index) +
           Lint::Rules::NestingDepth.diagnostics(index) +
           Lint::Rules::Accessibility.diagnostics(index) +
           Lint::Rules::ChildProps.diagnostics(index) +

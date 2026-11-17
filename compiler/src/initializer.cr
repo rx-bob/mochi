@@ -64,8 +64,9 @@ class Initializer
     include:
       - "lib/**/*.rb"
 
-    # These are the standard Mochi defaults. Change a severity or limit only
-    # when this project intentionally needs a different policy.
+    # These are the standard Mochi defaults, plus the opt-in line-length style
+    # rule enabled for new projects. Raise its max or turn it off if wider
+    # lines are wanted.
     rules:
       correctness/unknown-handler: error
       correctness/timer-callback: error
@@ -75,6 +76,9 @@ class Initializer
       metrics/method-length:
         severity: warning
         max: 60
+      metrics/line-length:
+        severity: warning
+        max: 120
       metrics/nesting-depth:
         severity: warning
         max: 4

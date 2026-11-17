@@ -126,6 +126,12 @@ module Lint
         "Ruby method bodies stay within the configured line limit",
         {"max" => RuleOption.new("max", 60)},
       ),
+      "metrics/line-length" => RuleDefinition.new(
+        "metrics/line-length",
+        RuleLevel::Off,
+        "Ruby method lines stay within the configured character width",
+        {"max" => RuleOption.new("max", 120)},
+      ),
       "metrics/nesting-depth" => RuleDefinition.new(
         "metrics/nesting-depth",
         RuleLevel::Warning,
