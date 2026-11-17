@@ -1,3 +1,4 @@
+# mochi-lint: disable-next structure/package-files -- fixture package keeps cross-cutting framework contracts together for one isolated browser run
 class AggregationContractsRoot
   @tag_name = "aggregation-contracts-root"
   @event_total

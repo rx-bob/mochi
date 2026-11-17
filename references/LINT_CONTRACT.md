@@ -90,6 +90,9 @@ rules:
   metrics/class-variables:
     severity: warning
     max: 10
+  structure/package-files:
+    severity: warning
+    max: 10
   style/css-declaration-lines: warning
   accessibility/control-name: warning
   accessibility/keyboard-activation: warning
@@ -212,6 +215,7 @@ is moved to a different checkout root.
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
 | `metrics/class-variables` | `warning` | `max: 10` | Component classes stay within the configured authored state limit |
+| `structure/package-files` | `warning` | `max: 10` | Ruby packages stay within the configured file limit |
 | `accessibility/control-name` | `warning` | none | Interactive controls have an accessible name |
 | `accessibility/keyboard-activation` | `warning` | none | Custom button roles provide local keyboard activation |
 | `templates/unstable-key` | `off` | none | Lists use stable row identity when reordering is visible |
@@ -343,6 +347,18 @@ share one set. Variables used only inside methods, nested classes, or singleton
 classes do not count. The rule reports once at a selected class declaration
 when the count is greater than `max`. Prop declarations are not class-body
 variables; a prop's `@name` access inside a method does not add to the count.
+
+### Structure
+
+`structure/package-files` counts Ruby source files directly inside each
+selected package directory. Subdirectories are separate packages, and files
+reached by a selected file's `require` or `require_relative` closure also
+count. A package is reported once when its file count is greater than `max`.
+The diagnostic points at the first class or module in package order, or the
+first line of the lexicographically first file when no file declares one. A
+preceding `disable-next` directive on that class or module can therefore carry
+its reason. Split the package into subdirectories with at most `max` Ruby files
+each.
 
 ### Accessibility
 

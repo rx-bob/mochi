@@ -161,6 +161,12 @@ module Lint
         "Component classes stay within the configured authored state limit",
         {"max" => RuleOption.new("max", 10)},
       ),
+      "structure/package-files" => RuleDefinition.new(
+        "structure/package-files",
+        RuleLevel::Warning,
+        "Ruby packages stay within the configured file limit",
+        {"max" => RuleOption.new("max", 10)},
+      ),
       "accessibility/control-name" => RuleDefinition.new(
         "accessibility/control-name",
         RuleLevel::Warning,

@@ -18,6 +18,7 @@ require "../lint/rules/line_length"
 require "../lint/rules/method_length"
 require "../lint/rules/money_advice"
 require "../lint/rules/nesting_depth"
+require "../lint/rules/package_files"
 require "../lint/rules/prop_writes"
 require "../lint/rules/row_identity"
 require "../lint/rules/timer_advice"
@@ -67,6 +68,7 @@ class LintRunner
           Lint::Rules::LineLength.diagnostics(index) +
           Lint::Rules::CssDeclarationLines.diagnostics(index) +
           Lint::Rules::NestingDepth.diagnostics(index) +
+          Lint::Rules::PackageFiles.diagnostics(index) +
           Lint::Rules::Accessibility.diagnostics(index) +
           Lint::Rules::ChildProps.diagnostics(index) +
           Lint::Rules::PropWrites.diagnostics(index) +
