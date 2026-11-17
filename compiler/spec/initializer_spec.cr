@@ -60,6 +60,39 @@ describe Initializer do
     end
   end
 
+  it "wires generated task check to lint before test" do
+    root = File.join(Dir.tempdir, "mochi_initializer_task_#{Random.rand(1_000_000)}")
+    bin = File.join(root, "bin")
+    Dir.mkdir_p(bin)
+
+    begin
+      Dir.cd(root) do
+        Initializer.new("sample")
+      end
+
+      project = File.join(root, "sample")
+      log = File.join(root, "mochi.log")
+      fake = File.join(bin, "mochi")
+      File.write(fake, "#!/bin/sh\necho \"$@\" >> \"$MOCHI_LOG\"\nexit 0\n")
+      File.chmod(fake, 0o755)
+
+      output = IO::Memory.new
+      error = IO::Memory.new
+      result = Process.run(
+        "task",
+        ["--dir", project, "check"],
+        env: {"PATH" => "#{bin}:#{ENV["PATH"]?}", "MOCHI_LOG" => log},
+        output: output,
+        error: error,
+      )
+      result.success?.should be_true
+      lines = File.read(log).lines
+      lines.should eq ["lint -i ./", "test -i ./"]
+    ensure
+      FileUtils.rm_rf(root)
+    end
+  end
+
   it "fails the generated check gate for a lint violation without changing build" do
     root = File.join(Dir.tempdir, "mochi_initializer_lint_#{Random.rand(1_000_000)}")
     Dir.mkdir_p(root)

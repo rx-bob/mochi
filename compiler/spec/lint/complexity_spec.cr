@@ -406,6 +406,136 @@ describe Lint::Rules::NestingDepth do
     end
   end
 
+  it "ignores template and string literals while counting real control flow" do
+    LintComplexitySpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          def render(rows)
+            %Q{
+              {if @expanded}
+                {each rows as row}
+                  <span>{row}</span>
+                {end}
+              {end}
+            }
+            text = <<~TEXT
+              if condition
+                while other
+                  for item in items
+                    work
+                  end
+                end
+              end
+            TEXT
+            if first
+              while second
+                for item in rows
+                  begin
+                    work if ready
+                  rescue
+                    recover
+                  end
+                end
+              end
+            end
+          end
+        end
+        RUBY
+      LintComplexitySpecSupport.write(root, "lib/Widget.rb", source)
+      rules = {"metrics/method-length" => "off", "metrics/nesting-depth" => "{severity: warning, max: 4}"}
+      LintComplexitySpecSupport.rule(LintComplexitySpecSupport.diagnostics(root, rules), Lint::Rules::NestingDepth::RULE).should be_empty
+    end
+  end
+
+  it "counts loop, rescue, ternary, and singleton levels once per method" do
+    LintComplexitySpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          def conditional(item)
+            while first
+              until second
+                for row in rows
+                  value = item ? 1 : 2
+                end
+              end
+            end
+          end
+
+          def rescued
+            while first
+              until second
+                for row in rows
+                  begin
+                    work
+                  rescue
+                    recover
+                  end
+                end
+              end
+            end
+          end
+
+          def self.singleton
+            while first
+              until second
+                for row in rows
+                  if row
+                    work
+                  end
+                end
+              end
+            end
+          end
+        end
+        RUBY
+      LintComplexitySpecSupport.write(root, "lib/Widget.rb", source)
+      rules = {"metrics/method-length" => "off", "metrics/nesting-depth" => "{severity: warning, max: 3}"}
+      diagnostics = LintComplexitySpecSupport.rule(
+        LintComplexitySpecSupport.diagnostics(root, rules),
+        Lint::Rules::NestingDepth::RULE,
+      )
+      diagnostics.size.should eq 3
+      diagnostics.map(&.message).should eq [
+        "method 'conditional' reaches nesting depth 4; maximum is 3",
+        "method 'rescued' reaches nesting depth 4; maximum is 3",
+        "method 'singleton' reaches nesting depth 4; maximum is 3",
+      ]
+    end
+  end
+
+  it "counts a guard modifier at its nesting level" do
+    LintComplexitySpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          def guarded(rows)
+            while first
+              until second
+                for row in rows
+                  return unless row
+                  work
+                end
+              end
+            end
+          end
+        end
+        RUBY
+      LintComplexitySpecSupport.write(root, "lib/Widget.rb", source)
+      rules = {"metrics/method-length" => "off", "metrics/nesting-depth" => "{severity: warning, max: 4}"}
+      LintComplexitySpecSupport.rule(
+        LintComplexitySpecSupport.diagnostics(root, rules),
+        Lint::Rules::NestingDepth::RULE,
+      ).should be_empty
+
+      rules = {"metrics/method-length" => "off", "metrics/nesting-depth" => "{severity: warning, max: 3}"}
+      diagnostics = LintComplexitySpecSupport.rule(
+        LintComplexitySpecSupport.diagnostics(root, rules),
+        Lint::Rules::NestingDepth::RULE,
+      )
+      diagnostics.size.should eq 1
+      diagnostics.first.message.should eq "method 'guarded' reaches nesting depth 4; maximum is 3"
+    end
+  end
+
   it "uses a configured max and can be turned off" do
     LintComplexitySpecSupport.with_project do |root|
       LintComplexitySpecSupport.write(root, "lib/Widget.rb", LintComplexitySpecSupport.nested_source(3))

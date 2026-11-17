@@ -36,7 +36,7 @@ module Lint::Rules
       parser = TemplateExpressionParser.new
 
       index.target_templates.each do |view|
-        Lint::TemplateElements.scan(view.text, parser).elements.each do |element|
+        view.elements.elements.each do |element|
           child = index.tags[element.tag]?
           next unless child
           next if child.props.empty?

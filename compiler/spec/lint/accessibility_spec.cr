@@ -318,6 +318,38 @@ describe Lint::Rules::Accessibility do
     end
   end
 
+  it "normalizes role tokens and skips native or non-interactive elements" do
+    LintAccessibilitySpecSupport.with_project do |root|
+      LintAccessibilitySpecSupport.write(root, "lib/RoleVariants.rb", <<-RUBY)
+        class RoleVariants
+          @tag_name = "role-variants"
+
+          def activate
+          end
+
+          def html
+            %Q{
+              <div role="BUTTON" onclick="{activate}">Save</div>
+              <div role="switch button" onclick="{activate}">Save</div>
+              <div role="button" aria-hidden="false" onclick="{activate}">Save</div>
+              <div role="button" inert="false" onclick="{activate}">Save</div>
+              <input type="button" value="">
+              <select></select>
+              <textarea></textarea>
+              <a>Skip</a>
+              <a href="">Link</a>
+            }
+          end
+        end
+        RUBY
+
+      found = LintAccessibilitySpecSupport.diagnostics(root)
+      keyboard = LintAccessibilitySpecSupport.rule(found, "accessibility/keyboard-activation")
+      keyboard.map(&.start_line).should eq [9, 10, 11, 12]
+      LintAccessibilitySpecSupport.rule(found, "accessibility/control-name").should be_empty
+    end
+  end
+
   it "skips hidden and dynamically hidden controls" do
     LintAccessibilitySpecSupport.with_project do |root|
       LintAccessibilitySpecSupport.write(root, "lib/HiddenControls.rb", <<-RUBY)

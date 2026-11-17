@@ -180,7 +180,8 @@ module Lint::Suppressions
   end
 
   private def self.in_scope?(diagnostic : Diagnostic, directive : Directive) : Bool
-    diagnostic.start_byte >= directive.scope_start && diagnostic.end_byte <= directive.scope_end
+    diagnostic.path == directive.path &&
+      diagnostic.start_byte >= directive.scope_start && diagnostic.end_byte <= directive.scope_end
   end
 
   private def self.issue(directive : Directive, message : String) : SourceIssue
@@ -382,8 +383,7 @@ module Lint::Suppressions
   end
 
   private def self.template_targets(view : TemplateView) : Array(TargetRange)
-    parser = TemplateExpressionParser.new
-    document = Lint::TemplateElements.scan(view.text, parser)
+    document = view.elements
     targets = document.elements.map do |element|
       TargetRange.new(element.start, element.end_byte || element.finish)
     end

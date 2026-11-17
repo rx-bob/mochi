@@ -310,6 +310,37 @@ describe "lint integration contract" do
     end
   end
 
+  it "lints every documented generic example cleanly" do
+    contract = File.read(LintIntegrationSpecSupport::CONTRACT_PATH)
+    marker = "```ruby mochi-lint-example\n"
+    examples = [] of String
+    offset = 0
+    while start = contract.index(marker, offset)
+      content_start = start + marker.size
+      finish = contract.index("```", content_start)
+      break unless finish
+      examples << contract[content_start...finish]
+      offset = finish + 3
+    end
+    examples.size.should eq 3
+
+    LintIntegrationSpecSupport.with_project do |root|
+      LintIntegrationSpecSupport.write_source(root, ".mochi-lint.yml", <<-YAML)
+        version: 1
+        rules:
+          templates/unstable-key: warning
+          migration/css-timer: warning
+          money/float-to-minor-units: warning
+        YAML
+      LintIntegrationSpecSupport.write_source(root, "lib/DocumentedExamples.rb", examples.join("\n"))
+
+      status, stdout, stderr = LintIntegrationSpecSupport.run_lint(root)
+      status.should eq 0
+      stdout.should eq ""
+      stderr.should eq ""
+    end
+  end
+
   it "loads every shipped documentation configuration through the real parser" do
     contract = File.read(LintIntegrationSpecSupport::CONTRACT_PATH)
 
@@ -346,6 +377,14 @@ describe "lint integration contract" do
       documented_rules << match[1]
     end
     documented_rules.sort.should eq Lint::RuleRegistry::RULES.keys.sort
+
+    documented_defaults = {} of String => String
+    contract.scan(/^\| `([a-z]+\/[a-z0-9-]+)` \| `(error|warning|off)` \|/m) do |match|
+      documented_defaults[match[1]] = match[2]
+    end
+    Lint::RuleRegistry::RULES.each do |id, definition|
+      documented_defaults[id]?.should eq definition.default_level.label
+    end
 
     contract.scan(/`([a-z]+\/[a-z0-9-]+)`/) do |match|
       Lint::RuleRegistry[match[1]]?.should_not be_nil

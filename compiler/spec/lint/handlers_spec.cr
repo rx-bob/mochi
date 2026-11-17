@@ -118,6 +118,7 @@ describe Lint::Rules::Handlers do
           def html
             %Q{
               <event-row on:select="{select_row($event)}"></event-row>
+              <event-row on:select="{select_rows($event)}"></event-row>
               <button onclick.prevent.stop.self="{save}">Save</button>
               <button onclick="{self.save}">Self</button>
               <button onclick="{base}">Base</button>
@@ -135,8 +136,9 @@ describe Lint::Rules::Handlers do
       diagnostics = LintHandlersSpecSupport.diagnostics(root)
       unknown = LintHandlersSpecSupport.rule(diagnostics, "correctness/unknown-handler")
 
-      unknown.size.should eq 1
-      unknown.first.message.should contain("missing_nested")
+      unknown.size.should eq 2
+      unknown.map(&.message).any?(&.includes?("missing_nested")).should be_true
+      unknown.map(&.message).any?(&.includes?("select_rows")).should be_true
     end
   end
 
@@ -262,6 +264,8 @@ describe Lint::Rules::Handlers do
             @splat = Mochi.after(1, :splat)
             @keyword = Mochi.after(1, :keyword)
             @dynamic = Mochi.after(1, callback_name)
+            @missing = Mochi.after(10)
+            @extra = Mochi.after(10, :zero, :extra)
           end
 
           def zero

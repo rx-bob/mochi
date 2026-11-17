@@ -225,7 +225,9 @@ nonempty, must resolve to a component method or a method on a known ancestor,
 and must not require positional arguments. A literal delay must be an Integer
 from 0 through 2,147,483,647 milliseconds. Literal non-name callbacks and
 literal non-Integer delays are errors. Dynamic callbacks and dynamic delays
-remain unknown.
+remain unknown. A call with fewer than two literal arguments or with extra
+arguments is not diagnosed; the rule evaluates one callback name and one delay
+when both are present.
 
 `correctness/child-props` checks known child component tags that declare props.
 A required prop is reported missing only when the element has no dynamic
@@ -248,18 +250,20 @@ events. Dynamic event names and payloads remain unknown.
 
 `components/prop-write` reports direct writes to a declared prop in an
 instance method: assignment to `@prop`, an indexed target rooted at `@prop`,
-`<<`, a recognized collection or string mutator, or a method ending in `!`.
-It also reports `bind:value` and `bind:checked` that target a declared prop.
-Aliases, arbitrary mutation helpers, and other dynamic targets are not
-chased.
+`<<`, or a recognized collection or string mutator. It also reports
+`bind:value` and `bind:checked` that target a declared prop. Aliases,
+arbitrary mutation helpers, unrecognized bang methods, and other dynamic
+targets are not chased.
 
 ### Complexity metrics
 
 `metrics/method-length` counts the physical lines between a method header and
-its matching `end`. The opening line of a multiline literal is counted once;
-interior and closing literal lines are not counted. Embedded HTML, CSS, and
-data therefore do not inflate Ruby logic. A method is reported when that count
-is greater than `max`.
+its matching `end`. The matching `end` line is excluded. The opening line of a
+multiline literal is counted once; interior and closing literal lines are not
+counted. Embedded HTML, CSS, and data therefore do not inflate Ruby logic. A
+single-line method with a body counts as one. Instance and singleton methods in
+selected source are inspected. A method is reported when that count is greater
+than `max`.
 
 `metrics/nesting-depth` starts at depth 0 inside a method body and adds one for
 each `if`, `unless`, `case`, `case_match`, `while`, `until`, `for`, `rescue`,
@@ -275,7 +279,9 @@ declarations share one class model. Attribute readers, prop and event
 declarations, nested classes, inherited methods, and singleton helpers do not
 count. The rule reports once at the declaration that supplies the component
 tag name, or the first declaration when no declaration supplies one, when the
-count is greater than `max`.
+count is greater than `max`. Methods declared in a supporting file reached by
+`require` or `require_relative` still contribute to the component total; only
+the report location is limited to selected target files.
 
 ### Accessibility
 
@@ -296,8 +302,9 @@ are hidden subtrees and elements with dynamic attributes.
 
 `templates/unstable-key` is off by default. It reports an explicit `key:`
 expression that resolves to a loop index binding, or a direct reordering
-operation on literal rows that provably lack `key` or `id` fields. Unknown
-collections and computed row shapes remain safe.
+operation on literal rows that provably lack `key` or `id` fields. An explicit
+non-index key silences the literal-reorder pattern. Unknown collections and
+computed row shapes remain safe.
 
 `migration/css-timer` is off by default. It reports a hidden driver element
 whose native `onanimationend` or `onanimationiteration` callback restarts
@@ -327,6 +334,68 @@ rules:
   money/float-to-minor-units: warning
 ```
 
+## Generic contract examples
+
+Typed child props and keyed rows keep names and identity explicit:
+
+```ruby mochi-lint-example
+class ChildBadge
+  @tag_name = "child-badge"
+  prop :label, String, required: true
+  prop :count, Integer, default: 0
+
+  def html
+    %Q{<span>{@label}</span><span>{@count}</span>}
+  end
+end
+
+class ParentPanel
+  @tag_name = "parent-panel"
+  @badges
+
+  def initialize
+    @badges = [{"id" => "a", "label" => "Alpha", "count" => 2}]
+  end
+
+  def html
+    %Q{
+      {each @badges as badge, key: badge["id"]}
+        <child-badge label="{badge["label"]}" count="{badge["count"]}"></child-badge>
+      {end}
+    }
+  end
+end
+```
+
+A custom button role needs a local keyboard path:
+
+```ruby mochi-lint-example
+class MenuButton
+  @tag_name = "menu-button"
+
+  def html
+    %Q{<div role="button" tabindex="0" onclick="{open}" onkeydown="{key}">Menu</div>}
+  end
+
+  def open
+    # open the menu
+  end
+
+  def key(event)
+    open if event[:key] == "Enter" || event[:key] == " "
+  end
+end
+```
+
+Accumulate exact minor units and round once at display:
+
+```ruby mochi-lint-example
+cost = MochiMoney.ledger
+MochiMoney.add_ratio(cost, 202_000 * 300, 1_000_000)
+cents = MochiMoney.round_half_up(cost)
+MochiFormat.currency(cents, "USD", "en-US", 2)
+```
+
 ## Suppressions
 
 A suppression names one rule and gives a nonempty reason. Ruby uses a comment:
@@ -351,9 +420,11 @@ nested scope, or the next template element or `{each}`, `{if}`, or `{unless}`
 block at the same or a nested scope. Eligible Ruby targets are a fixed set of
 syntax nodes such as methods, classes, calls, assignments, and control-flow
 nodes; parameter lists and wrapper nodes are not targets. A directive
-suppresses a diagnostic only when the diagnostic's entire source range lies
-inside that target. Comments inside template placeholders or Ruby strings are
-not directives.
+suppresses a diagnostic only when the diagnostic is in the same file and its
+entire source range lies inside that target. Comments inside template
+placeholders or Ruby strings are not directives. A template suppression
+comment is ordinary authored HTML comment text; lint does not strip it from
+the built template.
 
 Only `disable-next` exists. The following are `lint/suppression` errors at the
 directive location:

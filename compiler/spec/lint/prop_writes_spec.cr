@@ -114,10 +114,50 @@ describe Lint::Rules::PropWrites do
       found.first.message.should contain("declared prop '@label'")
       found.first.message.should contain("initialize")
       found.first.suggestion.not_nil!.should contain("overwritten")
+      source = File.read(File.join(root, "lib/Counter.rb"))
+      source.byte_slice(found.first.start_byte, found.first.end_byte - found.first.start_byte).should eq("@label")
       found.map(&.start_line).should eq [8, 9, 13, 14, 15, 16, 17, 18, 19, 20, 20]
       found.count { |diagnostic| diagnostic.message.includes?("'@rows'") }.should eq 7
       found.count { |diagnostic| diagnostic.message.includes?("'@enabled'") }.should eq 1
       found.none? { |diagnostic| diagnostic.message.includes?("'@other'") }.should be_true
+    end
+  end
+
+  it "recognizes known String, Array, and Hash mutators but not arbitrary bang methods" do
+    LintPropWritesSpecSupport.with_project do |root|
+      LintPropWritesSpecSupport.write(root, "lib/Counter.rb", <<-RUBY)
+        class Counter
+          @tag_name = "counter"
+          prop :label, String
+          prop :rows, Array
+          prop :meta, Hash
+
+          def update
+            @label.upcase!
+            @rows.sort!
+            @meta.transform_values! { |value| value }
+            @rows.reconcile!
+            @label.tidy!
+          end
+
+          def html
+            %Q{<span>{@label}</span>}
+          end
+        end
+        RUBY
+
+      found = LintPropWritesSpecSupport.rule(
+        LintPropWritesSpecSupport.diagnostics(root),
+        "components/prop-write",
+      )
+
+      found.size.should eq 3
+      found.map(&.start_line).should eq [8, 9, 10]
+      found.map(&.message).should eq [
+        "declared prop '@label' is written in 'update'; declared props are read-only input snapshots",
+        "declared prop '@rows' is written in 'update'; declared props are read-only input snapshots",
+        "declared prop '@meta' is written in 'update'; declared props are read-only input snapshots",
+      ]
     end
   end
 

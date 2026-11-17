@@ -160,6 +160,42 @@ describe Lint::Rules::ComponentMethods do
     end
   end
 
+  it "counts methods reopened from a supporting file and reports at the target" do
+    LintComponentMethodsSpecSupport.with_project do |root|
+      LintComponentMethodsSpecSupport.write(root, "lib/AlphaWidget.rb", <<-RUBY)
+        require_relative "../support/AlphaWidget"
+
+        class AlphaWidget
+          @tag_name = "alpha-widget"
+
+          def initialize
+          end
+
+          def one
+          end
+        end
+        RUBY
+      LintComponentMethodsSpecSupport.write(root, "support/AlphaWidget.rb", <<-RUBY)
+        class AlphaWidget
+          def two
+          end
+
+          def three
+          end
+        end
+        RUBY
+
+      rules = {"metrics/component-methods" => "{severity: warning, max: 2}"}
+      diagnostics = LintComponentMethodsSpecSupport.rule(
+        LintComponentMethodsSpecSupport.diagnostics(root, rules),
+        Lint::Rules::ComponentMethods::RULE,
+      )
+      diagnostics.size.should eq 1
+      diagnostics.first.path.should eq "lib/AlphaWidget.rb"
+      diagnostics.first.message.should eq "component 'alpha-widget' has 4 instance methods; maximum is 2"
+    end
+  end
+
   it "reports at the target declaration that declares the component tag" do
     LintComponentMethodsSpecSupport.with_project do |root|
       LintComponentMethodsSpecSupport.write(root, "lib/FirstPart.rb", <<-RUBY)

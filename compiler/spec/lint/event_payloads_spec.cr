@@ -75,7 +75,7 @@ describe Lint::Rules::EventPayloads do
           event :select, id: Integer, label: String
 
           def choose
-            emit :select, {"id" => "bad", :label => "ok", "extra" => 1}
+            self.emit :select, {"id" => "bad", :label => "ok", "extra" => 1}
           end
 
           def html

@@ -217,6 +217,82 @@ describe LintRunner do
     end
   end
 
+  it "blocks findings at both warning and error severity" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/Widget.rb", <<-RUBY)
+        class Widget
+          @tag_name = "widget"
+
+          def html
+            %Q{<button onclick="{missing}">Go</button>}
+          end
+        end
+        RUBY
+      config = <<-YAML
+        version: 1
+        include:
+          - "lib/**/*.rb"
+        rules:
+          correctness/unknown-handler: warning
+        YAML
+      LintCliSpecSupport.write_source(root, ".mochi-lint.yml", config)
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+      status.should eq 1
+      stdout.should contain "warning correctness/unknown-handler"
+      stderr.should be_empty
+
+      LintCliSpecSupport.write_source(root, ".mochi-lint.yml", config.sub("warning", "error"))
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+      status.should eq 1
+      stdout.should contain "error correctness/unknown-handler"
+      stderr.should be_empty
+    end
+  end
+
+  it "accepts the long input form and rejects a symlinked project root" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/GoodWidget.rb", LintCliSpecSupport::VALID_COMPONENT)
+
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root, ["--input", root])
+      status.should eq 0
+      stdout.should eq ""
+      stderr.should eq ""
+
+      target = File.join(root, "target")
+      Dir.mkdir_p(target)
+      link = File.join(root, "linked-project")
+      File.symlink(target, link)
+      status, stdout, stderr = LintCliSpecSupport.run_lint(root, ["-i", link])
+      status.should eq 2
+      stdout.should eq ""
+      stderr.should contain "project directory cannot be a symlink"
+    end
+  end
+
+  it "does not require compiler runtime artifacts or browser tools" do
+    LintCliSpecSupport.with_project do |root|
+      LintCliSpecSupport.write_source(root, "lib/GoodWidget.rb", LintCliSpecSupport::VALID_COMPONENT)
+      names = %w[MRBC MOCHI_GVM_WASM MOCHI_GVM_JS MOCHI_LOADER MOCHI_FORMAT_HOST PATH]
+      previous = names.to_h { |name| {name, ENV[name]?} }
+      begin
+        names.each { |name| ENV[name] = "/nonexistent/#{name.downcase}" }
+        status, stdout, stderr = LintCliSpecSupport.run_lint(root)
+        status.should eq 0
+        stdout.should eq ""
+        stderr.should eq ""
+      ensure
+        previous.each do |name, value|
+          if value
+            ENV[name] = value
+          else
+            ENV.delete(name)
+          end
+        end
+      end
+    end
+  end
+
   it "reports invalid config at its source location with exit 2" do
     LintCliSpecSupport.with_project do |root|
       LintCliSpecSupport.write_source(root, "lib/GoodWidget.rb", LintCliSpecSupport::VALID_COMPONENT)

@@ -15,11 +15,16 @@ module Lint::Rules
     BIND_ATTRIBUTES = Set{"bind:value", "bind:checked"}
 
     DIRECT_MUTATORS = Set{
-      "<<", "[]=", "append", "clear", "compare_by_identity", "concat",
-      "default=", "delete", "delete_at", "delete_if", "fill", "filter!",
-      "force_encoding", "insert", "keep_if", "merge!", "pop", "prepend",
-      "push", "rehash", "reject!", "replace", "select!", "shift", "slice!",
-      "store", "unshift", "update",
+      "<<", "[]=", "append", "capitalize!", "chomp!", "chop!", "clear",
+      "collect!", "compact!", "compare_by_identity", "concat", "default=",
+      "delete", "delete!", "delete_at", "delete_if", "downcase!", "encode!",
+      "fill", "filter!", "flatten!", "force_encoding", "gsub!", "insert",
+      "keep_if", "lstrip!", "map!", "merge!", "next!", "pop", "prepend",
+      "push", "rehash", "reject!", "replace", "reverse!", "rotate!",
+      "rstrip!", "scrub!", "select!", "shift", "shuffle!", "slice!",
+      "sort!", "sort_by!", "squeeze!", "store", "strip!", "sub!", "succ!",
+      "swapcase!", "transform_keys!", "transform_values!", "tr!", "tr_s!",
+      "unicode_normalize!", "unshift", "upcase!", "update",
     }
 
     record WriteTarget, node : TreeSitter::Node, prop : String
@@ -132,7 +137,7 @@ module Lint::Rules
     end
 
     private def self.direct_mutator?(name : String) : Bool
-      DIRECT_MUTATORS.includes?(name) || name.ends_with?('!')
+      DIRECT_MUTATORS.includes?(name)
     end
 
     private def self.first_named_child(node : TreeSitter::Node) : TreeSitter::Node?

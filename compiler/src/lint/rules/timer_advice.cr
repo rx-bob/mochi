@@ -59,7 +59,7 @@ module Lint::Rules
           css_cache[view.owner_name] = value
           value
         end
-        document = Lint::TemplateElements.scan(view.text, parser)
+        document = view.elements
 
         document.elements.each do |element|
           event = animation_event(element)

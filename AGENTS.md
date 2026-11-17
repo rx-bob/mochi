@@ -58,7 +58,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task run` | Build the compiler and compile `compiler/motestproj` into `build_gvm` |
 | `task build` | Build the `compiler/mochi` binary |
 | `task specs` | Run the Crystal compiler specs |
-| `task lint` | Lint the explicit positive project inventory using each project's configuration |
+| `task lint` | Lint the tracked positive fixture inventory with each project's policy or built-in defaults |
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
 | `task framework:e2e` | Run portable framework browser regressions, including all UI fixtures |
 | `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
@@ -71,6 +71,22 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task runtime:test` | Run the loader and host adapter Node tests |
 | `task payload` | Check deterministic bundle membership and payload ceilings |
 | `task check` | Run compile-time gates, runtime tests, compiler specs, project lint, payload checks, GVM tests, and portable framework browser tests |
+
+### Bounded validation
+
+Run long gates through the bounded runner so a startup failure cannot look like
+a slow test:
+
+```sh
+scripts/run_capped.sh 900 /tmp/mochi_task_check.log task check
+```
+
+The runner preserves the calling environment, writes the full log, returns 124
+on timeout, and prints the last 40 log lines on failure or timeout. `task specs`
+and the browser tasks configure Homebrew Python and the Emscripten LLVM bin
+automatically when available. Do not wrap Crystal commands in `env -i` or
+`perl exec`; those can strip `DYLD_LIBRARY_PATH` and make the binary fail before
+the suite starts.
 
 ## CLI reference
 

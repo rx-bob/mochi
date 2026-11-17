@@ -99,6 +99,32 @@ describe Lint::Rules::RowIdentity do
     end
   end
 
+  it "accepts an explicit non-index key on a literal reorder" do
+    LintRowIdentitySpecSupport.with_project do |root|
+      LintRowIdentitySpecSupport.write(root, "lib/KeyedReorder.rb", <<-RUBY)
+        class KeyedReorder
+          @tag_name = "keyed-reorder"
+
+          def html
+            %Q{
+              {each [{label: "a"}].reverse as row, key: row["label"]}
+                <p>{row["label"]}</p>
+              {end}
+              {each [{label: "b"}].sort as row, key: row["label"]}
+                <p>{row["label"]}</p>
+              {end}
+            }
+          end
+        end
+        RUBY
+
+      LintRowIdentitySpecSupport.rule(
+        LintRowIdentitySpecSupport.diagnostics(root, {"templates/unstable-key" => "warning"}),
+        Lint::Rules::RowIdentity::RULE,
+      ).should be_empty
+    end
+  end
+
   it "accepts stable keys, automatic key/id fields, static menus, and unknown collections" do
     LintRowIdentitySpecSupport.with_project do |root|
       LintRowIdentitySpecSupport.write(root, "lib/StableRows.rb", <<-RUBY)

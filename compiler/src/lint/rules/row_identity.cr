@@ -125,6 +125,11 @@ module Lint::Rules
     end
 
     private def self.reordered_literal_method(parser : TreeSitter::RubyParser, row : TemplateRow) : String?
+      # An explicit key is the accepted stable-identity case even when its
+      # expression is not a bare identifier. The index-key branch above
+      # already consumed the loop-index form.
+      return nil if row.key_expression
+
       tree = parser.parse(row.items_expression)
       begin
         root = tree.root_node

@@ -59,7 +59,7 @@ describe TreeSitter::StringExtractor do
       code = SpecDataLoader.load("ruby/multi_byte.rb")
       class_name = "MultiByteComponent"
       methods = TreeSitter::MethodBodyExtractor.extract_method_bodies(code, class_name)
-      
+
       html_def = methods["html"]
       html_result = TreeSitter::StringExtractor.extract_raw_string_from_def_body(html_def.body, "html")
       html_result.should contain("Arrows: ←, →")
@@ -69,6 +69,21 @@ describe TreeSitter::StringExtractor do
       css_def = methods["css"]
       css_result = TreeSitter::StringExtractor.extract_raw_string_from_def_body(css_def.body, "css")
       css_result.should contain("content: '│';")
+    end
+  end
+
+  it "keeps the build-path raw range aligned with a heredoc body" do
+    source = "class Widget\n  def css\n    <<~CSS\n      .panel { color: red; }\n    CSS\n  end\nend\n"
+    methods = TreeSitter::MethodBodyExtractor.extract_method_bodies(source, "Widget")
+    css = methods["css"]
+    raw = css.raw_string
+    raw.should_not be_nil
+    start = css.raw_string_start
+    finish = css.raw_string_end
+    start.should_not be_nil
+    finish.should_not be_nil
+    if raw && start && finish
+      source.byte_slice(start, finish - start).should eq(raw)
     end
   end
 end

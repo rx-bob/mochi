@@ -130,6 +130,35 @@ describe Lint::Suppressions do
     end
   end
 
+  it "does not let a directive suppress the same byte range in another file" do
+    LintSuppressionsSpecSupport.with_project do |root|
+      body = ->(suffix : Char) do
+        String.build do |io|
+          io << "class Widget" << suffix << "\n"
+          0.upto(1) do |method|
+            io << "  def method_#{method}\n"
+            61.times { |index| io << "    value_#{index} = #{index}\n" }
+            io << "  end\n\n"
+          end
+          io << "end\n"
+        end
+      end
+
+      directive = "# mochi-lint: disable-next metrics/method-length -- Same layout is reviewed here\n"
+      padding = "# " + ("x" * (directive.bytesize - 3)) + "\n"
+      padding.bytesize.should eq directive.bytesize
+
+      LintSuppressionsSpecSupport.write(root, "lib/WidgetA.rb", directive + body.call('A'))
+      LintSuppressionsSpecSupport.write(root, "lib/WidgetB.rb", padding + body.call('B'))
+
+      diagnostics = LintSuppressionsSpecSupport.diagnostics(root)
+      method_diagnostics = LintSuppressionsSpecSupport.rule(diagnostics, "metrics/method-length")
+      method_diagnostics.size.should eq 2
+      method_diagnostics.each { |diagnostic| diagnostic.path.should eq "lib/WidgetB.rb" }
+      LintSuppressionsSpecSupport.rule(diagnostics, Lint::SUPPRESSION_RULE).should be_empty
+    end
+  end
+
   it "suppresses a component method count at the class declaration" do
     LintSuppressionsSpecSupport.with_project do |root|
       source = "# mochi-lint: disable-next metrics/component-methods -- This screen owns one cohesive workflow\n" +

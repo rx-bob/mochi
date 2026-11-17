@@ -71,10 +71,16 @@ module TreeSitter
 
     # Returns the byte range of the literal's contents (without Ruby quote or
     # percent delimiters) in the original source. Callers use this to map
-    # template spans back to the user's file.
+    # template spans back to the user's file. A heredoc keeps its full body
+    # range because `extract_string_content` returns that full text, including
+    # the terminator line.
     def self.string_source_range(method_node : Node) : Tuple(Int32, Int32)?
       string_node = string_node_from_method_node(method_node)
       return nil unless string_node
+
+      if string_node.type.starts_with?("heredoc")
+        return {string_node.start_byte, string_node.end_byte}
+      end
 
       content_range(string_node)
     end

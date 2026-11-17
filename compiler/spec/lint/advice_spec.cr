@@ -135,6 +135,10 @@ describe Lint::Rules::MoneyAdvice do
             MochiFormat.currency((value * scale).round(2), "USD")
           end
 
+          def absolute(value, scale)
+            ::MochiFormat.currency((value * scale).round, "USD")
+          end
+
           def exact(ledger)
             cents = MochiMoney.round_half_up(ledger)
             MochiFormat.currency(cents, "USD")
@@ -154,8 +158,8 @@ describe Lint::Rules::MoneyAdvice do
         LintAdviceSpecSupport.diagnostics(root, {Lint::Rules::MoneyAdvice::RULE => "warning"}),
         Lint::Rules::MoneyAdvice::RULE,
       )
-      diagnostics.size.should eq 4
-      diagnostics.map(&.start_line).should eq [3, 8, 14, 18]
+      diagnostics.size.should eq 5
+      diagnostics.map(&.start_line).should eq [3, 8, 14, 18, 26]
       diagnostics.each do |diagnostic|
         diagnostic.path.should eq "lib/MoneyLabels.rb"
         diagnostic.severity.should eq Lint::Severity::Warning
@@ -378,6 +382,8 @@ describe "opt-in advice integration" do
             %Q{
               <!-- mochi-lint: disable-next migration/css-timer -- Existing driver is reviewed separately -->
               <div hidden class="driver" data-phase="{@phase}" onanimationend="{advance}"></div>
+              <!-- mochi-lint: disable-next money/float-to-minor-units -- Inline label is reviewed separately -->
+              <span>{MochiFormat.currency((@value * 100).round, "USD")}</span>
             }
           end
 
@@ -391,6 +397,52 @@ describe "opt-in advice integration" do
       LintAdviceSpecSupport.config(root, {
         Lint::Rules::MoneyAdvice::RULE => "warning",
         Lint::Rules::TimerAdvice::RULE => "warning",
+      })
+      status, stdout, stderr = LintAdviceSpecSupport.run_lint(root)
+      status.should eq 0
+      stdout.should be_empty
+      stderr.should be_empty
+    end
+  end
+
+  it "honors an explicit off setting for each advice rule" do
+    LintAdviceSpecSupport.with_project do |root|
+      LintAdviceSpecSupport.write(root, "lib/AdviceCLI.rb", <<-RUBY)
+        class AdviceCLI
+          @tag_name = "advice-cli"
+          @ticks = 0
+          @phase = false
+
+          def label(value, scale)
+            MochiFormat.currency((value * scale).round, "USD")
+          end
+
+          def html
+            %Q{
+              <div hidden class="driver" data-phase="{@phase}" onanimationend="{advance}"></div>
+            }
+          end
+
+          def advance
+            @phase = !@phase
+            @ticks = @ticks + 1
+          end
+        end
+        RUBY
+
+      LintAdviceSpecSupport.config(root, {
+        Lint::Rules::MoneyAdvice::RULE => "off",
+        Lint::Rules::TimerAdvice::RULE => "warning",
+      })
+      status, stdout, stderr = LintAdviceSpecSupport.run_lint(root)
+      status.should eq 1
+      stderr.should be_empty
+      stdout.should_not contain "money/float-to-minor-units"
+      stdout.should contain "migration/css-timer"
+
+      LintAdviceSpecSupport.config(root, {
+        Lint::Rules::MoneyAdvice::RULE => "off",
+        Lint::Rules::TimerAdvice::RULE => "off",
       })
       status, stdout, stderr = LintAdviceSpecSupport.run_lint(root)
       status.should eq 0

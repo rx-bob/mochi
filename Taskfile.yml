@@ -8,6 +8,21 @@ vars:
       else
         echo 'export LIBRARY_PATH="" && export LD_LIBRARY_PATH="{{.ROOT_DIR}}/fragments/libs"'
       fi
+  EMCC_CONFIG:
+    sh: |
+      python="${EMSDK_PYTHON:-}"
+      if [ -z "$python" ] && [ -x /opt/homebrew/bin/python3 ]; then
+        python=/opt/homebrew/bin/python3
+      fi
+      if [ -z "$python" ]; then
+        python=$(command -v python3)
+      fi
+      emscripten_prefix="${EMSCRIPTEN_PREFIX:-$(brew --prefix emscripten 2>/dev/null || true)}"
+      llvm_bin="${EMSDK_LLVM_BIN:-${emscripten_prefix}/libexec/llvm/bin}"
+      printf 'export EMSDK_PYTHON="%s"' "$python"
+      if [ -n "$llvm_bin" ] && [ -d "$llvm_bin" ]; then
+        printf ' && export PATH="%s:$PATH"' "$llvm_bin"
+      fi
   SPEC_LINK_FLAGS: '--link-flags="-L{{.ROOT_DIR}}/fragments/libs"'
   BUILD_LINK_FLAGS:
     sh: |
@@ -86,6 +101,7 @@ tasks:
           created=1
         fi
         {{.FRAG_CONFIG}}
+        {{.EMCC_CONFIG}}
         cd compiler
         crystal spec {{.SPEC_LINK_FLAGS}}
         status=$?
@@ -100,11 +116,15 @@ tasks:
       - |
         set -e
         {{.FRAG_CONFIG}}
-        "{{.COMPILER}}" lint -i "{{.MOTESTPROJ}}"
+        # Lint only tracked positive project fixtures. compiler/motestproj is a local
+        # ignored scratch project and must not be required by the repository gate.
+        # e2e/fixtures/feedback_review intentionally contains lint violations used
+        # by browser tests, so it is not part of this positive inventory.
         "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/e2e/fixtures/ui_contracts"
         "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/e2e/fixtures/framework_contracts"
         "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/e2e/fixtures/gvm_counter"
         "{{.COMPILER}}" lint -i "{{.ROOT_DIR}}/devground/components"
+        sh "{{.ROOT_DIR}}/scripts/lint_cli_smoke.sh"
 
   run:
     desc: Build the compiler and compile motestproj into build_gvm
@@ -138,38 +158,38 @@ tasks:
       - build
     cmds:
       - task: framework:feedback
-      - cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts tests/gvm_row_capacity.spec.ts tests/gvm_framework_standalone.spec.ts tests/gvm_drag_file_contracts.spec.ts tests/gvm_pointer_contracts.spec.ts tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts tests/gvm_test_workflow.spec.ts tests/gvm_capacity_boundaries.spec.ts --reporter=line
-      - cd e2e && npx playwright test tests/gvm_asset_paths.spec.ts tests/gvm_install_workflow.spec.ts tests/gvm_evolved_features.spec.ts --grep-invert "Cowboy integration" --reporter=line
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_counter.spec.ts tests/gvm_emit_fetch.spec.ts tests/gvm_row_capacity.spec.ts tests/gvm_framework_standalone.spec.ts tests/gvm_drag_file_contracts.spec.ts tests/gvm_pointer_contracts.spec.ts tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts tests/gvm_test_workflow.spec.ts tests/gvm_capacity_boundaries.spec.ts --reporter=line'
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_asset_paths.spec.ts tests/gvm_install_workflow.spec.ts tests/gvm_evolved_features.spec.ts --grep-invert "Cowboy integration" --reporter=line'
 
   framework:feedback:
     desc: Run portable feedback composition regressions in all browsers
     deps: [build]
     cmds:
-      - cd e2e && npx playwright test tests/gvm_feedback_review.spec.ts --reporter=line
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_feedback_review.spec.ts --reporter=line'
 
   framework:ui:
     desc: Run all shared UI fixture scenarios and feedback evidence in all browsers
     deps: [build]
     cmds:
-      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts tests/gvm_test_workflow.spec.ts tests/gvm_capacity_boundaries.spec.ts --reporter=line
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts tests/gvm_test_workflow.spec.ts tests/gvm_capacity_boundaries.spec.ts --reporter=line'
 
   framework:ui:inspector:
     desc: Run inspector Ruby scenarios and related feedback evidence
     deps: [build]
     cmds:
-      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts --grep '@ui-inspector' --reporter=line
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts tests/gvm_computed.spec.ts --grep "@ui-inspector" --reporter=line'
 
   framework:ui:graph:
     desc: Run graph Ruby scenarios, SVG insertion/identity checks, and related evidence
     deps: [build]
     cmds:
-      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts --grep '@ui-graph' --reporter=line
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts --grep "@ui-graph" --reporter=line'
 
   framework:ui:form:
     desc: Run nested form Ruby scenarios, lifecycle checks, and related feedback evidence
     deps: [build]
     cmds:
-      - cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts --grep '@ui-form' --reporter=line
+      - '{{.EMCC_CONFIG}} && cd e2e && npx playwright test tests/gvm_ui_contracts.spec.ts tests/gvm_ui_capacity_lifecycle.spec.ts --grep "@ui-form" --reporter=line'
 
   app:e2e:
     desc: Build the Cowboy frontend and run its GVM Playwright integration suite

@@ -107,7 +107,7 @@ module Lint::Rules
       receiver = node.child_by_field_name("receiver")
       method = node.child_by_field_name("method")
       return false unless receiver && method
-      receiver.type == "constant" &&
+      receiver.type.in?("constant", "scope_resolution") &&
         receiver.text.lchop("::") == "MochiFormat" &&
         method.text == "currency"
     end

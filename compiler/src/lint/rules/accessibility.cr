@@ -86,7 +86,7 @@ module Lint::Rules
 
       def initialize(@view : TemplateView)
         @parser = TemplateExpressionParser.new
-        @document = Lint::TemplateElements.scan(@view.text, @parser)
+        @document = @view.elements
         @document.elements.each do |element|
           attribute = element.attribute("id")
           next unless attribute

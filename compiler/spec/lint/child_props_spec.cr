@@ -128,7 +128,7 @@ describe Lint::Rules::ChildProps do
 
           def html
             %Q{
-              <child-card label="" count="0" ratio=".5" enabled rows="[1,2]" meta='{"a":1}'></child-card>
+              <child-card label="" count="0" ratio=".5" enabled rows="[1,2]" meta='{"a":1}' extra="undeclared"></child-card>
               <child-card label="text" count="9223372036854775807" ratio="Infinity" enabled="false" rows="[]" meta='{}'></child-card>
               <child-card label="text" count="-9223372036854775808" ratio="NaN" enabled="true" rows="[1, [2]]" meta='{"nested": {"ok": true}}'></child-card>
               <child-card label="text" ratio="-Infinity" enabled="false"></child-card>

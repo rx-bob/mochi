@@ -12,6 +12,7 @@ require "./config"
 require "./diagnostic"
 require "./file_discovery"
 require "./source_map"
+require "./template_elements"
 
 module Lint
   record SourceIssue,
@@ -106,6 +107,8 @@ module Lint
     getter rows : Array(TemplateRow)
     getter issues : Array(SourceIssue)
 
+    @elements : TemplateElements::Document? = nil
+
     def initialize(
       @unit_path : String,
       @map : SourceMap,
@@ -127,6 +130,11 @@ module Lint
 
     def target? : Bool
       @target
+    end
+
+    # Element scans are shared by every rule that inspects the same template.
+    def elements : TemplateElements::Document
+      @elements ||= TemplateElements.scan(@text)
     end
 
     def source_byte(template_byte : Int32) : Int32
@@ -694,15 +702,16 @@ module Lint
     def self.build(
       files : Array(SourceFile),
       config : Config,
-      parser : TreeSitter::RubyParser = TreeSitter::RubyParser.new,
+      parser : TreeSitter::RubyParser? = nil,
     ) : ProjectIndex
       index = new(config, parser)
       index.build(files)
       index
     end
 
-    def initialize(@config : Config, parser : TreeSitter::RubyParser = TreeSitter::RubyParser.new)
-      @parser = parser
+    def initialize(@config : Config, parser : TreeSitter::RubyParser? = nil)
+      @parser = parser || TreeSitter::RubyParser.new
+      @owns_parser = parser.nil?
       @project_root = config.project_root
       @units = {} of String => SourceUnit
       @selected = Set(String).new
@@ -827,6 +836,7 @@ module Lint
       return if @closed
       @closed = true
       @units.each_value(&.close)
+      @parser.close if @owns_parser
     end
 
     private def parse_unit(file : SourceFile) : SourceUnit
