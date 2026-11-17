@@ -61,17 +61,48 @@ module LintCssDeclarationLinesSpecSupport
 end
 
 describe Lint::Rules::CssDeclarationLines do
-  it "reports packed declarations and allows one declaration per line" do
+  it "reports packed declarations and declarations sharing lines with braces" do
     LintCssDeclarationLinesSpecSupport.with_project do |root|
       source = <<-RUBY
         class Widget
           def css
             %Q{
-              .card { display: flex; gap: 12px; }
-              .badge { display: block; }
+              .card {
+                display: flex;
+              }
               .packed { color: red; background: blue; }
-              .split { display: flex;
-                gap: 12px; }
+              .badge { display: block; }
+            }
+          end
+        end
+        RUBY
+      LintCssDeclarationLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/css-declaration-lines" => "warning"}
+      diagnostics = LintCssDeclarationLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 2
+      diagnostics.map(&.start_line).should eq [7, 8]
+      diagnostics.map(&.message).should eq [
+        "line has 2 CSS declarations; maximum is 1",
+        "CSS declaration shares a line with a block brace",
+      ]
+      diagnostics.each do |diagnostic|
+        diagnostic.rule.should eq Lint::Rules::CssDeclarationLines::RULE
+        diagnostic.severity.should eq Lint::Severity::Warning
+        diagnostic.suggestion.should eq "Put each CSS declaration and block brace on its own line."
+      end
+    end
+  end
+
+  it "rejects a declaration beside an opening brace and a misaligned closing brace" do
+    LintCssDeclarationLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          def css
+            %Q{
+              .table-scroll:focus-visible { outline: 2px solid var(--accent);
+                outline-offset: -2px;
+                }
             }
           end
         end
@@ -82,12 +113,10 @@ describe Lint::Rules::CssDeclarationLines do
       diagnostics = LintCssDeclarationLinesSpecSupport.diagnostics(root, rules)
       diagnostics.size.should eq 2
       diagnostics.map(&.start_line).should eq [4, 6]
-      diagnostics.each do |diagnostic|
-        diagnostic.rule.should eq Lint::Rules::CssDeclarationLines::RULE
-        diagnostic.severity.should eq Lint::Severity::Warning
-        diagnostic.message.should eq "line has 2 CSS declarations; maximum is 1"
-        diagnostic.suggestion.should eq "Put each CSS declaration on its own line."
-      end
+      diagnostics.map(&.message).should eq [
+        "CSS declaration shares a line with a block brace",
+        "closing brace indentation does not match its selector",
+      ]
     end
   end
 
@@ -99,12 +128,20 @@ describe Lint::Rules::CssDeclarationLines do
             %Q{
               @import "one.css";
               @import "two.css";
-              .card { content: "a;b"; }
-              .icon { background: url("data:image/svg+xml;charset=utf-8,<svg></svg>"); }
+              .card {
+                content: "a;b";
+              }
+              .icon {
+                background: url("data:image/svg+xml;charset=utf-8,<svg></svg>");
+              }
               /* color: red;
                  gap: 2px; */
-              .pick { color: \#{pick("red;blue")}; }
-              .plain { color: red }
+              .pick {
+                color: \#{pick("red;blue")};
+              }
+              .plain {
+                color: red
+              }
             }
           end
         end

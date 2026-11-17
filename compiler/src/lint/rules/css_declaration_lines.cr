@@ -5,9 +5,9 @@ require "../diagnostic"
 require "../project_index"
 
 module Lint::Rules
-  # Style rule for component CSS. A line may carry one declaration; packed
-  # declaration lists are reported so a component stylesheet stays readable
-  # without requiring a full CSS parser.
+  # Style rule for component CSS. Declarations and block braces stay on
+  # separate lines so a component stylesheet remains easy to scan without
+  # requiring a full CSS parser.
   module CssDeclarationLines
     RULE = "style/css-declaration-lines"
 
@@ -38,23 +38,29 @@ module Lint::Rules
 
         content = unit.source.byte_slice(content_start, content_end - content_start)
         line_starts = content_line_starts(content)
-        counts = declaration_counts(content)
+        counts, braces, indentation = declaration_layout(content)
         counts.each_with_index do |count, line|
-          next if count <= 1
+          if count > 1
+            issues << line_issue(
+              unit, method.unit_path, content, content_start, line_starts, line,
+              "line has #{count} CSS declarations; maximum is 1",
+              "Put each CSS declaration and block brace on its own line.",
+            )
+          elsif count > 0 && braces[line]
+            issues << line_issue(
+              unit, method.unit_path, content, content_start, line_starts, line,
+              "CSS declaration shares a line with a block brace",
+              "Put each CSS declaration and block brace on its own line.",
+            )
+          end
 
-          line_start = content_start + line_starts[line]
-          line_end = content_start + content_line_finish(content, line_starts, line)
-          line_end = trim_line_ending(unit.source, line_start, line_end)
-          range = unit.map.range(line_start, line_end)
-          issues << SourceIssue.new(
-            method.unit_path,
-            unit.map,
-            range.start_byte,
-            range.end_byte,
-            "line has #{count} CSS declarations; maximum is 1",
-            RULE,
-            "Put each CSS declaration on its own line.",
-          )
+          if indentation[line]
+            issues << line_issue(
+              unit, method.unit_path, content, content_start, line_starts, line,
+              "closing brace indentation does not match its selector",
+              "Align the closing brace with the selector that opened the block.",
+            )
+          end
         end
       end
 
@@ -81,12 +87,42 @@ module Lint::Rules
       finish
     end
 
-    # Counts declaration terminators per line. The scan ignores comments,
+    private def self.line_issue(
+      unit : SourceUnit,
+      path : String,
+      content : String,
+      content_start : Int32,
+      starts : Array(Int32),
+      line : Int32,
+      message : String,
+      suggestion : String,
+    ) : SourceIssue
+      line_start = content_start + starts[line]
+      line_end = content_start + content_line_finish(content, starts, line)
+      line_end = trim_line_ending(unit.source, line_start, line_end)
+      range = unit.map.range(line_start, line_end)
+      SourceIssue.new(
+        path,
+        unit.map,
+        range.start_byte,
+        range.end_byte,
+        message,
+        RULE,
+        suggestion,
+      )
+    end
+
+    # Counts declarations and block braces per line. The scan ignores comments,
     # strings, parenthesized values, brackets, and Ruby interpolation. A
-    # declaration without a trailing semicolon is counted when its block closes.
-    private def self.declaration_counts(content : String) : Array(Int32)
-      counts = Array(Int32).new(content_line_starts(content).size, 0)
-      blocks = [] of Bool
+    # declaration without a trailing semicolon is counted on its start line when
+    # its block closes.
+    private def self.declaration_layout(content : String) : Tuple(Array(Int32), Array(Bool), Array(Bool))
+      starts = content_line_starts(content)
+      counts = Array(Int32).new(starts.size, 0)
+      braces = Array(Bool).new(starts.size, false)
+      indentation = Array(Bool).new(starts.size, false)
+      blocks = [] of Int32?
+      block_indents = [] of String
       line = 0
       index = 0
       quote = nil
@@ -133,6 +169,7 @@ module Lint::Rules
         end
 
         if byte == 35_u8 && index + 1 < content.bytesize && content.byte_at(index + 1) == 123_u8
+          mark_pending(blocks, line)
           index, line = skip_interpolation(content, index + 2, line, counts.size)
           next
         end
@@ -143,44 +180,54 @@ module Lint::Rules
           index += 1
         when 40_u8
           parens += 1
-          mark_pending(blocks)
+          mark_pending(blocks, line)
           index += 1
         when 41_u8
           parens -= 1 if parens > 0
-          mark_pending(blocks)
+          mark_pending(blocks, line)
           index += 1
         when 91_u8
           brackets += 1
-          mark_pending(blocks)
+          mark_pending(blocks, line)
           index += 1
         when 93_u8
           brackets -= 1 if brackets > 0
-          mark_pending(blocks)
+          mark_pending(blocks, line)
           index += 1
         when 123_u8
           if parens == 0 && brackets == 0
-            mark_pending(blocks, false)
-            blocks << false
+            braces[line] = true if line < braces.size
+            selector_line = blocks.last? || line
+            block_indents << line_indent(content, starts, selector_line)
+            reset_pending(blocks)
+            blocks << nil
           else
-            mark_pending(blocks)
+            mark_pending(blocks, line)
           end
           index += 1
         when 125_u8
           if parens == 0 && brackets == 0
+            braces[line] = true if line < braces.size
             unless blocks.empty?
-              counts[line] += 1 if blocks.last && line < counts.size
+              if expected = block_indents.last?
+                indentation[line] = true if line < indentation.size && line_indent(content, starts, line) != expected
+              end
+              if start_line = blocks.last
+                counts[start_line] += 1 if start_line < counts.size
+              end
               blocks.pop
-              mark_pending(blocks, false)
+              block_indents.pop
+              reset_pending(blocks)
             end
           else
-            mark_pending(blocks)
+            mark_pending(blocks, line)
           end
           index += 1
         when 59_u8
           if parens == 0 && brackets == 0 && !blocks.empty?
-            if blocks.last
-              counts[line] += 1 if line < counts.size
-              blocks[blocks.size - 1] = false
+            if start_line = blocks.last
+              counts[start_line] += 1 if start_line < counts.size
+              blocks[blocks.size - 1] = nil
             end
           end
           index += 1
@@ -190,16 +237,33 @@ module Lint::Rules
         when 9_u8, 13_u8, 32_u8
           index += 1
         else
-          mark_pending(blocks)
+          mark_pending(blocks, line)
           index += 1
         end
       end
 
-      counts
+      {counts, braces, indentation}
     end
 
-    private def self.mark_pending(blocks : Array(Bool), value = true) : Nil
-      blocks[blocks.size - 1] = value unless blocks.empty?
+    private def self.line_indent(content : String, starts : Array(Int32), line : Int32) : String
+      start = starts[line]
+      finish = content_line_finish(content, starts, line)
+      index = start
+      while index < finish
+        byte = content.byte_at(index)
+        break unless byte == 9_u8 || byte == 32_u8
+        index += 1
+      end
+      content.byte_slice(start, index - start)
+    end
+
+    private def self.mark_pending(blocks : Array(Int32?), line : Int32) : Nil
+      return if blocks.empty?
+      blocks[blocks.size - 1] = line if blocks.last.nil?
+    end
+
+    private def self.reset_pending(blocks : Array(Int32?)) : Nil
+      blocks[blocks.size - 1] = nil unless blocks.empty?
     end
 
     private def self.skip_interpolation(

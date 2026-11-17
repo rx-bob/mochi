@@ -135,7 +135,7 @@ module Lint
       "style/css-declaration-lines" => RuleDefinition.new(
         "style/css-declaration-lines",
         RuleLevel::Warning,
-        "Component CSS keeps one declaration per line",
+        "Component CSS separates declarations from braces and aligns closing braces",
       ),
       "metrics/nesting-depth" => RuleDefinition.new(
         "metrics/nesting-depth",
