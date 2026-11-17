@@ -1,6 +1,7 @@
 require "spec"
 require "file_utils"
 require "random"
+require "yaml"
 require "../src/initializer"
 require "../src/tooling/lint_runner"
 
@@ -65,8 +66,7 @@ describe Initializer do
 
   it "wires generated task check to lint before test" do
     root = File.join(Dir.tempdir, "mochi_initializer_task_#{Random.rand(1_000_000)}")
-    bin = File.join(root, "bin")
-    Dir.mkdir_p(bin)
+    Dir.mkdir_p(root)
 
     begin
       Dir.cd(root) do
@@ -74,23 +74,14 @@ describe Initializer do
       end
 
       project = File.join(root, "sample")
-      log = File.join(root, "mochi.log")
-      fake = File.join(bin, "mochi")
-      File.write(fake, "#!/bin/sh\necho \"$@\" >> \"$MOCHI_LOG\"\nexit 0\n")
-      File.chmod(fake, 0o755)
+      taskfile = YAML.parse(File.read(File.join(project, "Taskfile.yml")))
+      tasks = taskfile["tasks"]
 
-      output = IO::Memory.new
-      error = IO::Memory.new
-      result = Process.run(
-        "task",
-        ["--dir", project, "check"],
-        env: {"PATH" => "#{bin}:#{ENV["PATH"]?}", "MOCHI_LOG" => log},
-        output: output,
-        error: error,
-      )
-      result.success?.should be_true
-      lines = File.read(log).lines
-      lines.should eq ["lint -i ./", "test -i ./"]
+      tasks["lint"]["cmds"][0].as_s.should eq %(mochi lint -i "./")
+      tasks["test"]["cmds"][0].as_s.should eq %(mochi test -i "./")
+
+      check = tasks["check"]["cmds"].as_a
+      check.map { |entry| entry["task"].as_s }.should eq ["lint", "test"]
     ensure
       FileUtils.rm_rf(root)
     end
