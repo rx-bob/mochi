@@ -9,6 +9,7 @@ require "../lint/suppressions"
 require "../lint/rules/accessibility"
 require "../lint/rules/child_props"
 require "../lint/rules/component_methods"
+require "../lint/rules/css_declaration_lines"
 require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
 require "../lint/rules/line_length"
@@ -60,6 +61,7 @@ class LintRunner
           Lint::Rules::ComponentMethods.diagnostics(index) +
           Lint::Rules::MethodLength.diagnostics(index) +
           Lint::Rules::LineLength.diagnostics(index) +
+          Lint::Rules::CssDeclarationLines.diagnostics(index) +
           Lint::Rules::NestingDepth.diagnostics(index) +
           Lint::Rules::Accessibility.diagnostics(index) +
           Lint::Rules::ChildProps.diagnostics(index) +

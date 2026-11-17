@@ -64,9 +64,9 @@ class Initializer
     include:
       - "lib/**/*.rb"
 
-    # These are the standard Mochi defaults, plus the opt-in line-length style
-    # rule enabled for new projects. Raise its max or turn it off if wider
-    # lines are wanted.
+    # These are the standard Mochi defaults, plus the opt-in line-length rule
+    # enabled for new projects. Adjust the limits or severities when wider
+    # lines or packed CSS declarations are intentional.
     rules:
       correctness/unknown-handler: error
       correctness/timer-callback: error
@@ -79,6 +79,7 @@ class Initializer
       metrics/line-length:
         severity: warning
         max: 120
+      style/css-declaration-lines: warning
       metrics/nesting-depth:
         severity: warning
         max: 4

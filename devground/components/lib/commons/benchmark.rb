@@ -43,21 +43,79 @@ class MochiBenchmark
 
   def css
     %Q{
-      .container { max-width: 800px; margin: 0 auto; font-family: sans-serif; }
-      .header { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #ccc; margin-bottom: 10px; }
-      h1 { margin: 0; font-size: 1.2em; }
-      .controls { display: flex; flex-wrap: wrap; gap: 6px; }
-      button { padding: 6px 12px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; background: #f8f9fa; font-size: 0.85em; }
-      button:hover { background: #e2e6ea; }
-      .row-item { display: flex; align-items: center; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
-      .row-item.danger { background-color: #d9534f; color: #fff; }
-      .row-item.danger a { color: #fff; }
-      .col-id { width: 60px; text-align: right; padding-right: 10px; color: #666; font-size: 0.85em; }
-      .col-label { flex: 1; }
-      .col-label a.lbl { text-decoration: none; color: #333; cursor: pointer; }
-      .col-label a.lbl:hover { text-decoration: underline; }
-      .col-remove a.remove { cursor: pointer; color: #999; padding: 0 8px; text-decoration: none; }
-      .col-remove a.remove:hover { color: #d9534f; }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        font-family: sans-serif;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 0;
+        border-bottom: 1px solid #ccc;
+        margin-bottom: 10px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.2em;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      button {
+        padding: 6px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        background: #f8f9fa;
+        font-size: 0.85em;
+      }
+      button:hover {
+        background: #e2e6ea;
+      }
+      .row-item {
+        display: flex;
+        align-items: center;
+        padding: 4px 0;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .row-item.danger {
+        background-color: #d9534f;
+        color: #fff;
+      }
+      .row-item.danger a {
+        color: #fff;
+      }
+      .col-id {
+        width: 60px;
+        text-align: right;
+        padding-right: 10px;
+        color: #666;
+        font-size: 0.85em;
+      }
+      .col-label {
+        flex: 1;
+      }
+      .col-label a.lbl {
+        text-decoration: none;
+        color: #333;
+        cursor: pointer;
+      }
+      .col-label a.lbl:hover {
+        text-decoration: underline;
+      }
+      .col-remove a.remove {
+        cursor: pointer;
+        color: #999;
+        padding: 0 8px;
+        text-decoration: none;
+      }
+      .col-remove a.remove:hover {
+        color: #d9534f;
+      }
     }
   end
 

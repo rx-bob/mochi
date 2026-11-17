@@ -77,12 +77,14 @@ rules:
   metrics/method-length:
     severity: warning
     max: 60
+  metrics/line-length: off
   metrics/nesting-depth:
     severity: warning
     max: 4
   metrics/component-methods:
     severity: warning
     max: 40
+  style/css-declaration-lines: warning
   accessibility/control-name: warning
   accessibility/keyboard-activation: warning
   templates/unstable-key: off
@@ -99,6 +101,8 @@ rules:
     severity: warning
     max: 120
 ```
+
+The CSS declaration rule is already on in the standard policy.
 
 The strict schema is:
 
@@ -197,6 +201,7 @@ is moved to a different checkout root.
 | `components/prop-write` | `warning` | none | Declared props remain read-only input snapshots |
 | `metrics/method-length` | `warning` | `max: 60` | Ruby method bodies stay within the configured line limit |
 | `metrics/line-length` | `off` | `max: 120` | Ruby method lines stay within the configured character width |
+| `style/css-declaration-lines` | `warning` | none | Component CSS keeps one declaration per line |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
 | `accessibility/control-name` | `warning` | none | Interactive controls have an accessible name |
@@ -284,6 +289,17 @@ excluded. The diagnostic covers the overlong line. Enable it in a project
 policy with `severity: warning` and the desired `max`; the generated starter
 project enables `max: 120`. A method directive suppresses every line-length
 report inside that method.
+
+`style/css-declaration-lines` is a style rule that reads the literal returned
+by a component's `css` method and reports a line with more than one declaration.
+It is on by default; set it to `off` when packed CSS is intentional. One
+declaration on a line is allowed, including a complete single-declaration rule
+such as `:host { display: block; }`. Semicolons inside strings, comments,
+`url(...)`, brackets, and Ruby interpolation do not count. Top-level `@import`
+statements do not count as declarations, and a final declaration without a
+trailing semicolon is counted when its block closes. The rule does not run when
+`css` returns computed text instead of one literal string. Reports cover the
+packed source line; put each declaration on its own line to resolve them.
 
 `metrics/nesting-depth` starts at depth 0 inside a method body and adds one for
 each `if`, `unless`, `case`, `case_match`, `while`, `until`, `for`, `rescue`,

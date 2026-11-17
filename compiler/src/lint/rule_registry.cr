@@ -132,6 +132,11 @@ module Lint
         "Ruby method lines stay within the configured character width",
         {"max" => RuleOption.new("max", 120)},
       ),
+      "style/css-declaration-lines" => RuleDefinition.new(
+        "style/css-declaration-lines",
+        RuleLevel::Warning,
+        "Component CSS keeps one declaration per line",
+      ),
       "metrics/nesting-depth" => RuleDefinition.new(
         "metrics/nesting-depth",
         RuleLevel::Warning,
