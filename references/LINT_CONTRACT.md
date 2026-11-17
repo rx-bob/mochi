@@ -350,13 +350,14 @@ count is greater than `max`. Methods declared in a supporting file reached by
 `require` or `require_relative` still contribute to the component total; only
 the report location is limited to selected target files.
 
-`metrics/class-variables` counts distinct `@name` declarations in a component's
-class body, excluding the framework `@tag_name`. A variable counts once even
-when several declarations assign or read it, and reopened class declarations
-share one set. Variables used only inside methods, nested classes, or singleton
-classes do not count. The rule reports once at a selected class declaration
-when the count is greater than `max`. Prop declarations are not class-body
-variables; a prop's `@name` access inside a method does not add to the count.
+`metrics/class-variables` counts distinct authored component state. A class-body
+`@name` declaration counts, and so does an assignment to an instance variable
+inside `initialize`, `mounted`, or `unmounted`. Moving setup into one of those
+lifecycle methods therefore does not hide it. Assignments in other instance
+methods, reads alone, and reopened class declarations do not add separate
+entries. The framework `@tag_name`, declared props, nested classes, and
+singleton classes are excluded. The rule reports once at a selected class
+declaration when the count is greater than `max`.
 
 ### Structure
 

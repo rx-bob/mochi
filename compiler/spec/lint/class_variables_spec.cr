@@ -106,17 +106,66 @@ describe Lint::Rules::ClassVariables do
     end
   end
 
-  it "counts distinct names and ignores tag metadata, methods, and nested classes" do
+  it "counts state assigned in initialize instead of declared in the class body" do
+    LintClassVariablesSpecSupport.with_project do |root|
+      source = String.build do |io|
+        io << "class Widget\n"
+        io << "  @tag_name = \"widget-card\"\n"
+        io << "  def initialize\n"
+        11.times { |index| io << "    @state_#{index} = nil\n" }
+        io << "  end\n"
+        io << "  def html\n"
+        io << "    %Q{<p>ok</p>}\n"
+        io << "  end\n"
+        io << "end\n"
+      end
+      LintClassVariablesSpecSupport.write(root, "lib/Widget.rb", source)
+      diagnostics = LintClassVariablesSpecSupport.diagnostics(root)
+      diagnostics.size.should eq 1
+      diagnostics.first.message.should eq "component 'widget-card' declares 11 class variables; maximum is 10"
+    end
+  end
+
+  it "counts lifecycle assignments in initialize, mounted, and unmounted" do
+    LintClassVariablesSpecSupport.with_project do |root|
+      source = String.build do |io|
+        io << "class Widget\n"
+        io << "  @tag_name = \"widget-card\"\n"
+        io << "  def initialize\n"
+        4.times { |index| io << "    @init_#{index} = nil\n" }
+        io << "  end\n"
+        io << "  def mounted\n"
+        4.times { |index| io << "    @mounted_#{index} = nil\n" }
+        io << "  end\n"
+        io << "  def unmounted\n"
+        3.times { |index| io << "    @unmounted_#{index} = nil\n" }
+        io << "  end\n"
+        io << "  def html\n"
+        io << "    %Q{<p>ok</p>}\n"
+        io << "  end\n"
+        io << "end\n"
+      end
+      LintClassVariablesSpecSupport.write(root, "lib/Widget.rb", source)
+      diagnostics = LintClassVariablesSpecSupport.diagnostics(root)
+      diagnostics.size.should eq 1
+      diagnostics.first.message.should eq "component 'widget-card' declares 11 class variables; maximum is 10"
+    end
+  end
+
+  it "counts distinct names and ignores tag metadata, method reads, non-lifecycle assignments, props, and nested classes" do
     LintClassVariablesSpecSupport.with_project do |root|
       source = <<-RUBY
         class Widget
           @tag_name = "widget-card"
+          prop :open, Boolean, default: true
           @a = nil
           @a = 1
           9.times { @a = 2 }
           #{"@b = nil\n" * 9}
           def html
-            @method_only = nil
+            @method_only
+            @transient = nil
+            @open = false
             %Q{<p>ok</p>}
           end
 
