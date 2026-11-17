@@ -61,7 +61,7 @@ module LintTemplateBlockLinesSpecSupport
 end
 
 describe Lint::Rules::TemplateBlockLines do
-  it "reports if, unless, and each blocks that open and close on one line" do
+  it "reports if, unless, and each blocks that share a line with their body" do
     LintTemplateBlockLinesSpecSupport.with_project do |root|
       source = <<-RUBY
         class Widget
@@ -87,8 +87,8 @@ describe Lint::Rules::TemplateBlockLines do
       diagnostics.each do |diagnostic|
         diagnostic.rule.should eq Lint::Rules::TemplateBlockLines::RULE
         diagnostic.severity.should eq Lint::Severity::Warning
-        diagnostic.message.should eq "template block opens and closes on the same line"
-        diagnostic.suggestion.should eq "Put the closing {end} on its own line."
+        diagnostic.message.should eq "template block shares a line with block content"
+        diagnostic.suggestion.should eq "Put the opening expression, block body, and closing {end} on separate lines."
       end
     end
   end
@@ -120,6 +120,82 @@ describe Lint::Rules::TemplateBlockLines do
 
       rules = {"style/template-block-lines" => "warning"}
       LintTemplateBlockLinesSpecSupport.diagnostics(root, rules).should be_empty
+    end
+  end
+
+  it "rejects body content on the opening line even when end is on its own line" do
+    LintTemplateBlockLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          @tag_name = "widget"
+          @open = false
+
+          def html
+            %Q{
+              {if @open}<p>Open</p>
+              {end}
+            }
+          end
+        end
+        RUBY
+      LintTemplateBlockLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/template-block-lines" => "warning"}
+      diagnostics = LintTemplateBlockLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 1
+      diagnostics.first.start_line.should eq 7
+    end
+  end
+
+  it "rejects content sharing the closing line with end" do
+    LintTemplateBlockLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          @tag_name = "widget"
+          @open = false
+
+          def html
+            %Q{
+              <th>
+                {if @open}
+                  <p>Open</p>
+                {end}</th>
+            }
+          end
+        end
+        RUBY
+      LintTemplateBlockLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/template-block-lines" => "warning"}
+      diagnostics = LintTemplateBlockLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 1
+      diagnostics.first.start_line.should eq 10
+    end
+  end
+
+  it "rejects branch markers that share a line with branch content" do
+    LintTemplateBlockLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          @tag_name = "widget"
+          @open = false
+
+          def html
+            %Q{
+              {if @open}
+                <p>Open</p>
+              {else}<p>Closed</p>
+              {end}
+            }
+          end
+        end
+        RUBY
+      LintTemplateBlockLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/template-block-lines" => "warning"}
+      diagnostics = LintTemplateBlockLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 1
+      diagnostics.first.start_line.should eq 9
     end
   end
 
@@ -221,7 +297,7 @@ describe Lint::Rules::TemplateBlockLines do
 
       status, output, error = LintTemplateBlockLinesSpecSupport.run_lint(root)
       status.should eq 1
-      output.should contain "lib/Widget.rb:7:7: warning style/template-block-lines: template block opens and closes on the same line"
+      output.should contain "lib/Widget.rb:7:7: warning style/template-block-lines: template block shares a line with block content"
       error.should be_empty
 
       LintTemplateBlockLinesSpecSupport.config(root, {"style/template-block-lines" => "off"})

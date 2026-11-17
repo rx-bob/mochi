@@ -3,15 +3,27 @@ require "../diagnostic"
 require "../project_index"
 
 module Lint::Rules
-  # Rejects inline blocks whose opening expression and matching `end` share a
-  # source line. Attribute-value blocks and HTML comments are skipped because
+  # Rejects block markup that shares a source line with block content. Opening
+  # expressions, branch markers, and the closing `end` must each be alone on
+  # their line. Attribute-value blocks and HTML comments are skipped because
   # they are inline fragments rather than block markup.
   module TemplateBlockLines
     RULE    = "style/template-block-lines"
     OPENERS = Set{"if", "unless", "each", "with"}
     BLOCKS  = Set{"if", "unless", "each"}
 
-    record Block, start : Int32, finish : Int32, kind : String, line : Int32
+    MESSAGE    = "template block shares a line with block content"
+    SUGGESTION = "Put the opening expression, block body, and closing {end} on separate lines."
+
+    class Block
+      getter start : Int32
+      getter finish : Int32
+      getter kind : String
+      property flagged = false
+
+      def initialize(@start, @finish, @kind)
+      end
+    end
 
     def self.diagnostics(index : ProjectIndex) : Array(Diagnostic)
       settings = index.config.settings_for(RULE)
@@ -54,26 +66,22 @@ module Lint::Rules
             next if inside_attribute?(attribute_ranges, start)
 
             if kind = opener_kind(source)
-              line = view.map.position(view.source_byte(start)).line
-              stack << Block.new(start, finish, kind, line)
+              block = Block.new(start, finish, kind)
+              if BLOCKS.includes?(kind) && !alone_on_line?(view, start, finish)
+                block.flagged = true
+                issues << issue(view, start, finish)
+              end
+              stack << block
+            elsif branch_marker?(source)
+              if !stack.empty? && !alone_on_line?(view, start, finish)
+                issues << issue(view, start, finish)
+              end
             elsif source == "end"
               next if stack.empty?
               block = stack.pop
               next unless BLOCKS.includes?(block.kind)
-
-              end_line = view.map.position(view.source_byte(start)).line
-              next unless block.line == end_line
-
-              range = view.source_range(block.start, block.finish)
-              issues << SourceIssue.new(
-                view.unit_path,
-                view.map,
-                range.start_byte,
-                range.end_byte,
-                "template block opens and closes on the same line",
-                RULE,
-                "Put the closing {end} on its own line.",
-              )
+              next if block.flagged
+              issues << issue(view, start, finish) unless alone_on_line?(view, start, finish)
             end
           else
             index += 1
@@ -82,6 +90,34 @@ module Lint::Rules
       end
 
       Diagnostics.sort(issues.map { |issue| issue.diagnostic(severity) })
+    end
+
+    private def self.issue(view : TemplateView, start : Int32, finish : Int32) : SourceIssue
+      range = view.source_range(start, finish)
+      SourceIssue.new(
+        view.unit_path,
+        view.map,
+        range.start_byte,
+        range.end_byte,
+        MESSAGE,
+        RULE,
+        SUGGESTION,
+      )
+    end
+
+    private def self.alone_on_line?(view : TemplateView, start : Int32, finish : Int32) : Bool
+      range = view.source_range(start, finish)
+      line = view.map.position(range.start_byte).line
+      line_start = view.map.line_start(line)
+      line_end = view.map.source.byte_index(10_u8, range.start_byte) || view.map.source.bytesize
+      expression_end = range.end_byte.clamp(range.start_byte, line_end)
+      prefix = view.map.source.byte_slice(line_start, range.start_byte - line_start)
+      suffix = view.map.source.byte_slice(expression_end, line_end - expression_end)
+      whitespace_only?(prefix) && whitespace_only?(suffix)
+    end
+
+    private def self.whitespace_only?(text : String) : Bool
+      text.each_char.all? { |char| char == ' ' || char == '\t' || char == '\r' }
     end
 
     private def self.comment_start?(text : String, index : Int32) : Bool
@@ -97,6 +133,10 @@ module Lint::Rules
         return opener if source.starts_with?("#{opener} ")
       end
       nil
+    end
+
+    private def self.branch_marker?(source : String) : Bool
+      source == "else" || source.starts_with?("elsif ")
     end
   end
 end
