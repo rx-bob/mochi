@@ -475,30 +475,30 @@ class EditableGraphRoot
       <button class="stop-layout" onclick="{stop_layout}">Stop resize observation</button>
       <output class="layout-status">{@layout_status}</output>
       <div class="viewport" ref="viewport" tabindex="0" style="width:400px;height:220px;max-width:100%;display:{@open ? 'block' : 'none'}">
-      {if @open}
-        <svg class="canvas" viewBox="0 0 {@width} {@height}" width="100%" height="100%" role="img" aria-label="Editable workflow" style="touch-action: none;font:14px monospace"
-             onwheel.prevent="{wheel_zoom($event)}" onpointermove="{move_drag($event)}" onpointerup="{finish_drag($event)}"
-             onpointercancel="{finish_drag($event)}" onlostpointercapture="{finish_drag($event)}">
-          <defs><marker id="arrowhead" viewBox="0 0 8 8" refX="{@arrow_size}" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 Z" fill="currentColor"></path></marker></defs>
-          <g class="scene" transform="translate({@offset_x} {@offset_y})">
-            <g class="scaled" transform="scale({@scale})">
-            <g class="edges" fill="none" stroke="currentColor" stroke-width="2">
-              {each rendered_edges as item, key: item["id"]}
-                <path class="edge" data-edge="{item['id']}" d="{item['path']}" marker-end="url(#arrowhead)"></path>
-              {end}
-            </g>
-            <g class="nodes">
-              {each @nodes as node, key: node["id"]}
-                <g class="node" data-node="{node['id']}" onclick="{select_node($event)}" onpointerdown="{start_drag($event)}" transform="translate({node['x']} {node['y']})">
-                  <circle data-part="shape" r="{node['radius']}" fill="white" stroke="currentColor"></circle>
-                  <text data-part="label" x="18" y="4">{node["label"]}</text>
+        {if @open}
+          <svg class="canvas" viewBox="0 0 {@width} {@height}" width="100%" height="100%" role="img" aria-label="Editable workflow" style="touch-action: none;font:14px monospace"
+               onwheel.prevent="{wheel_zoom($event)}" onpointermove="{move_drag($event)}" onpointerup="{finish_drag($event)}"
+               onpointercancel="{finish_drag($event)}" onlostpointercapture="{finish_drag($event)}">
+            <defs><marker id="arrowhead" viewBox="0 0 8 8" refX="{@arrow_size}" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 8 4 L 0 8 Z" fill="currentColor"></path></marker></defs>
+            <g class="scene" transform="translate({@offset_x} {@offset_y})">
+              <g class="scaled" transform="scale({@scale})">
+                <g class="edges" fill="none" stroke="currentColor" stroke-width="2">
+                  {each rendered_edges as item, key: item["id"]}
+                    <path class="edge" data-edge="{item['id']}" d="{item['path']}" marker-end="url(#arrowhead)"></path>
+                  {end}
                 </g>
-              {end}
+                <g class="nodes">
+                  {each @nodes as node, key: node["id"]}
+                    <g class="node" data-node="{node['id']}" onclick="{select_node($event)}" onpointerdown="{start_drag($event)}" transform="translate({node['x']} {node['y']})">
+                      <circle data-part="shape" r="{node['radius']}" fill="white" stroke="currentColor"></circle>
+                      <text data-part="label" x="18" y="4">{node["label"]}</text>
+                    </g>
+                  {end}
+                </g>
+              </g>
             </g>
-            </g>
-          </g>
-        </svg>
-      {end}
+          </svg>
+        {end}
       </div>
       {if !@open}
         <p class="closed">Graph closed</p>

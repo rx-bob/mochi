@@ -181,40 +181,40 @@ class NestedFormRoot
       <output class="last">{@last}</output><output class="events">{@events}</output>
       {if @open}
         <section ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-label="Nested form" tabindex="-1" data-mochi-focus-trap>
-        <p class="quoted-branch {if @quoted["active"]}active{end}" title="{@quoted["label"]}" data-entity="{if @quoted["active"]}&quot; {@quoted["label"]} &amp;{else}none{end}">{@quoted['label']}</p>
-        <div class="groups">
-          {each @groups as group, gi, key: group["id"]}
-            <section class="group" data-group="{group['id']}" data-index="{gi}">
-              <h2>{group["label"]}</h2>
-              {if group["enabled"]}
-                <div class="fields">
-                  {each group["fields"] as item, fi, key: item["id"]}
-                    <div class="field" data-field="{item['id']}" data-index="{fi}" title="{item["label"]}" data-alt=' {item['label']} ' data-literal="{{row}}" data-entity="{if item["help"]}&quot; {item["label"]} &amp;{else}plain{end}">
-                      <field-editor required="{item['help']}" disabled="{item['id'] == 'd'}" on:save="{record_save(group['id'], item['id'], $event)}" on:cancel="{cancel_form($event)}" field_id="{item["id"]}" label="{group["label"]} / {item['label']}" initial_value="{item["value"]}" on:edit="{record_edit(group["id"], item["id"], gi, fi, $event)}"></field-editor>
-                      <button class="quoted-row-event" onclick="{quote_event("#{group["label"]}|#{item["label"]}")}">Read field label</button>
-                      {if item["help"]}
-                        <aside class="help" data-for="{group['id']}:{item['id']}">
-                          <button class="pick" title="{item["label"]}" onclick="{pick(group["id"], item["id"], gi, fi)}">Help {item["label"]}</button>
-                          {if item["invalid"]}
-                            <span class="validation">Check {item["label"]}</span>
-                          {else}
-                            <span class="valid">Ready</span>
-                          {end}
-                        </aside>
-                      {elsif item["invalid"]}
-                        <p class="validation">Required {item["label"]}</p>
-                      {else}
-                        <p class="quiet">Optional {item["label"]}</p>
-                      {end}
-                    </div>
-                  {end}
-                </div>
-              {else}
-                <p class="group-disabled">Disabled {group["label"]}</p>
-              {end}
-            </section>
-          {end}
-        </div>
+          <p class="quoted-branch {if @quoted["active"]}active{end}" title="{@quoted["label"]}" data-entity="{if @quoted["active"]}&quot; {@quoted["label"]} &amp;{else}none{end}">{@quoted['label']}</p>
+          <div class="groups">
+            {each @groups as group, gi, key: group["id"]}
+              <section class="group" data-group="{group['id']}" data-index="{gi}">
+                <h2>{group["label"]}</h2>
+                {if group["enabled"]}
+                  <div class="fields">
+                    {each group["fields"] as item, fi, key: item["id"]}
+                      <div class="field" data-field="{item['id']}" data-index="{fi}" title="{item["label"]}" data-alt=' {item['label']} ' data-literal="{{row}}" data-entity="{if item["help"]}&quot; {item["label"]} &amp;{else}plain{end}">
+                        <field-editor required="{item['help']}" disabled="{item['id'] == 'd'}" on:save="{record_save(group['id'], item['id'], $event)}" on:cancel="{cancel_form($event)}" field_id="{item["id"]}" label="{group["label"]} / {item['label']}" initial_value="{item["value"]}" on:edit="{record_edit(group["id"], item["id"], gi, fi, $event)}"></field-editor>
+                        <button class="quoted-row-event" onclick="{quote_event("#{group["label"]}|#{item["label"]}")}">Read field label</button>
+                        {if item["help"]}
+                          <aside class="help" data-for="{group['id']}:{item['id']}">
+                            <button class="pick" title="{item["label"]}" onclick="{pick(group["id"], item["id"], gi, fi)}">Help {item["label"]}</button>
+                            {if item["invalid"]}
+                              <span class="validation">Check {item["label"]}</span>
+                            {else}
+                              <span class="valid">Ready</span>
+                            {end}
+                          </aside>
+                        {elsif item["invalid"]}
+                          <p class="validation">Required {item["label"]}</p>
+                        {else}
+                          <p class="quiet">Optional {item["label"]}</p>
+                        {end}
+                      </div>
+                    {end}
+                  </div>
+                {else}
+                  <p class="group-disabled">Disabled {group["label"]}</p>
+                {end}
+              </section>
+            {end}
+          </div>
         </section>
       {else}
         <p class="closed">Form closed</p>

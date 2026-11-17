@@ -97,6 +97,7 @@ rules:
   style/css-declaration-lines: warning
   style/template-block-lines: warning
   style/template-element-indent: warning
+  style/template-nesting-indent: warning
   accessibility/control-name: warning
   accessibility/keyboard-activation: warning
   templates/unstable-key: off
@@ -218,6 +219,7 @@ is moved to a different checkout root.
 | `style/css-declaration-lines` | `warning` | none | Component CSS separates declarations from braces and aligns closing braces |
 | `style/template-block-lines` | `warning` | none | Template block markers and body use separate aligned lines |
 | `style/template-element-indent` | `warning` | none | Multi-line template element closing tags align with their opening tags |
+| `style/template-nesting-indent` | `warning` | none | Child template elements and block markers indent one level under their parent |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
 | `metrics/class-variables` | `warning` | `max: 10` | Component classes stay within the configured authored state limit |
@@ -352,6 +354,13 @@ starts at a different column from its opening tag. The opening tag must begin
 its source line; inline elements, void elements, self-closing elements, and
 elements opened partway through a line are ignored. Put the closing tag at the
 same leading indentation as the opening tag. Reports cover the closing tag.
+
+`style/template-nesting-indent` checks line-leading child elements and line-leading
+template block markers. A child element must start at least one level deeper than
+its parent element. A block marker must start at least one level deeper than its
+nearest containing element or block. Inline children and markers that share a
+line with other content are left to the other template style rules. Reports
+cover the child opening tag or block marker.
 
 `metrics/nesting-depth` starts at depth 0 inside a method body and adds one for
 each `if`, `unless`, `case`, `case_match`, `while`, `until`, `for`, `rescue`,

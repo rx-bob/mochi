@@ -47,17 +47,17 @@ class FieldEditor
   def html
     %Q{
       <form onsubmit.prevent="{save}">
-      <label for="draft" class="editor" data-id="{@field_id}">
-        <span class="label">{@label}</span>
-        <input id="draft" class="draft" type="text" required="{@required}" disabled="{@disabled}" aria-invalid="{@invalid}" aria-describedby="validation" bind:value="{@draft}" oninput="{edit}">
-      </label>
-      <span class="mount-count">{@mount_count}</span>
-      <span id="validation" class="draft-validation">{@validation}</span>
-      {if @invalid}
-        <p class="error" role="alert">Please enter {@label}</p>
-      {end}
-      <button tabindex="0" class="save" type="submit" disabled="{@disabled}">Save</button>
-      <button tabindex="0" class="cancel" type="button" onclick="{cancel}">Cancel</button>
+        <label for="draft" class="editor" data-id="{@field_id}">
+          <span class="label">{@label}</span>
+          <input id="draft" class="draft" type="text" required="{@required}" disabled="{@disabled}" aria-invalid="{@invalid}" aria-describedby="validation" bind:value="{@draft}" oninput="{edit}">
+        </label>
+        <span class="mount-count">{@mount_count}</span>
+        <span id="validation" class="draft-validation">{@validation}</span>
+        {if @invalid}
+          <p class="error" role="alert">Please enter {@label}</p>
+        {end}
+        <button tabindex="0" class="save" type="submit" disabled="{@disabled}">Save</button>
+        <button tabindex="0" class="cancel" type="button" onclick="{cancel}">Cancel</button>
       </form>
       <output class="contract">{@required}:{@disabled}</output>
     }

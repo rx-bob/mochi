@@ -158,6 +158,11 @@ module Lint
         RuleLevel::Warning,
         "Template element closing tags align with their opening tags",
       ),
+      "style/template-nesting-indent" => RuleDefinition.new(
+        "style/template-nesting-indent",
+        RuleLevel::Warning,
+        "Child template elements and block markers indent under their parent",
+      ),
       "metrics/nesting-depth" => RuleDefinition.new(
         "metrics/nesting-depth",
         RuleLevel::Warning,
