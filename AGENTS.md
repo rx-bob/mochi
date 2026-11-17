@@ -40,7 +40,7 @@ To build Mochi itself, install these prerequisites:
 git clone https://github.com/yampug/mochi
 cd mochi
 task build
-task install:dev
+task install
 ```
 
 The Crystal compiler emits a `mochi-gvm` bundle: `mochi-gvm.wasm`, `mochi-gvm.js`, `mochi-loader.js`, `mochi-manifest.json`, one `.chi` file and one descriptor JSON file per component, one `.chi` file per Ruby dependency package, and separate files for shared styles and requested icons. It also writes a local adapter for each reachable host capability: formatting, time, network, layout, shortcuts, pointer, drag, files, or download. Pure Ruby/VM capabilities such as JSON need no host adapter. Unused optional packages and adapters are omitted. It does not generate component-specific JavaScript.
@@ -92,21 +92,21 @@ the suite starts.
 
 ### Installing the development command
 
-From the Mochi checkout, run `task install:dev`. This builds the compiler and
+From the Mochi checkout, run `task install`. This builds the compiler and
 installs a checkout-backed `mochi` launcher under `~/.local/bin`, plus a
 resource record under `~/.local/share/mochi`. Set `MOCHI_INSTALL_PREFIX` to use
 another prefix, for example:
 
 ```sh
-MOCHI_INSTALL_PREFIX="$HOME/Tools/mochi dev" task install:dev
+MOCHI_INSTALL_PREFIX="$HOME/Tools/mochi dev" task install
 ```
 
 The installer prints the `PATH` entry to add when needed. It does not edit shell
-startup files. `task install:dev:update` refreshes an owned launcher and record;
-`task install:dev:remove` removes only those owned files. Installer refuses to
-replace an unrelated `mochi` executable. Running `ruby
-scripts/install_dev.rb --prefix PATH` from the checkout offers the same install
-operation.
+startup files. `task install:update` refreshes an owned launcher and record;
+`task install:remove` removes only those owned files. The `install:dev` task
+names remain supported aliases. Installer refuses to replace an unrelated
+`mochi` executable. Running `ruby scripts/install_dev.rb --prefix PATH` from
+the checkout offers the same install operation.
 
 Resource lookup order is explicit environment override, installed resource
 record, then known paths in the Mochi checkout (including its built
@@ -123,6 +123,7 @@ embedded in the runtime against the bundle manifest before runtime
 initialization. See [fixed VM capacities](docs/fixed-capacities.md) for the
 build-time profile format and custom artifact workflow.
 
+* `mochi version` or `mochi --version` prints the compiler version and exits.
 * `mochi --initialize=PROJECT` creates the generated Ruby project.
 * `mochi -i INPUT -o OUTPUT [--typecheck]` builds an application bundle.
 * `mochi lint [-i PROJECT] [--config=PATH] [--format=text|json] [--help]` checks the project's Ruby sources; it exits 0 when clean, 1 for any warning or error, and 2 for invocation, configuration, or I/O failure.

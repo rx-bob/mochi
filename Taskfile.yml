@@ -65,12 +65,27 @@ tasks:
           fi
         fi
 
+  install:
+    desc: Install the mochi command under ~/.local/bin
+    cmds:
+      - task: install:dev
+
   install:dev:
     desc: Install or update a source-checkout-backed mochi launcher under ~/.local
     deps:
       - build
     cmds:
       - ruby scripts/install_dev.rb install
+
+  install:update:
+    desc: Update an existing owned local mochi install
+    cmds:
+      - task: install:dev:update
+
+  install:remove:
+    desc: Remove the owned local mochi install
+    cmds:
+      - task: install:dev:remove
 
   install:dev:update:
     desc: Update an existing owned development launcher and resource record

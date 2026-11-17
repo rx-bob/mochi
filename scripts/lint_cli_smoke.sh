@@ -6,6 +6,9 @@ compiler=${MOCHI_COMPILER:-"$root/compiler/mochi"}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/mochi-lint-cli.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
+test "$("$compiler" version)" = "Mochi v0.3"
+test "$("$compiler" --version)" = "Mochi v0.3"
+
 mkdir -p "$tmp/valid/lib" "$tmp/invalid/lib"
 cat > "$tmp/valid/lib/Widget.rb" <<'RUBY'
 class Widget

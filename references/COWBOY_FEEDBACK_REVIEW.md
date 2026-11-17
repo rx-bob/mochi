@@ -74,7 +74,7 @@ Thus adding a template binding can trigger failure without adding an authored me
 ## Other feedback dispositions
 
 - Compiler 5: Integer division is deliberate Ruby behavior; integer operands do not imply floating-point division in MRI either.
-- Compiler 9: missing `mochi` on PATH is installation state. Mochi already has `task install:dev`; no product-specific absolute-path requirement follows.
+- Compiler 9: missing `mochi` on PATH is installation state. Mochi already has `task install`; no product-specific absolute-path requirement follows.
 - Components 3: shadow style isolation and host sizing are intended. Shared CSS imports are the existing Ruby-authored reuse mechanism.
 - Runtime 3: explicit locale/timezone defaults are intentional. The documented Time subset lacks general calendar/strftime/ISO serialization; that convenience gap is separate from timestamp formatting correctness.
 - Testing 5/7: geometry checks and worst-case data are useful methods, not independent framework defects. Cowboy's manual geometry notes do not replace automated interaction or lifecycle coverage.

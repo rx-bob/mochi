@@ -6,7 +6,7 @@ application JavaScript or manual capability script tags are needed.
 
 ## Set up the development command
 
-From a Mochi checkout, run `task install:dev`. The installer prints the `PATH`
+From a Mochi checkout, run `task install`. The installer prints the `PATH`
 entry to add; it does not edit shell startup files. See the
 [install and resource lookup reference](../AGENTS.md#installing-the-development-command)
 for custom prefixes, update/removal, and runtime resource discovery.

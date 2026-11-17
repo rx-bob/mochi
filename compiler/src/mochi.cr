@@ -27,6 +27,8 @@ require "./tooling/dev_server"
 require "./tooling/ruby_test_runner"
 require "./tooling/lint_runner"
 
+MOCHI_VERSION = "0.3"
+
 if ARGV.first? == "lint"
   exit LintRunner.new.run(ARGV[1..])
 end
@@ -144,6 +146,16 @@ OptionParser.parse do |p|
     exit
   end
 
+  p.on("-v", "--version", "Show the Mochi version") do
+    puts "Mochi v#{MOCHI_VERSION}"
+    exit 0
+  end
+
+  p.on("version", "Show the Mochi version") do
+    puts "Mochi v#{MOCHI_VERSION}"
+    exit 0
+  end
+
   p.on("--dev", desc_dev_server) do
     is_dev_server = true
   end
@@ -200,7 +212,7 @@ else
     exit 0
   end
 
-  puts "Mochi v0.3"
+  puts "Mochi v#{MOCHI_VERSION}"
   if !project_name.empty?
     Initializer.new(project_name)
   else

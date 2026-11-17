@@ -30,7 +30,7 @@ for details.
 ```sh
 git clone https://github.com/yampug/mochi
 cd mochi
-task install:dev
+task install
 # Add the printed ~/.local/bin path to PATH if needed.
 
 # Install browser test dependencies once, from the Mochi checkout.

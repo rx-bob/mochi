@@ -110,7 +110,7 @@ class InstallationPaths
     compiler = required_path("MOCHI_COMPILER", "compiler", [File.join(@development_root, "compiler", "mochi")], executable: true)
     required_path("MRBC", "mrbc", mrbc_defaults, executable: true)
     wasm_path = required_path("MOCHI_GVM_WASM", "gvm_wasm", wasm_defaults)
-    js_path = js || raise(setup_error("required runtime JS not found; set MOCHI_GVM_JS or run `task install:dev`"))
+    js_path = js || raise(setup_error("required runtime JS not found; set MOCHI_GVM_JS or run `task install`"))
     loader_path = required_path("MOCHI_LOADER", "loader", [File.join(@development_root, "runtime", "mochi-loader.js")])
 
     wasm = File.read(wasm_path)
@@ -129,7 +129,7 @@ class InstallationPaths
       raise setup_error("#{loader_path} does not support bundle schema #{MANIFEST_SCHEMA}; update Mochi runtime resources")
     end
     unless compiler
-      raise setup_error("compiler resource is missing; run `task build` or `task install:dev`")
+      raise setup_error("compiler resource is missing; run `task build` or `task install`")
     end
     validate_record_identity!({compiler, wasm_path, js_path})
   end
@@ -139,7 +139,7 @@ class InstallationPaths
     hosts.each do |host|
       environment_key = host == "mochi-format.js" ? "MOCHI_FORMAT_HOST" : "MOCHI_HOST_ADAPTER_#{File.basename(host).upcase.gsub(/[^A-Z0-9]/, "_")}"
       defaults = [File.join(@development_root, "runtime", File.basename(host))]
-      resolve(environment_key, "", defaults) || raise(setup_error("host adapter '#{host}' missing; set #{environment_key} or rerun `task install:dev`"))
+      resolve(environment_key, "", defaults) || raise(setup_error("host adapter '#{host}' missing; set #{environment_key} or rerun `task install`"))
     end
   end
 
@@ -217,7 +217,7 @@ class InstallationPaths
                  "development checkout #{@development_root}"
                end
     raise setup_error(
-      "required resource '#{record_key}' not found from #{location}; set #{environment_key} or run `task install:dev`"
+      "required resource '#{record_key}' not found from #{location}; set #{environment_key} or run `task install`"
     )
   end
 
@@ -258,7 +258,7 @@ class InstallationPaths
 
     expected = executable ? "executable file" : directory ? "directory" : "file"
     detail = executable ? " (check execute permission)" : ""
-    raise setup_error("#{source} points to missing #{expected} #{expanded}#{detail}; correct the override or rerun `task install:dev`")
+    raise setup_error("#{source} points to missing #{expected} #{expanded}#{detail}; correct the override or rerun `task install`")
   end
 
   private def valid_path?(path : String, executable : Bool, directory : Bool) : Bool
@@ -271,16 +271,16 @@ class InstallationPaths
     return nil unless path
     expanded = File.expand_path(path)
     unless File.file?(expanded)
-      raise setup_error("MOCHI_INSTALL_RECORD points to missing file #{expanded}; reinstall with `task install:dev`")
+      raise setup_error("MOCHI_INSTALL_RECORD points to missing file #{expanded}; reinstall with `task install`")
     end
     parsed = begin
       JSON.parse(File.read(expanded)).as_h
     rescue ex
-      raise setup_error("invalid installation record #{expanded}: #{ex.message}; rerun `task install:dev`")
+      raise setup_error("invalid installation record #{expanded}: #{ex.message}; rerun `task install`")
     end
     version = parsed["schema_version"]?.try(&.as_i?)
     unless version == RECORD_SCHEMA_VERSION
-      raise setup_error("installation record #{expanded} uses schema #{version || "unknown"}; rerun `task install:dev`")
+      raise setup_error("installation record #{expanded} uses schema #{version || "unknown"}; rerun `task install`")
     end
     @record_path = expanded
     parsed
@@ -292,7 +292,7 @@ class InstallationPaths
     return nil if value.raw.nil?
     value.as_s
   rescue
-    raise setup_error("installation record #{@record_path} has invalid '#{key}' path; rerun `task install:dev`")
+    raise setup_error("installation record #{@record_path} has invalid '#{key}' path; rerun `task install`")
   end
 
   private def recorded_host_adapter(host : String) : String?
@@ -303,7 +303,7 @@ class InstallationPaths
     return nil if value.raw.nil?
     value.as_s
   rescue
-    raise setup_error("installation record #{@record_path} has invalid host adapter '#{host}'; rerun `task install:dev`")
+    raise setup_error("installation record #{@record_path} has invalid host adapter '#{host}'; rerun `task install`")
   end
 
   private def validate_record_identity!(paths : Tuple(String, String, String)) : Nil
@@ -311,20 +311,20 @@ class InstallationPaths
 
     owner = record_value("owner")
     unless owner == "mochi-development-install"
-      raise setup_error("installation record owner is missing or invalid; reinstall with `task install:dev`")
+      raise setup_error("installation record owner is missing or invalid; reinstall with `task install`")
     end
     profile = record_value("runtime_profile")
     unless profile == "default"
-      raise setup_error("installation record is missing a supported runtime profile; rerun `task install:dev:update`") if profile.nil?
+      raise setup_error("installation record is missing a supported runtime profile; rerun `task install:update`") if profile.nil?
       raise setup_error("installed runtime profile '#{profile}' is not supported by this compiler; rebuild and reinstall matching Mochi runtime artifacts")
     end
     fingerprint = record_value("capacity_fingerprint")
     unless fingerprint == CapacityConfig.default.fingerprint
-      raise setup_error("installed capacity fingerprint #{fingerprint || "missing"} does not match the default compiler profile; run `task install:dev:update`")
+      raise setup_error("installed capacity fingerprint #{fingerprint || "missing"} does not match the default compiler profile; run `task install:update`")
     end
     schema = @record.not_nil!["manifest_schema"]?.try(&.as_i?)
     unless schema == MANIFEST_SCHEMA
-      raise setup_error("installed compiler/runtime manifest schema #{schema || "missing"} does not match #{MANIFEST_SCHEMA}; run `task build` and `task install:dev:update`")
+      raise setup_error("installed compiler/runtime manifest schema #{schema || "missing"} does not match #{MANIFEST_SCHEMA}; run `task build` and `task install:update`")
     end
 
     identities = [
@@ -335,14 +335,14 @@ class InstallationPaths
     ]
     identities.each do |path, key|
       expected = record_value(key)
-      raise setup_error("installation record is missing #{key}; rerun `task install:dev:update`") unless expected
+      raise setup_error("installation record is missing #{key}; rerun `task install:update`") unless expected
       unless expected.matches?(/\A[0-9a-f]{64}\z/)
-        raise setup_error("installation record has invalid #{key}; rerun `task install:dev:update`")
+        raise setup_error("installation record has invalid #{key}; rerun `task install:update`")
       end
       actual = Digest::SHA256.hexdigest(File.read(path))
       next if actual == expected
       label = key.sub("_sha256", "")
-      raise setup_error("#{label} does not match installed runtime identity; update the matching artifacts and run `task install:dev:update`")
+      raise setup_error("#{label} does not match installed runtime identity; update the matching artifacts and run `task install:update`")
     end
   end
 

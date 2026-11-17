@@ -463,7 +463,7 @@ class MrbcCompiler
   end
 
   private def resolved_mrbc_path : String
-    @mrbc_path || InstallationPaths.new.mrbc || raise "Mochi setup: mrbc not found; set MRBC or run `task install:dev`"
+    @mrbc_path || InstallationPaths.new.mrbc || raise "Mochi setup: mrbc not found; set MRBC or run `task install`"
   end
 
   private def resolved_wasm_source : String?
