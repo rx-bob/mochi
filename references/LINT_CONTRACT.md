@@ -216,7 +216,7 @@ is moved to a different checkout root.
 | `metrics/html-method-length` | `warning` | `max: 50` | Component `html` methods stay within the configured line limit |
 | `metrics/line-length` | `off` | `max: 120` | Ruby method lines stay within the configured character width |
 | `style/css-declaration-lines` | `warning` | none | Component CSS separates declarations from braces and aligns closing braces |
-| `style/template-block-lines` | `warning` | none | Template block markers and content use separate aligned lines |
+| `style/template-block-lines` | `warning` | none | Template block markers and body use separate aligned lines |
 | `style/template-element-indent` | `warning` | none | Multi-line template element closing tags align with their opening tags |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
@@ -340,11 +340,12 @@ cover the offending source line.
 block when its opening expression, body, branch marker, or matching `{end}`
 shares a source line. Put the opening expression on its own line, put the block
 body on following lines, and put `{else}`, `{elsif}`, and the closing `{end}` on
-their own lines. Closing markers must align with the opening expression's
-column. A line containing only indentation and the block marker is valid.
-Blocks inside an attribute value and literal examples inside HTML comments are
-ignored because they are inline fragments rather than block markup. Nested
-blocks are matched by their own `{end}`.
+their own lines. Block body lines must be indented at least one level past
+the opening expression, and closing markers must align with the opening
+expression's column. A line containing only indentation and the block marker is
+valid. Blocks inside an attribute value and literal examples inside HTML
+comments are ignored because they are inline fragments rather than block
+markup. Nested blocks are matched by their own `{end}`.
 
 `style/template-element-indent` reports a multi-line element whose closing tag
 starts at a different column from its opening tag. The opening tag must begin

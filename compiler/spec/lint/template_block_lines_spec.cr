@@ -199,6 +199,34 @@ describe Lint::Rules::TemplateBlockLines do
     end
   end
 
+  it "rejects block body that is not indented past its opening expression" do
+    LintTemplateBlockLinesSpecSupport.with_project do |root|
+      source = <<-RUBY
+        class Widget
+          @tag_name = "widget"
+          @open = false
+
+          def html
+            %Q{
+              {if @open}
+              <p>Open</p>
+              {end}
+            }
+          end
+        end
+        RUBY
+      LintTemplateBlockLinesSpecSupport.write(root, "lib/Widget.rb", source)
+
+      rules = {"style/template-block-lines" => "warning"}
+      diagnostics = LintTemplateBlockLinesSpecSupport.diagnostics(root, rules)
+      diagnostics.size.should eq 1
+      diagnostic = diagnostics.first
+      diagnostic.start_line.should eq 8
+      diagnostic.message.should eq "template block body is not indented relative to its marker"
+      diagnostic.suggestion.should eq "Indent the block body one level deeper than the opening expression."
+    end
+  end
+
   it "rejects closing end that is not aligned with the opening expression" do
     LintTemplateBlockLinesSpecSupport.with_project do |root|
       source = <<-RUBY

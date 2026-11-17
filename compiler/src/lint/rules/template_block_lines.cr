@@ -17,15 +17,18 @@ module Lint::Rules
     SUGGESTION        = "Put the opening expression, block body, and closing {end} on separate lines."
     INDENT_MESSAGE    = "template block marker indentation does not match its opening expression"
     INDENT_SUGGESTION = "Align the block marker with the opening expression."
+    BODY_MESSAGE      = "template block body is not indented relative to its marker"
+    BODY_SUGGESTION   = "Indent the block body one level deeper than the opening expression."
 
     class Block
       getter start : Int32
       getter finish : Int32
       getter kind : String
       getter column : Int32
+      getter line : Int32
       property flagged = false
 
-      def initialize(@start, @finish, @kind, @column)
+      def initialize(@start, @finish, @kind, @column, @line)
       end
     end
 
@@ -70,7 +73,9 @@ module Lint::Rules
             next if inside_attribute?(attribute_ranges, start)
 
             if kind = opener_kind(source)
-              block = Block.new(start, finish, kind, column(view, start, finish))
+              range = view.source_range(start, finish)
+              position = view.map.position(range.start_byte)
+              block = Block.new(start, finish, kind, position.column, position.line)
               if BLOCKS.includes?(kind) && !alone_on_line?(view, start, finish)
                 block.flagged = true
                 issues << issue(view, start, finish)
@@ -95,6 +100,9 @@ module Lint::Rules
                 issues << issue(view, start, finish)
               elsif column(view, start, finish) != block.column
                 issues << issue(view, start, finish, INDENT_MESSAGE, INDENT_SUGGESTION)
+              end
+              if body_issue = body_indent_issue(view, block, start)
+                issues << body_issue
               end
             end
           else
@@ -127,6 +135,46 @@ module Lint::Rules
 
     private def self.column(view : TemplateView, start : Int32, finish : Int32) : Int32
       view.map.position(view.source_range(start, finish).start_byte).column
+    end
+
+    private def self.body_indent_issue(view : TemplateView, block : Block, end_start : Int32) : SourceIssue?
+      end_line = view.map.position(view.source_byte(end_start)).line
+      minimum = block.column + 2
+      line = block.line + 1
+
+      while line < end_line
+        line_start = view.map.line_start(line)
+        line_end = view.map.source.byte_index(10_u8, line_start) || view.map.source.bytesize
+        content_start = line_start
+        while content_start < line_end
+          byte = view.map.source.byte_at(content_start)
+          break unless byte == 32_u8 || byte == 9_u8 || byte == 13_u8
+          content_start += 1
+        end
+        line += 1
+        next if content_start >= line_end
+
+        content = view.map.source.byte_slice(content_start, line_end - content_start)
+        next if marker_line?(content)
+        next if view.map.position(content_start).column >= minimum
+
+        range = view.map.range(content_start, line_end)
+        return SourceIssue.new(
+          view.unit_path,
+          view.map,
+          range.start_byte,
+          range.end_byte,
+          BODY_MESSAGE,
+          RULE,
+          BODY_SUGGESTION,
+        )
+      end
+
+      nil
+    end
+
+    private def self.marker_line?(text : String) : Bool
+      text.starts_with?("{end}") || text.starts_with?("{else}") || text.starts_with?("{elsif ")
     end
 
     private def self.alone_on_line?(view : TemplateView, start : Int32, finish : Int32) : Bool
