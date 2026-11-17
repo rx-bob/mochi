@@ -15,6 +15,7 @@ require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
 require "../lint/rules/html_method_length"
 require "../lint/rules/line_length"
+require "../lint/rules/method_missing"
 require "../lint/rules/method_length"
 require "../lint/rules/money_advice"
 require "../lint/rules/nesting_depth"
@@ -61,6 +62,7 @@ class LintRunner
         raw_diagnostics =
           index.diagnostics +
           Lint::Rules::Handlers.diagnostics(index) +
+          Lint::Rules::MethodMissing.diagnostics(index) +
           Lint::Rules::ComponentMethods.diagnostics(index) +
           Lint::Rules::ClassVariables.diagnostics(index) +
           Lint::Rules::MethodLength.diagnostics(index) +

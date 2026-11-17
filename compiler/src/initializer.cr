@@ -70,6 +70,7 @@ class Initializer
     # intentional.
     rules:
       correctness/unknown-handler: error
+      correctness/method-missing: error
       correctness/timer-callback: error
       correctness/child-props: error
       correctness/event-payload: error

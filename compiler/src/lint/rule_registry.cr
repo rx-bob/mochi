@@ -100,6 +100,11 @@ module Lint
         RuleLevel::Error,
         "Template event handlers resolve to component methods",
       ),
+      "correctness/method-missing" => RuleDefinition.new(
+        "correctness/method-missing",
+        RuleLevel::Error,
+        "Components define methods explicitly instead of catching missing calls",
+      ),
       "correctness/timer-callback" => RuleDefinition.new(
         "correctness/timer-callback",
         RuleLevel::Error,

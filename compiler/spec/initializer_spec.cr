@@ -30,6 +30,7 @@ describe Initializer do
       taskfile.should contain("mochi -i \"./\" -o \"./build\"")
       lint_config.should contain("version: 1")
       lint_config.should contain(%(include:\n  - "lib/**/*.rb"))
+      lint_config.should contain("correctness/method-missing: error")
       lint_config.should contain("metrics/method-length:")
       lint_config.should contain("max: 60")
       lint_config.should contain("metrics/html-method-length:")

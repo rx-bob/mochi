@@ -70,6 +70,7 @@ include:
   - "lib/**/*.rb"
 rules:
   correctness/unknown-handler: error
+  correctness/method-missing: error
   correctness/timer-callback: error
   correctness/child-props: error
   correctness/event-payload: error
@@ -204,6 +205,7 @@ is moved to a different checkout root.
 | `analysis/limitation` | `error` | none, always on | Source lint cannot analyze exactly |
 | `lint/suppression` | `error` | none, always on | Suppression directives are valid, narrow, and still used |
 | `correctness/unknown-handler` | `error` | none | Template event handlers resolve to component methods |
+| `correctness/method-missing` | `error` | none | Components define methods explicitly instead of catching missing calls |
 | `correctness/timer-callback` | `error` | none | Literal `Mochi.after` and `Mochi.every` callbacks use valid methods and delays |
 | `correctness/child-props` | `error` | none | Child component attributes match declared prop contracts |
 | `correctness/event-payload` | `error` | none | Declared child event payloads and `on:` connections match schemas |
@@ -246,6 +248,14 @@ declared props, attribute readers, and known ancestors. The rule reports only
 when that inventory is closed. Dynamic receivers, row-local names, event
 argument placeholders, and unresolved ancestors or open classes remain
 unknown.
+
+`correctness/method-missing` reports direct `method_missing` and
+`respond_to_missing?` definitions on component classes in selected source.
+These hooks make arbitrary missing calls look supported and can hide template
+handler or binding mistakes from the explicit method inventory. Define each
+delegated method explicitly or call a named Ruby helper. Non-component classes,
+singleton hooks, and dynamic definitions reached through `define_method` are
+outside this rule's proof.
 
 `correctness/timer-callback` examines `Mochi.after` and `Mochi.every` calls in
 selected instance methods. A literal String or Symbol callback must be
