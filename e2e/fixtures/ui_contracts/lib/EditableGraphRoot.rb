@@ -1,3 +1,4 @@
+# mochi-lint: disable-next metrics/class-variables -- fixture keeps complete graph interaction state in one component to prove drag, zoom, undo, and keyed SVG behavior
 class EditableGraphRoot
   @tag_name = "editable-graph-root"
   prop :open, Boolean, default: true

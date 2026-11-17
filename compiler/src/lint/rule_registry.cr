@@ -155,6 +155,12 @@ module Lint
         "Components stay within the configured authored method limit",
         {"max" => RuleOption.new("max", 40)},
       ),
+      "metrics/class-variables" => RuleDefinition.new(
+        "metrics/class-variables",
+        RuleLevel::Warning,
+        "Component classes stay within the configured authored state limit",
+        {"max" => RuleOption.new("max", 10)},
+      ),
       "accessibility/control-name" => RuleDefinition.new(
         "accessibility/control-name",
         RuleLevel::Warning,

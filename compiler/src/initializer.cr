@@ -66,7 +66,8 @@ class Initializer
 
     # These are the standard Mochi defaults, plus the opt-in line-length rule
     # enabled for new projects. Adjust the limits or severities when wider
-    # lines, longer html methods, or packed CSS declarations are intentional.
+    # lines, longer html methods, more component state, or packed CSS
+    # declarations are intentional.
     rules:
       correctness/unknown-handler: error
       correctness/timer-callback: error
@@ -89,6 +90,9 @@ class Initializer
       metrics/component-methods:
         severity: warning
         max: 40
+      metrics/class-variables:
+        severity: warning
+        max: 10
       accessibility/control-name: warning
       accessibility/keyboard-activation: warning
       templates/unstable-key: off

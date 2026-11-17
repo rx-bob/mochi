@@ -87,6 +87,9 @@ rules:
   metrics/component-methods:
     severity: warning
     max: 40
+  metrics/class-variables:
+    severity: warning
+    max: 10
   style/css-declaration-lines: warning
   accessibility/control-name: warning
   accessibility/keyboard-activation: warning
@@ -208,6 +211,7 @@ is moved to a different checkout root.
 | `style/css-declaration-lines` | `warning` | none | Component CSS separates declarations from braces and aligns closing braces |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
+| `metrics/class-variables` | `warning` | `max: 10` | Component classes stay within the configured authored state limit |
 | `accessibility/control-name` | `warning` | none | Interactive controls have an accessible name |
 | `accessibility/keyboard-activation` | `warning` | none | Custom button roles provide local keyboard activation |
 | `templates/unstable-key` | `off` | none | Lists use stable row identity when reordering is visible |
@@ -331,6 +335,14 @@ tag name, or the first declaration when no declaration supplies one, when the
 count is greater than `max`. Methods declared in a supporting file reached by
 `require` or `require_relative` still contribute to the component total; only
 the report location is limited to selected target files.
+
+`metrics/class-variables` counts distinct `@name` declarations in a component's
+class body, excluding the framework `@tag_name`. A variable counts once even
+when several declarations assign or read it, and reopened class declarations
+share one set. Variables used only inside methods, nested classes, or singleton
+classes do not count. The rule reports once at a selected class declaration
+when the count is greater than `max`. Prop declarations are not class-body
+variables; a prop's `@name` access inside a method does not add to the count.
 
 ### Accessibility
 

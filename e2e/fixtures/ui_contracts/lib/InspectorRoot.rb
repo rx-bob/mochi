@@ -1,5 +1,6 @@
 require 'json'
 
+# mochi-lint: disable-next metrics/class-variables -- fixture keeps the full inspector state in one component to prove paging, filtering, and download behavior
 class InspectorRoot
   @tag_name = "inspector-root"
   @records
