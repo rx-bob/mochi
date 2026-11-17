@@ -450,6 +450,7 @@ class EditableGraphRoot
     @open = !@open
   end
 
+  # mochi-lint: disable-next metrics/html-method-length -- fixture keeps the complete interactive graph markup in one component to prove nested keyed SVG behavior
   def html
     %Q{
       <h1>Editable graph</h1>

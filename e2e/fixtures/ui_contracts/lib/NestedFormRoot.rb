@@ -161,6 +161,7 @@ class NestedFormRoot
     @last = value
   end
 
+  # mochi-lint: disable-next metrics/html-method-length -- fixture keeps the complete nested form markup in one component to prove keyed row identity and focus behavior
   def html
     %Q{
       <h1>Nested form</h1>

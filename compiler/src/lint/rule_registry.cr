@@ -126,6 +126,12 @@ module Lint
         "Ruby method bodies stay within the configured line limit",
         {"max" => RuleOption.new("max", 60)},
       ),
+      "metrics/html-method-length" => RuleDefinition.new(
+        "metrics/html-method-length",
+        RuleLevel::Warning,
+        "Component html methods stay within the configured line limit",
+        {"max" => RuleOption.new("max", 50)},
+      ),
       "metrics/line-length" => RuleDefinition.new(
         "metrics/line-length",
         RuleLevel::Off,

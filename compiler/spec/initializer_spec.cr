@@ -32,6 +32,8 @@ describe Initializer do
       lint_config.should contain(%(include:\n  - "lib/**/*.rb"))
       lint_config.should contain("metrics/method-length:")
       lint_config.should contain("max: 60")
+      lint_config.should contain("metrics/html-method-length:")
+      lint_config.should contain("max: 50")
       lint_config.should contain("metrics/line-length:")
       lint_config.should contain("max: 120")
       lint_config.should contain("style/css-declaration-lines: warning")

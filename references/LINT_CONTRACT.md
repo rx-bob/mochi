@@ -77,6 +77,9 @@ rules:
   metrics/method-length:
     severity: warning
     max: 60
+  metrics/html-method-length:
+    severity: warning
+    max: 50
   metrics/line-length: off
   metrics/nesting-depth:
     severity: warning
@@ -200,6 +203,7 @@ is moved to a different checkout root.
 | `correctness/event-payload` | `error` | none | Declared child event payloads and `on:` connections match schemas |
 | `components/prop-write` | `warning` | none | Declared props remain read-only input snapshots |
 | `metrics/method-length` | `warning` | `max: 60` | Ruby method bodies stay within the configured line limit |
+| `metrics/html-method-length` | `warning` | `max: 50` | Component `html` methods stay within the configured line limit |
 | `metrics/line-length` | `off` | `max: 120` | Ruby method lines stay within the configured character width |
 | `style/css-declaration-lines` | `warning` | none | Component CSS separates declarations from braces and aligns closing braces |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
@@ -280,6 +284,14 @@ counted. Embedded HTML, CSS, and data therefore do not inflate Ruby logic. A
 single-line method with a body counts as one. Instance and singleton methods in
 selected source are inspected. A method is reported when that count is greater
 than `max`.
+
+`metrics/html-method-length` counts the physical lines of each `html` method
+on a component class, from the `def html` line through its matching `end`,
+inclusive. Embedded template rows count toward the total. A method is reported
+when that count is greater than `max`. Only instance `html` methods declared in
+selected source are checked; non-component classes and singleton `html`
+helpers are skipped. The diagnostic covers the method definition, so a method
+directive suppresses every report for that `html` method.
 
 `metrics/line-length` is an opt-in style rule, off by default. When enabled, it
 checks every line of selected methods, including their signatures, comments, and

@@ -12,6 +12,7 @@ require "../lint/rules/component_methods"
 require "../lint/rules/css_declaration_lines"
 require "../lint/rules/event_payloads"
 require "../lint/rules/handlers"
+require "../lint/rules/html_method_length"
 require "../lint/rules/line_length"
 require "../lint/rules/method_length"
 require "../lint/rules/money_advice"
@@ -60,6 +61,7 @@ class LintRunner
           Lint::Rules::Handlers.diagnostics(index) +
           Lint::Rules::ComponentMethods.diagnostics(index) +
           Lint::Rules::MethodLength.diagnostics(index) +
+          Lint::Rules::HtmlMethodLength.diagnostics(index) +
           Lint::Rules::LineLength.diagnostics(index) +
           Lint::Rules::CssDeclarationLines.diagnostics(index) +
           Lint::Rules::NestingDepth.diagnostics(index) +

@@ -66,7 +66,7 @@ class Initializer
 
     # These are the standard Mochi defaults, plus the opt-in line-length rule
     # enabled for new projects. Adjust the limits or severities when wider
-    # lines or packed CSS declarations are intentional.
+    # lines, longer html methods, or packed CSS declarations are intentional.
     rules:
       correctness/unknown-handler: error
       correctness/timer-callback: error
@@ -76,6 +76,9 @@ class Initializer
       metrics/method-length:
         severity: warning
         max: 60
+      metrics/html-method-length:
+        severity: warning
+        max: 50
       metrics/line-length:
         severity: warning
         max: 120
