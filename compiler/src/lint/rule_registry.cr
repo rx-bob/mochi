@@ -148,6 +148,11 @@ module Lint
         RuleLevel::Warning,
         "Component CSS separates declarations from braces and aligns closing braces",
       ),
+      "style/template-block-lines" => RuleDefinition.new(
+        "style/template-block-lines",
+        RuleLevel::Warning,
+        "Template blocks put their closing end on a separate line",
+      ),
       "metrics/nesting-depth" => RuleDefinition.new(
         "metrics/nesting-depth",
         RuleLevel::Warning,

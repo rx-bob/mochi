@@ -95,6 +95,7 @@ rules:
     severity: warning
     max: 10
   style/css-declaration-lines: warning
+  style/template-block-lines: warning
   accessibility/control-name: warning
   accessibility/keyboard-activation: warning
   templates/unstable-key: off
@@ -214,6 +215,7 @@ is moved to a different checkout root.
 | `metrics/html-method-length` | `warning` | `max: 50` | Component `html` methods stay within the configured line limit |
 | `metrics/line-length` | `off` | `max: 120` | Ruby method lines stay within the configured character width |
 | `style/css-declaration-lines` | `warning` | none | Component CSS separates declarations from braces and aligns closing braces |
+| `style/template-block-lines` | `warning` | none | Template `if`, `unless`, and `each` blocks close on a separate line |
 | `metrics/nesting-depth` | `warning` | `max: 4` | Ruby method logic stays within the configured nesting limit |
 | `metrics/component-methods` | `warning` | `max: 40` | Components stay within the configured authored method limit |
 | `metrics/class-variables` | `warning` | `max: 10` | Component classes stay within the configured authored state limit |
@@ -331,6 +333,13 @@ comments, `url(...)`, brackets, and Ruby interpolation do not count. Top-level
 without a trailing semicolon is counted on its own start line. The rule does not
 run when `css` returns computed text instead of one literal string. Reports
 cover the offending source line.
+
+`style/template-block-lines` reports a template `if`, `unless`, or `each` block
+whose opening expression and matching `{end}` are on the same source line. Put
+the block body between them and move the closing `{end}` to its own line.
+Blocks inside an attribute value and literal examples inside HTML comments are
+ignored because they are inline fragments rather than block markup. Nested
+blocks are matched by their own `{end}`.
 
 `metrics/nesting-depth` starts at depth 0 inside a method body and adds one for
 each `if`, `unless`, `case`, `case_match`, `while`, `until`, `for`, `rescue`,

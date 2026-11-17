@@ -195,7 +195,11 @@ class NestedFormRoot
                       {if item["help"]}
                         <aside class="help" data-for="{group['id']}:{item['id']}">
                           <button class="pick" title="{item["label"]}" onclick="{pick(group["id"], item["id"], gi, fi)}">Help {item["label"]}</button>
-                          {if item["invalid"]}<span class="validation">Check {item["label"]}</span>{else}<span class="valid">Ready</span>{end}
+                          {if item["invalid"]}
+                            <span class="validation">Check {item["label"]}</span>
+                          {else}
+                            <span class="valid">Ready</span>
+                          {end}
                         </aside>
                       {elsif item["invalid"]}
                         <p class="validation">Required {item["label"]}</p>

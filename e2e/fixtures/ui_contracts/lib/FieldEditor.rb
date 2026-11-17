@@ -53,7 +53,9 @@ class FieldEditor
       </label>
       <span class="mount-count">{@mount_count}</span>
       <span id="validation" class="draft-validation">{@validation}</span>
-      {if @invalid}<p class="error" role="alert">Please enter {@label}</p>{end}
+      {if @invalid}
+        <p class="error" role="alert">Please enter {@label}</p>
+      {end}
       <button tabindex="0" class="save" type="submit" disabled="{@disabled}">Save</button>
       <button tabindex="0" class="cancel" type="button" onclick="{cancel}">Cancel</button>
       </form>

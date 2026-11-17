@@ -42,6 +42,7 @@ describe Initializer do
       lint_config.should contain("structure/package-files:")
       lint_config.should contain("max: 10")
       lint_config.should contain("style/css-declaration-lines: warning")
+      lint_config.should contain("style/template-block-lines: warning")
       index.should contain("mochi-loader.js")
       index.should contain(%(data-mochi-manifest="./mochi-manifest.json"))
       index.should contain(%(<base href="/">))

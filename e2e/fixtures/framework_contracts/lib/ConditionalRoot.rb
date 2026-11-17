@@ -19,7 +19,11 @@ class ConditionalRoot
       {if @open}
         <button class="toggle" onclick="{toggle}">Toggle</button>
         <p class="visible">Visible</p>
-        {if @nested}<span class="nested">Nested</span>{else}<span class="nested">Plain</span>{end}
+        {if @nested}
+          <span class="nested">Nested</span>
+        {else}
+          <span class="nested">Plain</span>
+        {end}
       {else}
         <button class="toggle" onclick="{toggle}">Toggle</button>
         <p class="hidden">Hidden</p>
@@ -38,6 +42,12 @@ class InitiallyOpenConditional
   end
 
   def html
-    %Q{  {if @open}<p class="visible">Initially visible</p>{else}<p class="hidden">Hidden</p>{end}  }
+    %Q{
+      {if @open}
+        <p class="visible">Initially visible</p>
+      {else}
+        <p class="hidden">Hidden</p>
+      {end}
+    }
   end
 end

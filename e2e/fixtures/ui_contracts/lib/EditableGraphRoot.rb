@@ -500,7 +500,9 @@ class EditableGraphRoot
         </svg>
       {end}
       </div>
-      {if !@open}<p class="closed">Graph closed</p>{end}
+      {if !@open}
+        <p class="closed">Graph closed</p>
+      {end}
     }
   end
 end

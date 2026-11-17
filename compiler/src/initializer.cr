@@ -85,6 +85,7 @@ class Initializer
         severity: warning
         max: 120
       style/css-declaration-lines: warning
+      style/template-block-lines: warning
       metrics/nesting-depth:
         severity: warning
         max: 4

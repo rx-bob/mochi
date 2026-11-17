@@ -50,7 +50,11 @@ class DialogRecipeRoot
   def html
     %Q{
       <h1>Dialog recipe</h1>
-      {if @trigger_visible}<button ref="opener" class="open" type="button" onclick="{open_dialog}">Open dialog</button>{else}<p class="opener-removed">Opener removed</p>{end}
+      {if @trigger_visible}
+        <button ref="opener" class="open" type="button" onclick="{open_dialog}">Open dialog</button>
+      {else}
+        <p class="opener-removed">Opener removed</p>
+      {end}
       <button class="remove-trigger" type="button" onclick="{remove_trigger}">Remove opener</button>
       <button ref="fallback" class="fallback" type="button">Fallback focus</button>
       <button class="update-data" type="button" onclick="{update_dialog_data}">Update dialog text</button>
