@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rx-bob/mochi-gvm
-          ref: fdb679c98264cfbc7e3defd18083b9883170d23d
+          ref: 31e1a0169c4c4da5e18a804d6dee10528e483ad7
           path: mochi-gvm
 
       - name: Checkout mruby source
