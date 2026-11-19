@@ -18,28 +18,34 @@ its normalized fingerprint. Copy it as `mochi-capacities.json` before editing.
 The versioned `capacities` object sets tick scratch bytes, objects, ivars, and
 slots; persistent state classes, objects, ivars, slots, bytes, and component
 registrations; promotion depth; reactive bindings; ABI bytecode bytes and call
-arguments; per-object ivars; Goose stack reservation and region count; the
-fixed Goose guard size; WebAssembly stack size; and total WebAssembly memory.
+arguments; per-object ivars; Goose stack reservation and region count; legacy
+Goose guard accounting; WebAssembly stack size; and total WebAssembly memory.
 It also sets host fetch, emit, event, drag, formatting-cache, and file
 handle/reader/chunk/whole-read limits. Only the subset used by a declared host
 capability is copied into that capability's manifest entry and passed to its
 adapter. Adapters cannot select a larger limit at runtime.
 Layout requests and shortcut registrations each use `bindings` as their
 adapter bound; their counters are separate from the VM binding table.
-The default Goose binary has 40 stack regions and a fixed 1 MiB guard per
-region; the compiler rejects attempts to change those implementation bounds.
-Smaller profiles may compile to fewer regions; accounting retains the default
-upper bound.
-Fields omitted from a version 1 file use the defaults in
-the example. Unknown fields, non-positive values, integer overflow, and
-incompatible combinations fail before output cleanup or compilation.
+WASM builds set `GS_STACK_GAP` to zero, so the legacy `goose_guard_bytes`
+value is not part of the memory reservation. The declared `goose_stack_regions`
+is an accounting upper bound and must be at least the default 40; profiles may
+raise it. Smaller profiles may compile to fewer regions, but accounting retains
+the declared upper bound.
+Fields omitted from a version 1 file use the defaults in the example. Unknown
+fields, negative values, zero for any field except the legacy
+`goose_guard_bytes`, integer overflow, and incompatible combinations fail before
+output cleanup or compilation.
 
 Several limits follow the current value representation: state object handles
 have a 15-bit index (maximum 32768), the ABI accepts at most 8 call arguments,
 and the fixed ivar dirty mask tracks 256 ivars per object. Persistent object,
 ivar, slot, and byte pools must also leave room for the collector's reserved
 headroom. The compiler estimates inline arenas, bytecode, bridge buffers, and
-stack storage and rejects a `memory_bytes` value below that minimum.
+stack storage, derives the remaining C-slab metadata budget from `memory_bytes`,
+and requires at least 4 MiB of metadata headroom. The default profile reserves
+40,345,616 fixed bytes, derives 60,317,680 bytes for the C slab, and requires a
+minimum `memory_bytes` of 44,564,480. A smaller `memory_bytes` fails before
+building.
 
 mruby's short method-definition operands no longer impose a 255-method cliff:
 the compiler verifier and GVM accept mrbc's extended fallback definitions.

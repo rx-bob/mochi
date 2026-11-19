@@ -5,7 +5,11 @@ require "digest/sha256"
 # deliberately small and versioned: it is a build input, not runtime tuning.
 struct CapacityConfig
   SCHEMA_VERSION = 1
-  DEFAULTS       = {
+
+  MIN_METADATA_BYTES = 4_194_304_i64
+  INITIAL_HEAP_BYTES = 4_194_304_i64
+
+  DEFAULTS = {
     "scratch_bytes"                 => 131_072_i64,
     "scratch_objects"               => 2_048_i64,
     "scratch_ivars"                 => 2_048_i64,
@@ -116,7 +120,13 @@ struct CapacityConfig
 
   def validate! : Nil
     @values.each do |name, value|
-      raise "capacity '#{name}' must be positive" unless value > 0
+      if name == "goose_guard_bytes"
+        # The WASM runtime now sets GS_STACK_GAP to zero, so this legacy field
+        # may be zero but is not part of the fixed reservation.
+        raise "capacity '#{name}' must not be negative" if value < 0
+      else
+        raise "capacity '#{name}' must be positive" unless value > 0
+      end
       raise "capacity '#{name}' exceeds the supported 32-bit limit" if value > Int32::MAX
     end
     {"scratch_objects", "scratch_ivars", "scratch_slots", "scratch_bytes"}.each do |name|
@@ -127,20 +137,20 @@ struct CapacityConfig
       raise "capacity '#{name}' must exceed the GC reserve #{reserve}" if @values[name] <= reserve
     end
     raise "capacity 'state_objects' exceeds the 15-bit arena handle limit of 32768" if @values["state_objects"] > 32_768
-    raise "capacity 'state_classes' must not exceed 512" if @values["state_classes"] > 512
     raise "capacity 'state_components' must not exceed 1024" if @values["state_components"] > 1_024
     raise "capacity 'promotion_depth' must not exceed 256" if @values["promotion_depth"] > 256
     raise "capacity 'abi_call_args' is fixed at 8 by the runtime ABI" unless @values["abi_call_args"] == 8
     raise "capacity 'ivars_per_object' is fixed at 256 by the runtime ivar mask" unless @values["ivars_per_object"] == 256
-    raise "capacity 'goose_stack_regions' is fixed at 40 by the compiled VM" unless @values["goose_stack_regions"] == 40
-    raise "capacity 'goose_guard_bytes' is fixed at 1048576 by the Goose runtime" unless @values["goose_guard_bytes"] == 1_048_576
+    raise "capacity 'goose_stack_regions' must be at least 40" if @values["goose_stack_regions"] < 40
     raise "capacity 'goose_stack_bytes' must be at least 65536" if @values["goose_stack_bytes"] < 65_536
     raise "capacity 'memory_bytes' must be a multiple of 65536" unless @values["memory_bytes"] % 65_536 == 0
     {"goose_stack_bytes", "wasm_stack_bytes"}.each do |name|
       raise "capacity '#{name}' must be a multiple of 65536" unless @values[name] % 65_536 == 0
     end
     minimum = minimum_memory_bytes
-    raise "capacity 'memory_bytes' (#{@values["memory_bytes"]}) is below the arena minimum (#{minimum})" if @values["memory_bytes"] < minimum
+    if @values["memory_bytes"] < minimum
+      raise "capacity 'memory_bytes' (#{@values["memory_bytes"]}) is below the fixed reservations plus the 4 MiB metadata minimum (#{minimum})"
+    end
     validate_host_capacities!
   end
 
@@ -194,25 +204,57 @@ struct CapacityConfig
     raise "concurrent network responses exceed host_network_buffer_bytes" if network_reservation > @values["host_network_buffer_bytes"]
   end
 
+  # Bytes available to the C-slab metadata store after every fixed reservation.
+  def metadata_max_bytes : Int64
+    @values["memory_bytes"] - fixed_reservations_bytes
+  end
+
   def minimum_memory_bytes : Int64
-    # Conservative inline storage estimate, plus the existing VM and C stack.
-    scratch = @values["scratch_bytes"] + @values["scratch_objects"] * 128 +
-              @values["scratch_ivars"] * 32 + @values["scratch_slots"] * 40
-    # Persistent arenas and their free lists/mark worklists have inline backing
-    # at their declared limits. Include one extra coalescing byte-range slot.
-    state = @values["state_bytes"] + @values["state_objects"] * (128 + 8 + 16 + 4 + 8) +
-            @values["state_ivars"] * (32 + 8) + @values["state_slots"] * (40 + 8) + 16
-    stack = @values["goose_stack_regions"] *
-            (@values["goose_stack_bytes"] + @values["goose_guard_bytes"]) +
-            @values["wasm_stack_bytes"]
-    bridge_buffers = @values["host_patch_bytes"] + @values["host_fetch_envelope_bytes"] * 3 +
-                     @values["host_emit_envelope_bytes"] + @values["host_event_args_bytes"] +
-                     @values["host_command_bytes"] * 2 + 262_144
-    abi_and_bridge = @values["abi_bytecode_bytes"] + bridge_buffers
-    # Cache entries, method descriptors and flattened root symbols. These are
-    # bounded metadata, outside the ordinary persistent object/slot arenas.
-    computed = @values["bindings"] * 64 + 4_096 * (24 + 256 * 4)
-    initial_heap = 4_194_304_i64
-    ((scratch + state + stack + abi_and_bridge + computed + initial_heap + 65_535) // 65_536) * 65_536
+    round_up_to_page(fixed_reservations_bytes + MIN_METADATA_BYTES)
+  end
+
+  private def fixed_reservations_bytes : Int64
+    scratch_reservation_bytes + state_reservation_bytes + stack_reservation_bytes +
+      abi_reservation_bytes + bridge_reservation_bytes + computed_reservation_bytes +
+      INITIAL_HEAP_BYTES
+  end
+
+  # Conservative inline storage estimate for the tick scratch arena.
+  private def scratch_reservation_bytes : Int64
+    @values["scratch_bytes"] + @values["scratch_objects"] * 128 +
+      @values["scratch_ivars"] * 32 + @values["scratch_slots"] * 40
+  end
+
+  # Persistent arenas and their free lists/mark worklists have inline backing
+  # at their declared limits. Include one extra coalescing byte-range slot.
+  private def state_reservation_bytes : Int64
+    @values["state_bytes"] + @values["state_objects"] * (128 + 8 + 16 + 4 + 8) +
+      @values["state_ivars"] * (32 + 8) + @values["state_slots"] * (40 + 8) + 16
+  end
+
+  # WASM sets GS_STACK_GAP to zero, so guard bytes are legacy and not reserved.
+  private def stack_reservation_bytes : Int64
+    @values["goose_stack_regions"] * @values["goose_stack_bytes"] +
+      @values["wasm_stack_bytes"]
+  end
+
+  private def abi_reservation_bytes : Int64
+    @values["abi_bytecode_bytes"]
+  end
+
+  private def bridge_reservation_bytes : Int64
+    @values["host_patch_bytes"] + @values["host_fetch_envelope_bytes"] * 3 +
+      @values["host_emit_envelope_bytes"] + @values["host_event_args_bytes"] +
+      @values["host_command_bytes"] * 2 + 262_144
+  end
+
+  # Cache entries, method descriptors and flattened root symbols. These are
+  # bounded metadata, outside the ordinary persistent object/slot arenas.
+  private def computed_reservation_bytes : Int64
+    @values["bindings"] * 64 + 4_096 * (24 + 256 * 4)
+  end
+
+  private def round_up_to_page(bytes : Int64) : Int64
+    ((bytes + 65_535) // 65_536) * 65_536
   end
 end

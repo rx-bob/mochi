@@ -21,6 +21,32 @@ describe CapacityConfig do
     first.fingerprint.should eq(second.fingerprint)
   end
 
+  it "derives the metadata slab budget from fixed reservations" do
+    config = CapacityConfig.default
+
+    config.metadata_max_bytes.should eq(60_317_680)
+    config.minimum_memory_bytes.should eq(44_564_480)
+    (config.metadata_max_bytes >= CapacityConfig::MIN_METADATA_BYTES).should be_true
+
+    larger_values = CapacityConfig::DEFAULTS.dup
+    larger_values["memory_bytes"] += CapacityConfig::MIN_METADATA_BYTES
+    larger = CapacityConfig.new(larger_values)
+    larger.metadata_max_bytes.should eq(config.metadata_max_bytes + CapacityConfig::MIN_METADATA_BYTES)
+  end
+
+  it "relaxes metadata table limits while preserving defaults" do
+    values = CapacityConfig::DEFAULTS.dup
+    values["state_classes"] = 8_192
+    values["goose_stack_regions"] = 64
+    values["goose_guard_bytes"] = 0
+    config = CapacityConfig.new(values)
+
+    config["state_classes"].should eq(8_192)
+    config["goose_stack_regions"].should eq(64)
+    config["goose_guard_bytes"].should eq(0)
+    (config.metadata_max_bytes > 0).should be_true
+  end
+
   it "normalizes omitted defaults and rejects invalid or unsupported limits" do
     root = File.join(Dir.tempdir, "mochi capacity config #{Random.rand(1_000_000)}")
     FileUtils.mkdir_p(root)
@@ -33,6 +59,12 @@ describe CapacityConfig do
     invalid = File.join(root, "invalid.json")
     File.write(invalid, %({"schema_version":1,"capacities":{"state_objects":32769}}))
     expect_raises(Exception, /15-bit arena handle limit/) { CapacityConfig.read(invalid) }
+
+    File.write(invalid, %({"schema_version":1,"capacities":{"goose_stack_regions":20}}))
+    expect_raises(Exception, /goose_stack_regions.*at least 40/) { CapacityConfig.read(invalid) }
+
+    File.write(invalid, %({"schema_version":1,"capacities":{"memory_bytes":44040192}}))
+    expect_raises(Exception, /4 MiB metadata minimum/) { CapacityConfig.read(invalid) }
 
     File.write(invalid, %({"schema_version":1,"capacities":{"abi_call_args":9}}))
     expect_raises(Exception, /fixed at 8/) { CapacityConfig.read(invalid) }
@@ -83,6 +115,22 @@ describe CapacityConfig do
 end
 
 describe CapacityArtifactBuilder do
+  it "emits the derived metadata slab budget into generated profile sources" do
+    config = CapacityConfig.default
+    builder = CapacityArtifactBuilder.new("unused-gvm-root", config)
+
+    builder.capacity_config_source.should contain("let METADATA_MAX_BYTES = #{config.metadata_max_bytes};")
+    builder.capacity_profile_header.should contain(
+      "#define MOCHI_METADATA_MAX_BYTES #{config.metadata_max_bytes}"
+    )
+
+    gvm_root = ENV["MOCHI_GVM_DIR"]? || File.expand_path("../../../../mochi-gvm", __DIR__)
+    checked_in = File.join(gvm_root, "src", "gvm", "capacity_config.goose")
+    if File.file?(checked_in)
+      File.read(checked_in).should contain("let METADATA_MAX_BYTES = #{config.metadata_max_bytes};")
+    end
+  end
+
   it "builds distinct bounded runtimes whose embedded profiles match their compiled limits" do
     gvm_root = ENV["MOCHI_GVM_DIR"]? || File.expand_path("../../../../mochi-gvm", __DIR__)
     profiles = [small_capacity_config(8_192, 1_048_576), small_capacity_config(16_384, 2_097_152)]

@@ -101,8 +101,8 @@ class CapacityArtifactBuilder
     digest.final.hexstring
   end
 
-  private def write_profile(work : String) : Nil
-    config_module = String.build do |source|
+  def capacity_config_source : String
+    String.build do |source|
       source << "// Generated for capacity profile " << @config.fingerprint << ".\n"
       source << "namespace vm;\n\n"
       goose_names = {
@@ -125,8 +125,11 @@ class CapacityArtifactBuilder
       goose_names.each do |field, name|
         source << "let " << name << " = " << @config[field].to_s << ";\n"
       end
+      source << "let METADATA_MAX_BYTES = " << @config.metadata_max_bytes << ";\n"
     end
-    File.write(File.join(work, "src", "gvm", "capacity_config.goose"), config_module)
+  end
+
+  def capacity_profile_header : String
     host_macros = {
       "host_patch_bytes"          => "MOCHI_PATCH_CAPACITY",
       "host_fetch_envelope_bytes" => "MOCHI_FETCH_CAPACITY",
@@ -134,18 +137,23 @@ class CapacityArtifactBuilder
       "host_event_args_bytes"     => "MOCHI_EVENT_ARGS_CAPACITY",
       "host_command_bytes"        => "MOCHI_HOST_CAPACITY",
     }
-    profile_header = String.build do |header|
+    String.build do |header|
       header << "#ifndef MOCHI_CAPACITY_PROFILE_H\n#define MOCHI_CAPACITY_PROFILE_H\n"
       header << "#define MOCHI_CAPACITY_FINGERPRINT \"#{@config.fingerprint}\"\n"
+      header << "#define MOCHI_METADATA_MAX_BYTES " << @config.metadata_max_bytes << "\n"
       host_macros.each do |field, macro_name|
         header << "#define " << macro_name << " " << @config[field].to_s << "\n"
       end
       header << "#define MOCHI_CAPACITY_PROFILE_JSON "
       header << JSON.build { |json| json.string(@config.profile_json) } << "\n#endif\n"
     end
+  end
+
+  private def write_profile(work : String) : Nil
+    File.write(File.join(work, "src", "gvm", "capacity_config.goose"), capacity_config_source)
     File.write(
       File.join(work, "src", "gvm", "include", "mochi_capacity_profile.h"),
-      profile_header
+      capacity_profile_header
     )
     build_script = File.read(File.join(work, "scripts", "build_wasm.goose"))
     build_script = build_script.gsub("100663296", @config["memory_bytes"].to_s)

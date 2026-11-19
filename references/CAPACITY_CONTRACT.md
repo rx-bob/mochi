@@ -21,9 +21,10 @@ reaching the advertised arena limit. WebAssembly does not enforce the native
 guard pages, so the richer fixture stalled instead of reporting an error.
 Persistent objects, ivars, slots, bytes, and GC free/mark tables now have inline
 storage at their configured limits. No application capacity was raised.
-The generated region count falls from 50 to 40. Corrected storage widths,
-GC bookkeeping, and the initial heap produce an 82,313,216-byte default memory
-estimate. The default profile fingerprint changes with region accounting.
+The generated region count falls from 50 to 40. WASM guard gaps are zero, so
+fixed storage, bridge buffers, the initial heap, and 4 MiB of metadata headroom
+produce a 44,564,480-byte default minimum. The default profile fingerprint
+remains stable because capacity values are unchanged.
 
 Goose v2026.4 initializes bounded globals through temporary copies. The WASM
 build validates and lowers the ten default-zero persistent-array sequences to
