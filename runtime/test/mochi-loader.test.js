@@ -1909,8 +1909,132 @@ test("capacity errors include the compiled profile and failed outboxes are disca
   assert.match(element.mochiError.message, new RegExp("capacity profile " + TEST_CAPACITY_FINGERPRINT));
   assert.equal(details.at(-1).capacityProfile, TEST_CAPACITY_FINGERPRINT);
   assert.equal(module._mochi_emit_outbox_len(), 0);
+  var banner = document.querySelector("[data-mochi-capacity-recovery]");
+  assert.ok(banner);
+  assert.ok(banner.querySelector("[data-mochi-capacity-reload]"));
   element.remove();
   await flushLifecycle();
+});
+
+test("caches deterministic capacity failure in load_irep and emits one mochi:error with recovery banner", async () => {
+  const { loader, module, log } = await setup([COMPONENT]);
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+  let hookErrors = 0;
+  loader.onError = () => { hookErrors += 1; };
+  let irepCalls = 0;
+  module._mochi_load_irep = function () {
+    irepCalls += 1;
+    log.errorText = "IREP records exhausted (requested 1, used 4096 of 4096)";
+    return 1;
+  };
+
+  const elements = [];
+  for (let i = 0; i < 5; i += 1) {
+    const element = document.createElement("my-counter");
+    elements.push(element);
+    document.body.appendChild(element);
+  }
+  const results = await Promise.allSettled(elements.map((element) => element._mochiReady));
+  await flushLifecycle();
+
+  assert.equal(results.every((result) => result.status === "rejected"), true);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.chi")).length, 1);
+  assert.equal(irepCalls, 1);
+  assert.equal(details.length, 1);
+  assert.equal(hookErrors, 1);
+  assert.match(details[0].vmText, /IREP records exhausted/);
+  assert.equal(details[0].capacityProfile, TEST_CAPACITY_FINGERPRINT);
+  assert.match(details[0].packageUrl, /\/components\/my-counter\.chi$/);
+  elements.forEach((element) => {
+    assert.ok(element.mochiError);
+    assert.equal((element.mochiError.message.match(/capacity profile /g) || []).length, 1);
+  });
+
+  const banners = document.querySelectorAll("[data-mochi-capacity-recovery]");
+  assert.equal(banners.length, 1);
+  assert.equal(banners[0].getAttribute("role"), "alert");
+  assert.match(banners[0].textContent, /IREP records exhausted/);
+  const reloadButton = banners[0].querySelector("button[data-mochi-capacity-reload]");
+  assert.ok(reloadButton);
+  const originalLocation = global.location;
+  let reloads = 0;
+  global.location = { reload: () => { reloads += 1; } };
+  try {
+    reloadButton.click();
+  } finally {
+    global.location = originalLocation;
+  }
+  assert.equal(reloads, 1);
+});
+
+test("retries a package after a non-capacity load_irep failure", async () => {
+  const { module, log } = await setup([COMPONENT]);
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+  let irepCalls = 0;
+  let fail = true;
+  module._mochi_load_irep = function () {
+    irepCalls += 1;
+    if (fail) {
+      log.errorText = "bad RITE magic";
+      return 1;
+    }
+    log.errorText = "";
+    return 0;
+  };
+
+  const first = document.createElement("my-counter");
+  document.body.appendChild(first);
+  await assert.rejects(first._mochiReady, /bad RITE magic/);
+  await flushLifecycle();
+
+  fail = false;
+  const second = document.createElement("my-counter");
+  document.body.appendChild(second);
+  await second._mochiReady;
+
+  assert.equal(irepCalls, 2);
+  assert.equal(log.fetches.filter((url) => url.endsWith("my-counter.chi")).length, 2);
+  assert.equal(details.length, 1);
+  assert.equal(document.querySelector("[data-mochi-capacity-recovery]"), null);
+});
+
+test("a new manifest clears cached package errors and the recovery banner", async () => {
+  const { loader, module, log } = await setup([COMPONENT]);
+  const details = [];
+  document.addEventListener("mochi:error", (event) => details.push(event.detail));
+  module._mochi_load_irep = function () {
+    log.errorText = "IREP records exhausted";
+    return 1;
+  };
+
+  const first = document.createElement("my-counter");
+  document.body.appendChild(first);
+  await assert.rejects(first._mochiReady, /IREP records exhausted/);
+  assert.equal(details.length, 1);
+  assert.ok(document.querySelector("[data-mochi-capacity-recovery]"));
+
+  const originalFetch = global.fetch;
+  const nextManifest = manifest([COMPONENT]);
+  global.fetch = async (url) => {
+    if (String(url).endsWith("next-manifest.json")) {
+      return { ok: true, json: async () => nextManifest };
+    }
+    return originalFetch(url);
+  };
+  try {
+    await loader.boot("next-manifest.json");
+  } finally {
+    global.fetch = originalFetch;
+  }
+  assert.equal(document.querySelector("[data-mochi-capacity-recovery]"), null);
+
+  const second = document.createElement("my-counter");
+  document.body.appendChild(second);
+  await assert.rejects(second._mochiReady, /IREP records exhausted/);
+  assert.equal(details.length, 2);
+  assert.ok(document.querySelector("[data-mochi-capacity-recovery]"));
 });
 
 test("a capacity-rejected VM mount discards its pending host commands", async () => {

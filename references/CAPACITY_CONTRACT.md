@@ -99,6 +99,20 @@ binding to the authored Ruby file and line and includes the compiled profile
 fingerprint. The existing `mochi:error` event, element error, and `onError`
 hook carry the report.
 
+A deterministic package-load capacity failure is cached by `.chi` URL. Later
+instances of that component share the rejected load instead of fetching the
+package or calling `_mochi_load_irep` again. The loader reports that package
+once through `mochi:error` and `onError`, while each failed element still keeps
+its own `mochiError`. The report includes `packageUrl`. A non-capacity package
+failure evicts the cached promise so a later mount can retry.
+
+On any capacity failure, the loader adds at most one pure-DOM
+`[data-mochi-capacity-recovery]` alert to `document.body`. It names the VM
+failure and includes a `[data-mochi-capacity-reload]` button that reloads the
+application. Creating the banner invokes no VM exports, so it remains available
+when the VM has exhausted its own capacity. Environments without a document
+body, such as a worker, receive the normal error report without a banner.
+
 Scratch and persistent-state failures use the same count format. Named
 resources include scratch objects/bytes/ivars/slots, state bytes/objects/ivars/
 slots, ivars per object, component registrations, reactive bindings, classes,

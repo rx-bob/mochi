@@ -47,6 +47,7 @@
     activeModule: null,
     loadChain: Promise.resolve(),
     irepPromises: new Map(),
+    reportedPackageErrors: new Set(),
     descriptorPromises: new Map(),
     styleTextPromises: new Map(),
     styleTextCache: new Map(),
@@ -257,7 +258,9 @@
     var capacityProfile = /(?:exhausted|exceeded)/i.test(detail) && profile
       ? profile.fingerprint
       : "";
-    if (capacityProfile) detail += " (capacity profile " + capacityProfile + ")";
+    if (capacityProfile && detail.indexOf("capacity profile " + capacityProfile) === -1) {
+      detail += " (capacity profile " + capacityProfile + ")";
+    }
     var bindingDescription = binding ? bindingContext(element, binding, "runtime evaluation") : "";
     if (bindingDescription && detail.indexOf(bindingDescription) === -1) {
       detail += " (" + bindingDescription + ")";
@@ -275,9 +278,46 @@
     };
   }
 
+  function removeCapacityRecoveryBanner() {
+    if (!global.document || typeof global.document.querySelectorAll !== "function") return;
+    var existing = global.document.querySelectorAll("[data-mochi-capacity-recovery]");
+    for (var i = 0; i < existing.length; i += 1) {
+      if (existing[i].parentNode) existing[i].parentNode.removeChild(existing[i]);
+    }
+  }
+
+  function renderCapacityRecoveryBanner(info) {
+    if (!global.document || !global.document.body) return;
+    if (global.document.querySelector("[data-mochi-capacity-recovery]")) return;
+    var banner = global.document.createElement("div");
+    banner.setAttribute("data-mochi-capacity-recovery", "");
+    banner.setAttribute("role", "alert");
+    var message = global.document.createElement("p");
+    message.textContent = "Application capacity exhausted: " +
+      (info.vmText || info.message || "a fixed resource is exhausted");
+    var button = global.document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-mochi-capacity-reload", "");
+    button.textContent = "Reload application";
+    button.addEventListener("click", function () {
+      if (global.location && typeof global.location.reload === "function") {
+        global.location.reload();
+      }
+    });
+    banner.appendChild(message);
+    banner.appendChild(button);
+    global.document.body.appendChild(banner);
+  }
+
   function reportError(element, phase, method, error, module, context) {
     var component = element && element._mochiComponent;
     var info = describeError(component, phase, method, error, module, element);
+    if (!info.vmText && error && error.mochiVmText) info.vmText = error.mochiVmText;
+    var packageUrl = error && error.mochiPackageUrl || "";
+    if (packageUrl) info.packageUrl = packageUrl;
+    var duplicatePackageError = !!(info.capacityProfile && packageUrl &&
+      state.reportedPackageErrors.has(packageUrl));
+    if (info.capacityProfile) renderCapacityRecoveryBanner(info);
     if (context) {
       if (context.attribute !== undefined) info.attribute = context.attribute;
       if (context.property !== undefined) info.property = context.property;
@@ -297,19 +337,22 @@
     }
     reported.mochi = info;
     if (element) element.mochiError = reported;
-    console.error("[mochi] " + (info.tagName || "loader") + " " + phase + " failed", reported);
-    try {
-      if (global.document && typeof global.CustomEvent === "function") {
-        global.document.dispatchEvent(new global.CustomEvent("mochi:error", { detail: info }));
-      }
-    } catch (dispatchError) {
-      console.error("[mochi] error event dispatch failed", dispatchError);
-    }
-    if (typeof loader !== "undefined" && typeof loader.onError === "function") {
+    if (info.capacityProfile && packageUrl) state.reportedPackageErrors.add(packageUrl);
+    if (!duplicatePackageError) {
+      console.error("[mochi] " + (info.tagName || "loader") + " " + phase + " failed", reported);
       try {
-        loader.onError(info, reported);
-      } catch (hookError) {
-        console.error("[mochi] onError hook failed", hookError);
+        if (global.document && typeof global.CustomEvent === "function") {
+          global.document.dispatchEvent(new global.CustomEvent("mochi:error", { detail: info }));
+        }
+      } catch (dispatchError) {
+        console.error("[mochi] error event dispatch failed", dispatchError);
+      }
+      if (typeof loader !== "undefined" && typeof loader.onError === "function") {
+        try {
+          loader.onError(info, reported);
+        } catch (hookError) {
+          console.error("[mochi] onError hook failed", hookError);
+        }
       }
     }
     return reported;
@@ -2192,7 +2235,14 @@
         try {
           module.HEAPU8.set(bytes, pointer);
           if (module._mochi_load_irep(pointer, bytes.length) !== 0) {
-            throw new Error("mochi-loader: load_irep failed for " + label + ": " + lastError(module));
+            var vmText = lastError(module);
+            var error = new Error("mochi-loader: load_irep failed for " + label + ": " + vmText);
+            error.mochiVmText = vmText;
+            if (/(?:exhausted|exceeded)/i.test(vmText)) {
+              error.mochiCapacityExhausted = true;
+              error.mochiPackageUrl = url;
+            }
+            throw error;
           }
         } finally {
           if (free) free(pointer);
@@ -2204,7 +2254,12 @@
       return loadTask;
     })();
     state.irepPromises.set(url, promise);
-    promise.catch(function () { state.irepPromises.delete(url); });
+    promise.catch(function (error) {
+      // Capacity failures are deterministic for a package URL. Keep the
+      // rejected promise cached so later instances share the failure; evict
+      // every other rejection so a transient error can be retried.
+      if (!(error && error.mochiCapacityExhausted)) state.irepPromises.delete(url);
+    });
     return promise;
   }
 
@@ -5834,6 +5889,9 @@
 
     var manifestUrl = absoluteUrl(url || DEFAULT_MANIFEST, global.document.baseURI);
     if (state.manifestUrl === manifestUrl && state.manifest) return state.manifest;
+
+    state.reportedPackageErrors.clear();
+    removeCapacityRecoveryBanner();
 
     var response = await global.fetch(manifestUrl);
     if (!response.ok) throw new Error("mochi-loader: failed to fetch " + manifestUrl);
