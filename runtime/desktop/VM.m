@@ -50,7 +50,7 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     id scene = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
     if (![scene isKindOfClass:NSDictionary.class]) DesktopFailure(@"Invalid desktop scene");
     _scene = scene;
-    if (![_scene[@"version"] isEqual:@3]) failIn(_scene, @"initialize", @"unsupported desktop scene version");
+    if (![_scene[@"version"] isEqual:@4]) failIn(_scene, @"initialize", @"unsupported desktop scene version");
     if (mochi_native_abi_version() != MOCHI_DESKTOP_NATIVE_ABI)
         failIn(_scene, @"initialize", @"incompatible native GVM ABI version");
     id fingerprint = _scene[@"capacity"];

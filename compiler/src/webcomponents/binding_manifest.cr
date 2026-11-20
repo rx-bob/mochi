@@ -155,9 +155,8 @@ end
 
 class ComponentManifest
   property portable_nodes : Array(PortableTemplate::Node)?
-  property font_style : String?
+  property document_style : String?
   property font_resources = [] of PackageResource
-  property desktop_styles = [] of Tuple(String, Hash(String, String))
   property tag_name : String
   property class_name : String
   property chi_file : String

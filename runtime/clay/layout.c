@@ -1,5 +1,5 @@
 // Native layout bridge. clay.h is based on Clay v0.14
-// (b25a31c1a152915cd7dd6796e6592273e5a10aac) with a local word-wrap fix.
+// (b25a31c1a152915cd7dd6796e6592273e5a10aac) with local word-wrap and fixed-zero sizing fixes.
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 

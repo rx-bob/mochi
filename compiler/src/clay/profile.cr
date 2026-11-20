@@ -5,7 +5,7 @@ require "../html/template_expression"
 require "../ruby/ruby_def"
 require "../tree-sitter/ruby_parser"
 require "../tooling/portable_project"
-require "../webcomponents/style_composer"
+require "./portable_styles"
 
 enum RenderTarget
   Dom
@@ -15,8 +15,7 @@ end
 # Validate the inspector subset against the original Ruby literals and the
 # authored CSS sources, including markup that mounts only in a later state.
 class ClayProfile
-  getter rules = [] of Tuple(String, Hash(String, String))
-  getter font_locations = [] of Hash(String, String)
+  getter styles = PortableStyles.new
   getter source_marks = [] of PortableTemplate::SourceMark
   @child_use : Tuple(Int32, String)?
 
@@ -50,11 +49,18 @@ class ClayProfile
   def compose_styles(absolute_path : String, staged_root : String) : CssComposition
     css, line = @css_method.try { |method| literal(method) } || {"", 1}
     composition = StyleComposer.new(@component, absolute_path, @path, staged_root).compose(css, line)
-    composition.sources.each { |source| parse_styles(source) }
-    composition
+    resources = composition.resources.map_with_index do |resource, index|
+      rules = parse_styles(composition.sources[index])
+      @styles.append(rules)
+      PortableStyles.resource(PortableStyles.css(rules), resource)
+    end
+    local_rules = parse_styles(composition.sources.last)
+    @styles.append(local_rules)
+    CssComposition.new(PortableStyles.css(local_rules), resources, composition.sources)
   end
 
-  private def parse_styles(source : CssSource) : Nil
+  private def parse_styles(source : CssSource) : Array(PortableStyleRule)
+    rules = [] of PortableStyleRule
     css = source.text
     scan = StringScanner.new(css)
     until scan.eos?
@@ -62,31 +68,44 @@ class ClayProfile
       break if scan.eos?
       at = scan.byte_offset
       selector = scan.scan(/\.[a-zA-Z_][\w-]*/)
-      unless selector && scan.skip(/\s*\{/)
+      unless selector && scan.skip(/(?:\s|\/\*.*?\*\/)*\{/m)
         reject(source.path, line_at(css, at, source.line), "expected a single class selector")
       end
       declarations = {} of String => String
-      @rules << {selector[1..], declarations}
       locations = {} of String => String
-      @font_locations << locations
+      rules << PortableStyleRule.new(selector[1..], declarations, locations)
       loop do
         scan.skip(/(?:\s+|\/\*.*?\*\/)+/m)
         break if scan.skip('}')
         at = scan.byte_offset
         name = scan.scan(/[a-z-]+/)
-        unless name && scan.skip(/\s*:\s*/) && (raw = scan.scan(/[^{};]+/))
+        unless name && scan.skip(/(?:\s|\/\*.*?\*\/)*:/m) && (raw = scan.scan(/(?:\/\*.*?\*\/|[^{};\/]|\/(?!\*))+/m))
           reject(source.path, line_at(css, at, source.line), "invalid style declaration")
         end
-        value = raw.strip
+        value = raw.gsub(/\/\*.*?\*\//m, " ").strip
         unless supported_style?(name, value)
           reject(source.path, line_at(css, at, source.line), "unsupported CSS '#{name}: #{value}'")
         end
         if name.in?("font-family", "font-weight")
           locations[name] = "#{source.path}:#{line_at(css, at, source.line)}"
         end
-        declarations[name] = value
+        declarations[name] = normalize_style(name, value)
         scan.skip(';')
       end
+    end
+    rules
+  end
+
+  private def normalize_style(name : String, value : String) : String
+    case name
+    when "width", "height", "gap", "padding", "font-size", "line-height"
+      value == "auto" ? value : "#{value.to_i(strict: false)}px"
+    when "color", "background-color"
+      value.downcase
+    when "font-family"
+      value.split(',').map(&.strip).join(", ")
+    else
+      value
     end
   end
 
@@ -95,7 +114,9 @@ class ClayProfile
     when "display"                   then value == "flex"
     when "flex-direction"            then value.in?("column", "row")
     when "color", "background-color" then value.matches?(/\A#[0-9a-fA-F]{6}\z/)
-    when "width", "height", "gap", "padding", "font-size", "line-height"
+    when "width", "height"
+      value == "auto" || value.matches?(/\A(?:[0-9]{1,4}px|0)\z/)
+    when "gap", "padding", "font-size", "line-height"
       value.matches?(/\A(?:[0-9]{1,4}px|0)\z/)
     when "font-family"
       families = value.split(',').map(&.strip)

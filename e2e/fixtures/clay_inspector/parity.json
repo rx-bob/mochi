@@ -1,16 +1,19 @@
 {
   "widths": [
-    285,
-    315,
-    318,
-    320,
+    333,
+    363,
+    366,
+    368,
+    567,
+    568,
     640
   ],
   "wrapWidths": [
-    315,
-    318
+    363,
+    366
   ],
   "checkpoints": [
+    "initial",
     "selected",
     "reversed"
   ],
@@ -94,8 +97,7 @@
       }
     },
     "webkit": {
-      "regions": {
-      },
+      "regions": {},
       "focused": {
         "station-02": 0.085
       }

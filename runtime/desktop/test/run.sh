@@ -40,12 +40,12 @@ ruby -rjson -e '
   end
   files = Dir.glob("**/*", base: dom).select { |file| File.file?(File.join(dom, file)) }
   manifest = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))
-  fonts = manifest.fetch("resources").values.group_by { |resource| resource.fetch("kind") }
-  abort "unexpected portable font inventory" unless
-    fonts.transform_values(&:size) == { "font" => 3, "font-license" => 1, "font-style" => 1 }
+  resources_by_kind = manifest.fetch("resources").values.group_by { |resource| resource.fetch("kind") }
+  abort "unexpected portable resource inventory" unless
+    resources_by_kind.transform_values(&:size) == { "font" => 3, "font-license" => 1, "document-style" => 1, "style" => 1 }
   expected = %w[index.html mochi-manifest.json mochi-gvm.wasm mochi-gvm.js mochi-loader.js
     components/record-inspector.json components/record-inspector.chi] +
-    fonts.values.flatten.map { |resource| resource.fetch("file") }
+    resources_by_kind.values.flatten.map { |resource| resource.fetch("file") }
   abort "unexpected DOM inventory: #{files.sort}" unless files.sort == expected.sort
   abort "unexpected DOM loader contents" unless File.binread(File.join(dom, "mochi-loader.js")) ==
     File.binread("runtime/mochi-loader.js")
@@ -106,7 +106,7 @@ log="$work/failed-replay.log"
 compiler/mochi test --target=desktop -i "$project" --test-file="$test_file" > "$log" 2>&1 || status=$?
 cat "$log"
 test "$status" -eq 1
-grep -qF "inspector_test.rb:5 (step 4 assert_text [data-view='selection']): expected text 'Selected station 99', got 'Selected station 02'" "$log"
+grep -qF "inspector_test.rb:7 (step 6 assert_text [data-view='selection']): expected text 'Selected station 99', got 'Selected station 02'" "$log"
 grep -qF "(step 2 click [data-id='99']): selector matched no accessible control or text" "$log"
 grep -qF "(step 2 click .record): unsupported desktop selector" "$log"
 grep -qF "(step 2 click [data-view='selection']): selector must identify an accessible button" "$log"

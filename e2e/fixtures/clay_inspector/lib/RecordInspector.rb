@@ -31,11 +31,11 @@ class RecordInspector
       <div class="panel" data-view="panel">
         <span class="title" data-view="title">Station records Ω</span>
         <div class="actions" data-view="actions">
-          <button class="action" data-action="reverse" onclick="{reverse_records}">Reverse order</button>
-          <button class="action" data-action="details" onclick="{toggle_details}">Details</button>
+          <button class="action action-default action-fixed" data-action="reverse" onclick="{reverse_records}">Reverse order</button>
+          <button class="action-default action" data-action="details" onclick="{toggle_details}">Details</button>
         </div>
         {each @records as record, key: record["id"]}
-          <button class="record {if @selected == record['id']}selected{end}" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" onclick="{select_record($event)}">{record["name"]}{record["label"]}</button>
+          <button class="{if @selected == record['id']}selected{end} record" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" onclick="{select_record($event)}">{record["name"]}{record["label"]}</button>
         {end}
         <span class="selection" data-view="selection">Selected st&#97;tion {@selected}</span>
         {if @details}
@@ -47,6 +47,7 @@ class RecordInspector
 
   def css
     %Q{
+      @import "./styles/inspector.css";
       .panel {
         display: flex;
         flex-direction: column;
@@ -78,14 +79,18 @@ class RecordInspector
         color: #ffffff;
         background-color: #26634f;
       }
+      .action-fixed {
+        width: 108px;
+        height: 38px;
+      }
       .record {
+        width: auto;
         font-family: StationSans, StationSymbols, sans-serif;
         font-size: 16px;
         line-height: 24px;
         padding: 8px;
         border: 0;
         text-align: left;
-        color: #162d27;
         background-color: #ffffff;
       }
       .selected {

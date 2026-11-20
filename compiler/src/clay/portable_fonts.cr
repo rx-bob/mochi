@@ -14,7 +14,6 @@ class PortableFonts
   getter licenses = Set(String).new
   getter stacks = {} of String => Hash(Int32, Stack)
   getter resources = [] of PackageResource
-  getter style_resource : PackageResource?
 
   @aliases = {} of String => String
   @files = {} of PortableFace => Face
@@ -25,9 +24,13 @@ class PortableFonts
 
   def resolve(nodes : Array(PortableTemplate::Node)) : Nil
     visit(nodes, Set{Selection.new("sans-serif", 400, "", "")})
-    return if @stacks.empty?
+  end
+
+  def document_stylesheet(window_css : String) : PackageResource?
+    return if @stacks.empty? && window_css.empty?
 
     css = String.build do |io|
+      io << window_css
       @stacks.each do |family, weights|
         identity = weights.map { |weight, stack| {weight, stack.runs.map(&.face.id)} }.to_json
         name = "MochiFont-#{digest(identity)}"
@@ -49,21 +52,21 @@ class PortableFonts
         end
       end
     end
-    id = "font-style-#{digest(css)}"
-    @style_resource = PackageResource.new(id, "font-style", text: css, output_file: "#{ROOT}/#{id}.css")
+    id = "document-style-#{digest(css)}"
+    PackageResource.new(id, "document-style", text: css, output_file: "#{ROOT}/#{id}.css")
   end
 
-  def browser_css(css : String) : String
+  def browser_css(css : String, host_layout_css : String) : String
     String.build do |io|
-      io << ":host{font-family:sans-serif;font-size:16px;font-weight:400;line-height:20px;font-synthesis:none}button{font:inherit}"
+      io << PortableStyles::CSS_RESET << host_layout_css
       io << css
-      @profile.rules.each do |name, declarations|
-        if family = declarations["font-family"]?
+      @profile.styles.rules.each do |rule|
+        if family = rule.declarations["font-family"]?
           if alias_name = @aliases[family]?
             generic = family.split(',').last.strip
             family = "#{alias_name},#{generic?(generic) ? generic : "sans-serif"}"
           end
-          io << ".#{name}{font-family:#{family}}"
+          io << ".#{rule.name}{font-family:#{family}}"
         end
       end
     end
@@ -98,13 +101,15 @@ class PortableFonts
   private def styles(node : PortableTemplate::Element, inherited : Set(Selection)) : Set(Selection)
     parts = node.attributes["class"]? || PortableTemplate::Parts.new
     dynamic = parts.any? { |part| !part.is_a?(String) }
-    names = dynamic ? [] of String : parts.join.split
+    styles = @profile.styles
+    indices = dynamic ? (0...styles.rules.size).to_a : styles.indices(parts.join)
     states = inherited.dup
-    @profile.rules.each_with_index do |(name, declarations), index|
-      family = declarations["font-family"]?
-      weight = declarations["font-weight"]?.try(&.to_i)
-      next unless (family || weight) && (dynamic || names.includes?(name))
-      locations = @profile.font_locations[index]
+    indices.each do |index|
+      rule = styles.rules[index]
+      family = rule.declarations["font-family"]?
+      weight = rule.declarations["font-weight"]?.try(&.to_i)
+      next unless family || weight
+      locations = rule.font_locations
       applied = states.map do |state|
         Selection.new(family || state.family, weight || state.weight,
           locations["font-family"]? || state.family_at, locations["font-weight"]? || state.weight_at)

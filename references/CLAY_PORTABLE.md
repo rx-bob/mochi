@@ -9,6 +9,7 @@ the browser and the experimental macOS host.
   "root": "record-inspector",
   "app_id": "org.mochi.stations",
   "display_name": "Stations",
+  "window": { "inset": 24, "max_width": 520 },
   "fonts": {
     "StationSans": {
       "400": { "file": "public/station-sans.woff2", "license": "public/OFL.txt" },
@@ -25,6 +26,36 @@ the browser and the experimental macOS host.
 identifier and `display_name` the name users should see. Mount the declared
 tag in `index.html`. Mochi loads each component's font stylesheet on mount
 and the browser downloads the faces needed by its text.
+
+## Window and component layout
+
+Set `window` when the root owns the window surface. Mount that root directly
+under `body` in the browser entry. Mochi sets the document margin to zero and
+uses a white window background on both hosts. `inset` defaults to zero and
+applies to all edges. `max_width` is optional and caps the root's border-box
+width. The root stays left-aligned at its inset when the window is wider than
+the cap. Both values are whole logical pixels. Without `window`, the web entry
+owns its outer layout.
+
+Mochi reads shared CSS depth-first in import order. Local rules follow them.
+Only single-class selectors are supported. Rules at equal specificity apply
+in stylesheet order even when Ruby returns classes in a different order.
+Shared fragments have stable identities and load when a component that uses
+them mounts. Styles stay scoped to that component.
+
+Containers stack vertically by default. `display: flex` defaults to a row.
+Use `flex-direction` to set either axis explicitly. Automatic width uses the
+available space in a column and fits the content in a row. A fixed `width` or
+`height` includes padding. Uniform `padding` and `gap` use whole logical
+pixels. Text inherits its color, family, size, weight and line height, including
+inside buttons. Buttons start with zero border and padding and left-aligned text.
+
+Layout, hit testing, and accessibility use logical bounds. AppKit maps
+each paint edge to the active drawing target's device coordinates and rounds
+each edge independently to the nearest device pixel. Layout keeps fractional
+widths, including widths measured from text.
+
+## Local fonts
 
 Use static WOFF2, OTF or TTF files under `public/` and declare each face's
 weight from 100 to 900 in steps of 100. A string path is shorthand for weight

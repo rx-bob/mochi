@@ -203,13 +203,18 @@ static NSString *displayValue(id value) {
     NSArray *rules = _vm.scene[@"styles"];
     if (node[@"style_names"]) {
         NSString *classes = [self renderParts:node[@"style_names"] slots:slots];
-        NSArray *names = [classes componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        for (NSDictionary *rule in rules) {
-            if ([names containsObject:rule[@"name"]]) [style addEntriesFromDictionary:rule[@"values"]];
+        NSCharacterSet *separators = [NSCharacterSet characterSetWithCharactersInString:@" \t\n\r\f"];
+        NSDictionary *lookup = _vm.scene[@"style_lookup"];
+        NSMutableIndexSet *matched = [NSMutableIndexSet indexSet];
+        for (NSString *name in [classes componentsSeparatedByCharactersInSet:separators]) {
+            for (NSNumber *index in lookup[name]) [matched addIndex:index.unsignedIntegerValue];
         }
+        [matched enumerateIndexesUsingBlock:^(NSUInteger index, BOOL *stop) {
+            [style addEntriesFromDictionary:rules[index]];
+        }];
     } else {
         for (NSNumber *index in node[@"styles"])
-            [style addEntriesFromDictionary:rules[index.unsignedIntegerValue][@"values"]];
+            [style addEntriesFromDictionary:rules[index.unsignedIntegerValue]];
     }
     return style;
 }
@@ -305,8 +310,12 @@ static NSString *displayValue(id value) {
         int font = (int)frameBoxes.count;
         [frameBoxes addObject:box];
         int pad = [style[@"padding"] intValue];
-        BOOL column = ![style[@"flex"] boolValue] || [style[@"vertical"] boolValue];
-        mochi_clay_open_box(font, column, stretch, [(style[@"width"] ?: @-1) floatValue], [(style[@"height"] ?: @-1) floatValue],
+        BOOL column = [(style[@"vertical"] ?: @(![style[@"flex"] boolValue])) boolValue];
+        float width = [(style[@"width"] ?: @-1) floatValue];
+        float height = [(style[@"height"] ?: @-1) floatValue];
+        if (width >= 0) width = MAX(width, 2 * pad);
+        if (height >= 0) height = MAX(height, 2 * pad);
+        mochi_clay_open_box(font, column, stretch, width, height,
                             pad, pad, pad, pad, [style[@"gap"] intValue]);
         if ([type isEqual:@"box"]) {
             [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots arguments:rowArgs];
@@ -336,7 +345,12 @@ static NSString *displayValue(id value) {
     @try {
         CGFloat width = self.bounds.size.width;
         mochi_clay_begin(width);
-        mochi_clay_open_box(0, 1, 1, width, -1, 0, 0, 0, 0, 0);
+        NSDictionary *window = _vm.scene[@"window"];
+        int inset = [window[@"inset"] intValue];
+        CGFloat available = MAX(0, width - 2 * inset);
+        NSNumber *cap = window[@"max_width"];
+        CGFloat content = [cap isKindOfClass:NSNumber.class] ? MIN(available, cap.doubleValue) : available;
+        mochi_clay_open_box(0, 1, 1, content + 2 * inset, -1, inset, inset, inset, inset, 0);
         _textUsed = 0;
         [self layoutNodes:_vm.scene[@"nodes"] parent:@{} stretch:YES scope:@"" slots:@[] arguments:nil];
         mochi_clay_close_box();
@@ -381,6 +395,8 @@ static NSString *displayValue(id value) {
             @"id":key, @"rect":@[@(frame.origin.x), @(frame.origin.y), @(frame.size.width), @(frame.size.height)],
             @"lines":box.lines, @"role":role ?: NSNull.null, @"name":name ?: NSNull.null,
             @"pressed":attrs[@"aria-pressed"] ? [element accessibilityValue] ?: NSNull.null : NSNull.null,
+            @"ink":@[@(lround(box.color.redComponent * 255)),
+                @(lround(box.color.greenComponent * 255)), @(lround(box.color.blueComponent * 255))],
             @"fill":box.background ? @[@(lround(box.background.redComponent * 255)),
                 @(lround(box.background.greenComponent * 255)), @(lround(box.background.blueComponent * 255))] : NSNull.null,
             @"lineFrames":box.lineFrames, @"lineFaces":box.lineFaces,
@@ -486,16 +502,24 @@ static void detachButton(DesktopButton *button) {
         @catch (NSException *e) { [self showFailure:e.reason]; }
     }
 }
+// Snap each edge independently using the actual drawing target's transform.
+static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
+    CGRect pixels = CGContextConvertRectToDeviceSpace(context, rect);
+    CGFloat left = floor(CGRectGetMinX(pixels) + 0.5), right = floor(CGRectGetMaxX(pixels) + 0.5);
+    CGFloat top = floor(CGRectGetMinY(pixels) + 0.5), bottom = floor(CGRectGetMaxY(pixels) + 0.5);
+    return CGContextConvertRectToUserSpace(context, CGRectMake(left, top, right - left, bottom - top));
+}
+
 - (void)drawRect:(NSRect)dirty {
-    [NSColor.windowBackgroundColor setFill];
+    [(_vm.scene[@"window"] ? NSColor.whiteColor : NSColor.windowBackgroundColor) setFill];
     NSRectFill(dirty);
+    CGContextRef context = NSGraphicsContext.currentContext.CGContext;
     for (NSDictionary *command in _commands) {
         if (command[@"rect"]) {
             [command[@"fill"] setFill];
-            NSRectFill([command[@"rect"] rectValue]);
+            NSRectFill(deviceAlignedRect(context, [command[@"rect"] rectValue]));
         } else {
             NSPoint point = [command[@"point"] pointValue];
-            CGContextRef context = NSGraphicsContext.currentContext.CGContext;
             CGContextSaveGState(context);
             CGContextTranslateCTM(context, point.x, point.y);
             CGContextScaleCTM(context, 1, -1);

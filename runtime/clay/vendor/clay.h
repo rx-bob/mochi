@@ -1861,7 +1861,7 @@ void Clay__CloseElement(void) {
 
     // Clamp element min and max width to the values configured in the layout
     if (layoutConfig->sizing.width.type != CLAY__SIZING_TYPE_PERCENT) {
-        if (layoutConfig->sizing.width.size.minMax.max <= 0) { // Set the max size if the user didn't specify, makes calculations easier
+        if (layoutConfig->sizing.width.type != CLAY__SIZING_TYPE_FIXED && layoutConfig->sizing.width.size.minMax.max <= 0) { // A fixed zero is an explicit bound
             layoutConfig->sizing.width.size.minMax.max = CLAY__MAXFLOAT;
         }
         openLayoutElement->dimensions.width = CLAY__MIN(CLAY__MAX(openLayoutElement->dimensions.width, layoutConfig->sizing.width.size.minMax.min), layoutConfig->sizing.width.size.minMax.max);
@@ -1872,7 +1872,7 @@ void Clay__CloseElement(void) {
 
     // Clamp element min and max height to the values configured in the layout
     if (layoutConfig->sizing.height.type != CLAY__SIZING_TYPE_PERCENT) {
-        if (layoutConfig->sizing.height.size.minMax.max <= 0) { // Set the max size if the user didn't specify, makes calculations easier
+        if (layoutConfig->sizing.height.type != CLAY__SIZING_TYPE_FIXED && layoutConfig->sizing.height.size.minMax.max <= 0) { // A fixed zero is an explicit bound
             layoutConfig->sizing.height.size.minMax.max = CLAY__MAXFLOAT;
         }
         openLayoutElement->dimensions.height = CLAY__MIN(CLAY__MAX(openLayoutElement->dimensions.height, layoutConfig->sizing.height.size.minMax.min), layoutConfig->sizing.height.size.minMax.max);

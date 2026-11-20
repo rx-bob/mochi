@@ -1,11 +1,13 @@
 require "../webcomponents/binding_manifest"
+require "./portable_styles"
+require "../tooling/portable_project"
 
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 3
+  VERSION = 4
 
-  def initialize(@manifest : ComponentManifest)
+  def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @window : PortableWindow?)
   end
 
   def write(packages : Array(String), fingerprint : String, fonts : PortableFonts) : String
@@ -22,27 +24,25 @@ class DesktopScene
         j.field "font_licenses", fonts.licenses.to_a.sort
         j.field "font_stacks", fonts.native_stacks
         j.field "getters", @manifest.all_bindings.to_h { |b| {b.id.to_s, b.getter_sym} }
+        j.field "window", @window if @window
+        j.field "style_lookup", @styles.lookup
         j.field "styles" do
           j.array do
-            @manifest.desktop_styles.each do |name, declarations|
+            @styles.rules.each do |rule|
               j.object do
-                j.field "name", name
-                j.field "values" do
-                  j.object do
-                    declarations.each do |key, value|
-                      case key
-                      when "color"            then j.field "ink", value[1..].to_i(16)
-                      when "background-color" then j.field "fill", value[1..].to_i(16)
-                      when "width", "height", "gap", "padding"
-                        j.field key, value.to_i(strict: false)
-                      when "font-size"      then j.field "size", value.to_i(strict: false)
-                      when "line-height"    then j.field "leading", value.to_i(strict: false)
-                      when "font-weight"    then j.field "weight", value.to_i
-                      when "font-family"    then j.field "face", value
-                      when "display"        then j.field "flex", true
-                      when "flex-direction" then j.field "vertical", value == "column"
-                      end
-                    end
+                rule.declarations.each do |key, value|
+                  case key
+                  when "color"            then j.field "ink", value[1..].to_i(16)
+                  when "background-color" then j.field "fill", value[1..].to_i(16)
+                  when "width", "height"
+                    j.field key, value == "auto" ? -1 : value.to_i(strict: false)
+                  when "gap", "padding" then j.field key, value.to_i(strict: false)
+                  when "font-size"      then j.field "size", value.to_i(strict: false)
+                  when "line-height"    then j.field "leading", value.to_i(strict: false)
+                  when "font-weight"    then j.field "weight", value.to_i
+                  when "font-family"    then j.field "face", value
+                  when "display"        then j.field "flex", true
+                  when "flex-direction" then j.field "vertical", value == "column"
                   end
                 end
               end
@@ -100,12 +100,7 @@ class DesktopScene
 
     classes = node.attributes["class"]? || PortableTemplate::Parts.new
     if classes.all?(&.is_a?(String))
-      names = classes.join.split
-      json.field "styles" do
-        json.array do
-          @manifest.desktop_styles.each_with_index { |(name, _), i| json.number(i) if names.includes?(name) }
-        end
-      end
+      json.field "styles", @styles.indices(classes.join)
     else
       json.field("style_names") { parts(json, classes) }
     end

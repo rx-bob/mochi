@@ -1,6 +1,8 @@
 Mochi::Test.test("select a station, reorder the rows, and inspect its details") do
   mount "record-inspector"
   assert_text "[data-view='selection']", "Selected station 01"
+  focus "[data-id='02']"
+  checkpoint "initial"
   click "[data-id='02']"
   assert_text "[data-view='selection']", "Selected station 02"
   assert_attribute "[data-id='02']", "aria-pressed", "true"

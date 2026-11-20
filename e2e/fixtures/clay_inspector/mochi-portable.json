@@ -3,6 +3,7 @@
   "root": "record-inspector",
   "app_id": "org.mochi.stations",
   "display_name": "Stations",
+  "window": { "inset": 24, "max_width": 520 },
   "fonts": {
     "StationSans": {
       "400": { "file": "public/station-sans.woff2", "license": "public/OFL.txt" },

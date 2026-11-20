@@ -268,7 +268,6 @@ class MrbcCompiler
       composition = profile.compose_styles(component.absolute_path, staged_root)
       manifest.css = component.css = composition.css
       manifest.style_resources = composition.resources
-      manifest.desktop_styles = profile.rules
 
       package = graph.packages[manifest.package_id]
       package.resources = manifest.style_resource_ids
@@ -290,11 +289,14 @@ class MrbcCompiler
       PortableTemplate::SourceMap.new(profile.source_marks, manifest.class_name,
         manifest.source_file, manifest.source_line).apply(manifest.portable_nodes.not_nil!)
       fonts = PortableFonts.new(project, project_dir, profile)
+      window = manifest.tag_name == project.root ? project.window : nil
+      document_css = window ? "body:has(> #{project.root}){margin:0;background:#ffffff}\n" : ""
       fonts.resolve(manifest.portable_nodes.not_nil!)
-      manifest.css = component.css = fonts.browser_css(manifest.css)
+      document_style = fonts.document_stylesheet(document_css)
+      manifest.css = component.css = fonts.browser_css(manifest.css, window.try(&.host_css) || "")
       manifest.font_resources = fonts.resources
-      if resource = fonts.style_resource
-        manifest.font_style = resource.id
+      if resource = document_style
+        manifest.document_style = resource.id
         manifest.font_resources << resource
       end
       graph.packages[manifest.package_id].resources.concat(manifest.font_resources.map(&.id))
@@ -302,7 +304,7 @@ class MrbcCompiler
     end
     root = graph.packages[graph.entry_packages.first].component.not_nil!
     packages = graph.order.map { |id| graph.packages[id].file }
-    DesktopScene.new(root.manifest).write(packages, @capacity_config.fingerprint, font_plans[root.manifest.tag_name])
+    DesktopScene.new(root.manifest, root.portable_profile.not_nil!.styles, project.window).write(packages, @capacity_config.fingerprint, font_plans[root.manifest.tag_name])
   end
 
   private def collect_resources(
@@ -850,7 +852,7 @@ class MrbcCompiler
         end
       end
     end
-    json.field "font_style", manifest.font_style if manifest.font_style
+    json.field "document_style", manifest.document_style if manifest.document_style
     json.field "css", manifest.css
     if source_file = manifest.source_file
       json.field "source" do

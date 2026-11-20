@@ -11,6 +11,7 @@ export type Control = {
   lines: string[];
   pressed: boolean | null;
   fill: RGB | null;
+  ink: RGB;
   lineFrames: [number, number, number, number, number][];
   lineFaces?: string[][];
 };
@@ -69,14 +70,14 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
             range.setEnd(node, word.index! + word[0].length);
             const rect = range.getBoundingClientRect();
             const current = rect.top;
-            const left = rect.left - panel.left, right = rect.right - panel.left;
+            const left = rect.left, right = rect.right;
             if (Math.abs(current - top) < 0.5) {
               lines[lines.length - 1] += " " + word[0];
               lineFrames[lineFrames.length - 1][2] = right - lineFrames[lineFrames.length - 1][0];
             } else {
               lines.push(word[0]);
               top = current;
-              const baseline = top - panel.top + ascent;
+              const baseline = top + ascent;
               lineFrames.push([left, baseline - (leading + ascent - descent) / 2, right - left, leading, baseline]);
             }
           }
@@ -88,15 +89,19 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
       const pressed = el.getAttribute("aria-pressed");
       return {
         id: key, name: null, lines, role: container ? null : el.tagName === "BUTTON" ? "button" : "text",
-        rect: [bounds.x - panel.x, bounds.y - panel.y, bounds.width, bounds.height],
+        rect: [bounds.x, bounds.y, bounds.width, bounds.height],
         pressed: pressed === null ? null : pressed === "true",
-        fill: rgba.length === 3 ? [rgba[0], rgba[1], rgba[2]] : null, lineFrames,
+        fill: rgba.length === 3 ? [rgba[0], rgba[1], rgba[2]] : null,
+        ink: style.color.match(/\d+/g)!.map(Number) as RGB, lineFrames,
       };
     });
-    return { width: panel.width, height: panel.height, scale: devicePixelRatio, focus, controls };
+    return { width: innerWidth, height: Math.ceil(panel.bottom + panel.top), scale: devicePixelRatio, focus, controls };
   });
   const panel = root.locator(".panel");
-  await panel.screenshot({ path: stem + ".png", scale: "device", animations: "disabled" });
+  await page.screenshot({
+    path: stem + ".png", scale: "device", animations: "disabled",
+    clip: { x: 0, y: 0, width: capture.width, height: capture.height },
+  });
   fs.writeFileSync(stem + ".aria.yml", await panel.ariaSnapshot());
   for (const [index, control] of capture.controls.entries()) {
     if (!control.role) continue;
@@ -127,7 +132,7 @@ export function compareObservations(dom: Capture, native: Capture, edgeTolerance
   for (const web of dom.controls) {
     const mac = native.controls.find(c => c.id === web.id);
     if (!mac) continue;
-    for (const field of ["role", "name", "pressed", "lines", "fill"] as const) {
+    for (const field of ["role", "name", "pressed", "lines", "fill", "ink"] as const) {
       compare(web.id, field, web[field], mac[field]);
     }
     for (const [index, line] of web.lineFrames.entries()) {

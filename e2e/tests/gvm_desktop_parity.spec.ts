@@ -22,12 +22,10 @@ for (const { width, scale } of sizes) {
     expect(plan.tests).toHaveLength(1);
 
     await withCompiledProject(fixture, async (baseURL, bundle) => {
-      // Preserve the entry page and local font. The recorder mounts the host.
-      // Remove the demo page's outer margin and width cap for the content crop.
+      // The recorder mounts the host in the built entry shell.
       const entry = path.join(bundle, "index.html");
       const html = fs.readFileSync(entry, "utf8")
-        .replace("<record-inspector></record-inspector>", "")
-        .replace("</style>", "body { margin: 0; } record-inspector { max-width: none; }\n</style>");
+        .replace("<record-inspector></record-inspector>", "");
       fs.writeFileSync(entry, html);
       const sizedBrowser = {
         newPage: () => browser.newPage({
@@ -75,13 +73,37 @@ for (const { width, scale } of sizes) {
         expect(capture.mismatches, `${browserName} ${width} ${capture.name}, first mismatch ${JSON.stringify(capture.mismatches[0])}`).toEqual([]);
       }
 
+      const contentWidth = Math.min(width - 48, 520);
       for (const { dom, native } of captures) {
         expect(native.controls.find(control => control.id === "title")!.lineFaces?.[0]).toContain("1");
-        const cafe = dom.controls.find(control => control.id === "station-02")!;
-        if (width === 315) expect(cafe.lines[0]).toBe("Café observation from the");
-        if (width === 318) expect(cafe.lines[0]).toBe("Café observation from the northern");
+        for (const host of [dom, native]) {
+          const control = (id: string) => host.controls.find(entry => entry.id === id)!;
+          expect(control("panel").rect.slice(0, 3)).toEqual([24, 24, contentWidth]);
+          expect(control("actions").rect[0]).toBe(40);
+          expect(control("action-reverse").rect.slice(2)).toEqual([108, 38]);
+          expect(control("action-details").rect[0] - control("action-reverse").rect[0]).toBe(116);
+          expect(control("station-02").rect[2]).toBe(contentWidth - 32);
+          for (const id of ["action-reverse", "action-details"]) {
+            const action = control(id);
+            expect(action.lineFrames[0][0] - action.rect[0]).toBeCloseTo(8, 1);
+          }
+          expect(control("station-02").ink).toEqual([22, 45, 39]);
+          const cafe = control("station-02");
+          if (contentWidth === 315) expect(cafe.lines[0]).toBe("Café observation from the");
+          if (contentWidth === 318) expect(cafe.lines[0]).toBe("Café observation from the northern");
+        }
       }
-      const selected = captures[0];
+      const initial = captures.find(capture => capture.name === "initial")!;
+      const selected = captures.find(capture => capture.name === "selected")!;
+      for (const host of ["dom", "native"] as const) {
+        const existing = initial[host].controls;
+        const updated = selected[host].controls;
+        expect(updated.map(control => control.rect)).toEqual(existing.map(control => control.rect));
+        expect(updated.filter((control, index) => JSON.stringify(control.fill) !== JSON.stringify(existing[index].fill))
+          .map(control => [control.id, control.fill])).toEqual([
+          ["station-01", [255, 255, 255]], ["station-02", [201, 231, 217]],
+        ]);
+      }
       const padding = structuredClone(selected.native);
       padding.controls.find(c => c.id === "action-reverse")!.rect[0] += 2;
       expect(compareObservations(selected.dom, padding, matrix.edgeTolerance)[0]).toMatchObject({ control: "action-reverse", check: "left" });
@@ -156,7 +178,7 @@ test("station inspector Ruby scenario reports a wrong assertion at the authored 
     fs.writeFileSync(scenario, source.replace('"Selected station 02"', '"Selected station 99"'));
 
     expect(() => runRubyProject(project, browserName, "inspector_test.rb")).toThrow(
-      "inspector_test.rb:5: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 4 assert_text [data-view='selection'])",
+      "inspector_test.rb:7: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 6 assert_text [data-view='selection'])",
     );
   } finally {
     fs.rmSync(project, { recursive: true, force: true });

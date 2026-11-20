@@ -6,10 +6,9 @@ static void captureInspector(DesktopView *view, NSString *directory, NSInteger w
     NSArray *observations = view.layoutObservations;
     NSDictionary *panel = observations.firstObject;
     NSArray *rect = panel[@"rect"];
-    if (![panel[@"id"] isEqual:@"panel"] || [rect[0] doubleValue] != 0 ||
-        [rect[1] doubleValue] != 0 || [rect[2] doubleValue] != width)
-        DesktopFailure(@"unexpected inspector panel bounds");
-    NSInteger height = (NSInteger)ceil([rect[3] doubleValue]);
+    if (![panel[@"id"] isEqual:@"panel"] || rect.count != 4)
+        DesktopFailure(@"missing inspector panel bounds");
+    NSInteger height = (NSInteger)ceil(2 * [rect[1] doubleValue] + [rect[3] doubleValue]);
     NSRect crop = NSMakeRect(0, 0, width, height);
     NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:NULL pixelsWide:width * scale pixelsHigh:height * scale

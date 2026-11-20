@@ -1141,8 +1141,48 @@ describe "Portable build validation" do
       manifest["resources"].as_h.size.should eq(2)
       scene = JSON.parse(File.read(File.join(desktop, "scene.json")))
       scene["tag"].as_s.should eq("portable-screen")
-      scene["styles"].as_a.map { |rule| rule["values"].as_h.keys }.should eq([["padding"], ["flex"], ["gap"]])
+      scene["styles"].as_a.map { |rule| rule.as_h.keys }.should eq([["padding"], ["flex"], ["gap"]])
       File.read(File.join(dom, "components/portable-screen.chi")).should eq(File.read(File.join(desktop, "components/portable-screen.chi")))
+    end
+  end
+
+  it "normalizes ordered rules and compiles layout with the same root constraints" do
+    with_portable_spec_project do |project|
+      declaration_path = File.join(project, PortableProject::FILE_NAME)
+      declaration = JSON.parse(File.read(declaration_path)).as_h
+      declaration["window"] = JSON.parse(%q({"inset":24,"max_width":520}))
+      File.write(declaration_path, declaration.to_json)
+      write_portable_spec_screen(project, %q(<div class="second screen second"><button class="screen second">Open</button></div>))
+      stylesheet = File.join(project, "lib/styles/base.css")
+      File.write(stylesheet, ".screen { padding: 0008px; } .second { padding: 12px; width: 20px; }")
+      root = File.join(project, "lib/PortableScreen.rb")
+      File.write(root, File.read(root).sub("gap: 4px;", "gap: 4px; padding: 4px /* local */; width: auto;"))
+
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      native = compile_portable_spec(project, RenderTarget::Desktop)
+      manifest = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))
+      descriptor = JSON.parse(File.read(File.join(dom, "components/portable-screen.json")))
+      imported = descriptor["style_resources"].as_a.map do |id|
+        file = manifest["resources"][id.as_s]["file"].as_s
+        File.read(File.join(dom, file))
+      end
+      imported[0].should contain(".screen{padding:8px;}")
+      imported[0].should contain(".second{padding:12px;width:20px;min-width:20px;}")
+      imported[1].should contain(".screen{display:flex;")
+      descriptor["css"].as_s.should contain(".screen{gap:4px;padding:4px;width:auto;min-width:0;}")
+      descriptor["css"].as_s.should contain("margin:24px;width:max(0px,calc(100% - 48px));max-width:520px")
+
+      scene = JSON.parse(File.read(File.join(native, "scene.json")))
+      scene["window"].should eq(declaration["window"])
+      scene["style_lookup"]["screen"].as_a.map(&.as_i).should eq([0, 2, 3])
+      scene["nodes"][0]["styles"].should eq(scene["nodes"][0]["nodes"][0]["styles"])
+      scene["nodes"][0]["styles"].as_a.map(&.as_i).should eq([0, 1, 2, 3])
+      scene["styles"][3]["padding"].as_i.should eq(4)
+      scene["styles"][3]["width"].as_i.should eq(-1)
+
+      declaration["window"] = JSON.parse(%q({"inset":-1}))
+      File.write(declaration_path, declaration.to_json)
+      portable_diagnostic(project, "mochi-portable.json: window inset must be 0–9999")
     end
   end
 
@@ -1352,7 +1392,7 @@ describe "Portable font resolution" do
       resources = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))["resources"].as_h
       resources.values.count { |resource| resource["kind"].as_s == "font" }.should eq(3)
       resources.values.count { |resource| resource["kind"].as_s == "font-license" }.should eq(1)
-      stylesheet = resources.values.find! { |resource| resource["kind"].as_s == "font-style" }["file"].as_s
+      stylesheet = resources.values.find! { |resource| resource["kind"].as_s == "document-style" }["file"].as_s
       File.read(File.join(dom, stylesheet)).should contain("unicode-range:U+3a9")
 
       declaration["fonts"].as_h["Fallback"] = JSON.parse(%q({"700":{"file":"public/station-sans.woff2"}}))

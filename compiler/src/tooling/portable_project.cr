@@ -12,6 +12,25 @@ end
 
 alias PortableFontDeclaration = String | Hash(String, PortableFace)
 
+struct PortableWindow
+  include JSON::Serializable
+  include JSON::Serializable::Strict
+
+  getter inset : Int32 = 0
+  getter max_width : Int32?
+
+  def host_css : String
+    ":host{display:block;box-sizing:border-box;margin:#{inset}px;" +
+      "width:max(0px,calc(100% - #{inset * 2}px));max-width:#{max_width.try { |width| "#{width}px" } || "none"}}"
+  end
+
+  def validate : Nil
+    unless (0..9999).includes?(inset) && max_width.try { |width| (1..9999).includes?(width) } != false
+      raise "#{PortableProject::FILE_NAME}: window inset must be 0–9999 and max_width must be 1–9999 logical pixels"
+    end
+  end
+end
+
 # A project with this declaration targets the shared DOM and desktop profile.
 struct PortableProject
   FILE_NAME = "mochi-portable.json"
@@ -25,6 +44,7 @@ struct PortableProject
   getter app_id : String
   getter display_name : String
   getter fonts : Hash(String, PortableFontDeclaration)
+  getter window : PortableWindow?
 
   def self.declaration_path(project_dir : String) : String?
     path = File.join(project_dir, FILE_NAME)
@@ -56,6 +76,7 @@ struct PortableProject
     if display_name.strip.empty? || display_name.each_char.any?(&.control?)
       raise "#{FILE_NAME}: display_name must be nonempty text"
     end
+    window.try(&.validate)
     project_root = File.realpath(project_dir)
     fonts.each do |family, value|
       unless family.matches?(/\A[a-zA-Z][\w-]*\z/) && !family.downcase.in?("sans-serif", "monospace")
