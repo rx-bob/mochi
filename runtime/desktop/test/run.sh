@@ -38,7 +38,27 @@ ruby -rjson -e '
   abort "unexpected DOM loader contents" unless File.binread(File.join(dom, "mochi-loader.js")) ==
     File.binread("runtime/mochi-loader.js")
 ' "$resources" "$dom"
-runtime/desktop/build_host.sh "${MOCHI_GVM_DIR:-../mochi-gvm}" runtime/desktop/test/inspector.m "$work/test-inspector"
+gvm=${MOCHI_GVM_DIR:-../mochi-gvm}
+mrbc=${MRBC:-}
+if [ -z "$mrbc" ]; then
+  for compiler_root in . "$gvm"; do
+    for profile in mochi-v2-host host; do
+      candidate="$compiler_root/build_wasm/mruby/src/build/$profile/bin/mrbc"
+      if [ -x "$candidate" ]; then
+        mrbc=$candidate
+        break 2
+      fi
+    done
+  done
+fi
+if [ -z "$mrbc" ]; then
+  echo "Set MRBC to the matching mruby bytecode compiler for the native ABI test." >&2
+  exit 1
+fi
+"$mrbc" -o "$work/native_probe.irep" "$gvm/tests/fixtures/native_probe.rb"
+runtime/desktop/build_host.sh "$gvm" "$gvm/tests/gvm/abi_host_test.c" "$work/abi_host_test"
+"$work/abi_host_test" "$work/native_probe.irep"
+runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/inspector.m "$work/test-inspector"
 "$work/test-inspector" "$resources" "$work/inspector.png"
 
 # A broken browser dependency override must be irrelevant to desktop replay.

@@ -4,14 +4,38 @@ void DesktopFailure(NSString *reason) {
     @throw [NSException exceptionWithName:@"MochiDesktopError" reason:reason userInfo:nil];
 }
 
-static uint32_t symbol(NSString *name) {
-    return mochi_intern((const uint8_t *)name.UTF8String, (int32_t)strlen(name.UTF8String));
+static MochiNativeBytes bytes(NSData *data) {
+    return (MochiNativeBytes){data.bytes, data.length};
 }
 
-static void failIn(NSDictionary *scene, NSString *method) {
+static void failIn(NSDictionary *scene, NSString *method, NSString *detail) {
     NSNumber *line = scene[@"methods"][method];
-    DesktopFailure([NSString stringWithFormat:@"%@:%@ (%@): %s", scene[@"source"],
-                    line ?: @1, method, desktop_vm_error()]);
+    DesktopFailure([NSString stringWithFormat:@"%@:%@ (%@, %@): %@", scene[@"source"] ?: @"scene.json",
+                    line ?: @1, scene[@"class"] ?: @"unknown component", method, detail]);
+}
+
+static void vmFailure(NSDictionary *scene, NSString *method) {
+    MochiNativeBytes error = mochi_native_error();
+    NSString *detail = [[NSString alloc] initWithBytes:error.data length:error.length encoding:NSUTF8StringEncoding];
+    failIn(scene, method, detail.length ? detail : @"VM operation failed");
+}
+
+NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
+    NSDictionary *scene, NSString *method, NSDictionary<NSNumber *, NSString *> *current,
+    MochiNativePatches patches) {
+    NSMutableDictionary *pending = [current mutableCopy];
+    MochiNativeBytes remaining = patches.bytes;
+    for (size_t i = 0; i < patches.count; i++) {
+        uint16_t key;
+        MochiNativeBytes value;
+        if (mochi_native_patch_next(&remaining, &key, &value) != 1)
+            failIn(scene, method, @"truncated VM patch record");
+        NSString *text = [[NSString alloc] initWithBytes:value.data length:value.length encoding:NSUTF8StringEncoding];
+        if (!text) failIn(scene, method, @"invalid UTF-8 in VM patch record");
+        pending[@(key)] = text;
+    }
+    if (remaining.length) failIn(scene, method, @"trailing bytes in VM patch batch");
+    return [pending copy];
 }
 
 @implementation DesktopProgram
@@ -23,27 +47,34 @@ static void failIn(NSDictionary *scene, NSString *method) {
     NSData *data = [NSData dataWithContentsOfURL:[resources URLByAppendingPathComponent:@"scene.json"]
                                         options:0 error:&error];
     if (!data) DesktopFailure(error.localizedDescription);
-    _scene = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
-    if (!_scene || ![_scene[@"version"] isEqual:@1]) DesktopFailure(@"Unsupported desktop scene version");
-    if (strcmp([_scene[@"capacity"] UTF8String], mochi_capacity_fingerprint()))
-        DesktopFailure(@"Desktop scene and VM capacity profiles differ");
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ goose_init(0, NULL); });
-    if (mochi_init_runtime()) failIn(_scene, @"initialize");
+    id scene = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+    if (![scene isKindOfClass:NSDictionary.class]) DesktopFailure(@"Invalid desktop scene");
+    _scene = scene;
+    if (![_scene[@"version"] isEqual:@1]) failIn(_scene, @"initialize", @"unsupported desktop scene version");
+    if (mochi_native_abi_version() != MOCHI_DESKTOP_NATIVE_ABI)
+        failIn(_scene, @"initialize", @"incompatible native GVM ABI version");
+    id fingerprint = _scene[@"capacity"];
+    NSString *runtimeFingerprint = @(mochi_native_capacity_fingerprint());
+    if (![fingerprint isEqual:runtimeFingerprint])
+        failIn(_scene, @"initialize", [NSString stringWithFormat:@"capacity profile mismatch (scene %@, VM %@)",
+                                       fingerprint ?: @"missing", runtimeFingerprint]);
+    if (mochi_native_open() != 0) vmFailure(_scene, @"initialize");
     for (NSString *file in _scene[@"packages"]) {
         NSData *body = [NSData dataWithContentsOfURL:[resources URLByAppendingPathComponent:file]];
-        if (!body || body.length > INT32_MAX - 10) DesktopFailure([@"Cannot load bytecode " stringByAppendingString:file]);
-        NSMutableData *irep = [NSMutableData dataWithBytes:"RITE0400\0\0" length:10];
+        if (!body || body.length > INT32_MAX - 10)
+            failIn(_scene, file, @"cannot read bytecode");
+        NSMutableData *irep __attribute__((objc_precise_lifetime)) =
+            [NSMutableData dataWithBytes:"RITE0400\0\0" length:10];
         [irep appendData:body];
-        if (mochi_load_irep(irep.bytes, (int32_t)irep.length)) failIn(_scene, file);
+        if (mochi_native_load(bytes(irep)) != 0) vmFailure(_scene, file);
     }
     return self;
 }
 @end
 
 @implementation DesktopVM {
-    uint64_t _instance;
-    NSMutableDictionary<NSNumber *, NSString *> *_patches;
+    MochiNativeInstance _instance;
+    NSDictionary<NSNumber *, NSString *> *_patches;
 }
 
 - (NSDictionary *)values { return _patches; }
@@ -51,67 +82,69 @@ static void failIn(NSDictionary *scene, NSString *method) {
 - (instancetype)initWithProgram:(DesktopProgram *)program {
     if (!(self = [super init])) return nil;
     _scene = program.scene;
-    const char *name = [_scene[@"class"] UTF8String];
-    _instance = mochi_mount_component((const uint8_t *)name, (int32_t)strlen(name));
-    if (!_instance) failIn(_scene, @"initialize");
-    _patches = [NSMutableDictionary dictionary];
+    NSString *name = _scene[@"class"];
+    NSData *className __attribute__((objc_precise_lifetime)) = [name dataUsingEncoding:NSUTF8StringEncoding];
+    if (mochi_native_mount(bytes(className), &_instance) != 0) vmFailure(_scene, @"initialize");
     @try {
         NSDictionary *getters = _scene[@"getters"];
         for (NSString *key in getters) {
-            if (mochi_register_binding(_instance, key.intValue, symbol(getters[key]))) failIn(_scene, getters[key]);
+            NSScanner *scanner = [NSScanner scannerWithString:key];
+            unsigned long long idValue;
+            if (![scanner scanUnsignedLongLong:&idValue] || !scanner.isAtEnd || idValue > UINT16_MAX)
+                failIn(_scene, @"initialize", [@"invalid binding ID " stringByAppendingString:key]);
+            NSString *getter = getters[key];
+            NSData *getterName __attribute__((objc_precise_lifetime)) = [getter dataUsingEncoding:NSUTF8StringEncoding];
+            if (mochi_native_bind(_instance, (uint16_t)idValue, bytes(getterName)) != 0)
+                vmFailure(_scene, getter);
         }
         [self lifecycle:@"mounted"];
+        _patches = @{};
         [self flush:@"initialize"];
     } @catch (NSException *e) {
-        mochi_unmount_component(_instance);
-        _instance = 0;
+        [self releaseInstance];
         @throw;
     }
     return self;
 }
 
+- (void)releaseInstance {
+    MochiNativeInstance instance = _instance;
+    _instance = 0;
+    if (instance) mochi_native_unmount(instance);
+}
+
 - (void)dealloc {
-    if (_instance) mochi_unmount_component(_instance);
+    [self releaseInstance];
 }
 
 - (void)flush:(NSString *)method {
-    int count = mochi_flush_patches(_instance);
-    if (count < 0) failIn(_scene, method);
-    if (mochi_fetch_outbox_len() || mochi_emit_outbox_len())
-        DesktopFailure([NSString stringWithFormat:@"%@: %@ requested an unsupported desktop host operation", _scene[@"source"], method]);
-    const uint8_t *p = desktop_patch_data();
-    int left = mochi_patch_buffer_len();
-    for (int i = 0; i < count; i++) {
-        if (left < 6) DesktopFailure(@"Truncated GVM patch header");
-        uint16_t key;
-        uint32_t size;
-        memcpy(&key, p, 2);
-        memcpy(&size, p + 2, 4);
-        if (size > (uint32_t)(left - 6)) DesktopFailure(@"Truncated GVM patch");
-        NSString *value = [[NSString alloc] initWithBytes:p+6 length:size encoding:NSUTF8StringEncoding];
-        if (!value) DesktopFailure(@"Invalid GVM patch encoding");
-        _patches[@(key)] = value;
-        p += 6 + size;
-        left -= 6 + size;
-    }
-    if (left) DesktopFailure(@"Invalid GVM patch length");
+    MochiNativePatches patches;
+    if (mochi_native_flush(_instance, &patches) != 0) vmFailure(_scene, method);
+    _patches = DesktopApplyPatches(_scene, method, _patches, patches);
+}
+
+- (int64_t)arity:(NSString *)method {
+    NSData *name __attribute__((objc_precise_lifetime)) = [method dataUsingEncoding:NSUTF8StringEncoding];
+    int64_t arity;
+    if (mochi_native_method_arity(_instance, bytes(name), &arity) != 0) vmFailure(_scene, method);
+    return arity;
 }
 
 - (void)call:(NSString *)method arguments:(NSArray *)args {
     NSError *error = nil;
-    NSData *json = [NSJSONSerialization dataWithJSONObject:args options:0 error:&error];
-    if (!json) DesktopFailure(error.localizedDescription);
-    if (mochi_dispatch_event_args(_instance, symbol(method), json.bytes, (int32_t)json.length) != 1)
-        failIn(_scene, method);
+    NSData *json __attribute__((objc_precise_lifetime)) = [NSJSONSerialization dataWithJSONObject:args options:0 error:&error];
+    if (!json) failIn(_scene, method, error.localizedDescription);
+    NSData *name __attribute__((objc_precise_lifetime)) = [method dataUsingEncoding:NSUTF8StringEncoding];
+    if (mochi_native_dispatch(_instance, bytes(name), bytes(json)) != 0) vmFailure(_scene, method);
 }
 
 - (void)lifecycle:(NSString *)method {
-    const char *s = method.UTF8String;
-    if (mochi_has_method(_instance, (const uint8_t *)s, (int32_t)strlen(s))) [self call:method arguments:@[]];
+    if ([self arity:method] >= 0) [self call:method arguments:@[]];
 }
 
 - (void)activate:(NSString *)method arguments:(NSArray *)args payload:(NSDictionary *)payload {
-    if (!args) args = goose_vm_method_req_argc(_instance, symbol(method)) == 1 ? @[payload] : @[];
+    if (!_instance) return;
+    if (!args) args = [self arity:method] == 1 ? @[payload] : @[];
     [self call:method arguments:args];
     [self flush:method];
 }
@@ -119,6 +152,6 @@ static void failIn(NSDictionary *scene, NSString *method) {
 - (void)close {
     if (!_instance) return;
     @try { [self lifecycle:@"unmounted"]; }
-    @finally { mochi_unmount_component(_instance); _instance = 0; }
+    @finally { [self releaseInstance]; }
 }
 @end

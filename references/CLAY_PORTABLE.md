@@ -40,3 +40,17 @@ and single-class flex styles. Child composition and host-backed Ruby
 operations require support on both hosts before they enter the profile.
 See the [station inspector](../e2e/fixtures/clay_inspector) for a working
 project and its shared Ruby scenario.
+
+## Native development build
+
+The AppKit host links a matching `mochi-gvm` source checkout. Build its
+standalone Goose artifacts first and point `MOCHI_GVM_DIR` to that checkout
+when it is outside the default sibling directory. The host requires native
+ABI v1 and validates the scene's capacity fingerprint before loading Ruby.
+Hosted macOS CI uses the full upstream commit SHA in
+`MOCHI_NATIVE_GVM_REVISION`.
+
+The ABI uses a single VM with serialized calls. Each successful mount owns
+its own instance handle until unmount. Dispatch and patch reads run on the
+AppKit thread. Native patch and error buffers are borrowed, and AppKit
+decodes and copies a complete patch batch before publishing any values.

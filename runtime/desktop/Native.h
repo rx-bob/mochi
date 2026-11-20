@@ -1,23 +1,11 @@
 #import <AppKit/AppKit.h>
 
-// Mochi GVM uses real, pointer-width buffers in the native host.
-void goose_init(int argc, char **argv);
-int32_t mochi_init_runtime(void);
-const char *mochi_capacity_fingerprint(void);
-int32_t mochi_load_irep(const uint8_t *, int32_t);
-uint64_t mochi_mount_component(const uint8_t *, int32_t);
-int32_t mochi_unmount_component(uint64_t);
-uint32_t mochi_intern(const uint8_t *, int32_t);
-int32_t mochi_register_binding(uint64_t, uint32_t, uint32_t);
-int32_t mochi_dispatch_event_args(uint64_t, uint32_t, const uint8_t *, int32_t);
-int32_t mochi_has_method(uint64_t, const uint8_t *, int32_t);
-int64_t goose_vm_method_req_argc(uint64_t, uint32_t);
-int32_t mochi_flush_patches(uint64_t);
-int32_t mochi_patch_buffer_len(void);
-int32_t mochi_fetch_outbox_len(void);
-int32_t mochi_emit_outbox_len(void);
-const uint8_t *desktop_patch_data(void);
-const char *desktop_vm_error(void);
+#include <mochi_native.h>
+
+#define MOCHI_DESKTOP_NATIVE_ABI 1
+#if MOCHI_NATIVE_ABI_VERSION != MOCHI_DESKTOP_NATIVE_ABI
+#error "Mochi desktop requires native GVM ABI version 1"
+#endif
 
 void mochi_clay_init(void);
 void mochi_clay_begin(float width);
@@ -31,6 +19,9 @@ float mochi_clay_end(void);
 void mochi_clay_paint(void);
 
 void DesktopFailure(NSString *reason) __attribute__((noreturn));
+NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
+    NSDictionary *scene, NSString *method, NSDictionary<NSNumber *, NSString *> *current,
+    MochiNativePatches patches);
 
 @interface DesktopProgram : NSObject
 @property(nonatomic, readonly) NSURL *resources;
