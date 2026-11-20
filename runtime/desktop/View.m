@@ -46,6 +46,9 @@
 @property(nonatomic, copy) NSString *key, *label;
 @property(nonatomic, copy) NSDictionary *attrs, *definition;
 @property(nonatomic, copy) NSArray *rowArguments;
+#ifdef MOCHI_DESKTOP_CAPTURE
+@property(nonatomic, strong) NSMutableArray<NSString *> *lines;
+#endif
 @end
 @implementation DesktopBox
 @end
@@ -70,6 +73,9 @@ void mochi_clay_line(const char *text, int length, int font, float x, float y, f
     DesktopBox *box = frameBoxes[font];
     NSDictionary *attrs = @{NSFontAttributeName:box.font, NSForegroundColorAttributeName:box.color};
     NSString *line = utf8(text, length);
+#ifdef MOCHI_DESKTOP_CAPTURE
+    [box.lines addObject:[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
+#endif
     CGFloat top = y + (height - [line sizeWithAttributes:attrs].height) / 2;
     [paintCommands addObject:@{@"point":[NSValue valueWithPoint:NSMakePoint(x, top)], @"text":line, @"attrs":attrs}];
 }
@@ -203,6 +209,9 @@ static NSString *displayValue(id value) {
         box.definition = node;
         box.attrs = attrs;
         box.rowArguments = rowArgs;
+#ifdef MOCHI_DESKTOP_CAPTURE
+        box.lines = [NSMutableArray array];
+#endif
         box.color = color(style[@"ink"] ?: @0);
         if (style[@"fill"]) box.background = color(style[@"fill"]);
         CGFloat size = [(style[@"size"] ?: @16) doubleValue];
@@ -253,12 +262,52 @@ static NSString *displayValue(id value) {
         mochi_clay_paint();
         _commands = [paintCommands copy];
         [self syncControls:frameBoxes];
+#ifdef MOCHI_DESKTOP_CAPTURE
+        [self observeLayout:frameBoxes];
+#endif
         self.needsDisplay = YES;
     } @finally {
         frameBoxes = nil;
         paintCommands = nil;
     }
 }
+
+#ifdef MOCHI_DESKTOP_CAPTURE
+- (void)observeLayout:(NSArray<DesktopBox *> *)boxes {
+    NSMutableArray *controls = [NSMutableArray array];
+    NSUInteger leaf = 0;
+    for (DesktopBox *box in boxes) {
+        id element = box.label ? _accessibles[leaf++] : nil;
+        NSDictionary *attrs = box.attrs;
+        NSString *key = attrs[@"data-view"];
+        if (attrs[@"data-action"]) key = [@"action-" stringByAppendingString:attrs[@"data-action"]];
+        if (attrs[@"data-id"]) key = [@"station-" stringByAppendingString:attrs[@"data-id"]];
+        if (!key) continue;
+        NSRect frame = box.frame;
+        NSString *role = nil;
+        NSString *name = nil;
+        if (element && [element isKindOfClass:NSButton.class]) {
+            frame = [element frame];
+            role = [[element accessibilityRole] isEqual:NSAccessibilityButtonRole] ? @"button" : [element accessibilityRole];
+            name = [element accessibilityLabel];
+        } else if (element) {
+            frame = [element accessibilityFrameInParentSpace];
+            role = [[element accessibilityRole] isEqual:NSAccessibilityStaticTextRole] ? @"text" : [element accessibilityRole];
+            name = [element accessibilityValue];
+        }
+        NSDictionary *control = @{
+            @"id":key, @"rect":@[@(frame.origin.x), @(frame.origin.y), @(frame.size.width), @(frame.size.height)],
+            @"lines":box.lines, @"role":role ?: NSNull.null, @"name":name ?: NSNull.null,
+            @"pressed":attrs[@"aria-pressed"] ? [element accessibilityValue] ?: NSNull.null : NSNull.null,
+            @"fill":box.background ? @[@(lround(box.background.redComponent * 255)),
+                @(lround(box.background.greenComponent * 255)), @(lround(box.background.blueComponent * 255))] : NSNull.null,
+            @"font":box.font.fontName,
+        };
+        [controls addObject:control];
+    }
+    _layoutObservations = [controls copy];
+}
+#endif
 
 static void detachButton(DesktopButton *button) {
     button.enabled = NO;
@@ -375,6 +424,9 @@ static void detachButton(DesktopButton *button) {
     [_buttons removeAllObjects];
     _accessibles = nil;
     _commands = nil;
+#ifdef MOCHI_DESKTOP_CAPTURE
+    _layoutObservations = nil;
+#endif
     [vm close];
 }
 @end

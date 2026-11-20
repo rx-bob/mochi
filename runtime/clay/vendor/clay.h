@@ -2502,15 +2502,20 @@ void Clay__CalculateFinalLayout(void) {
                 break;
             }
             Clay__MeasuredWord *measuredWord = Clay__MeasuredWordArray_Get(&context->measuredWords, wordIndex);
+            // Mochi patch for Clay v0.14: a collapsed trailing space does not
+            // take room at a line break. Keep its width between words.
+            bool wordEndsInSpace = measuredWord->length > 0 &&
+                textElementData->text.chars[measuredWord->startOffset + measuredWord->length - 1] == ' ';
+            float candidateWidth = lineWidth + measuredWord->width - (wordEndsInSpace ? spaceWidth : 0);
             // Only word on the line is too large, just render it anyway
-            if (lineLengthChars == 0 && lineWidth + measuredWord->width > containerElement->dimensions.width) {
+            if (lineLengthChars == 0 && candidateWidth > containerElement->dimensions.width) {
                 Clay__WrappedTextLineArray_Add(&context->wrappedTextLines, CLAY__INIT(Clay__WrappedTextLine) { { measuredWord->width, lineHeight }, { .length = measuredWord->length, .chars = &textElementData->text.chars[measuredWord->startOffset] } });
                 textElementData->wrappedLines.length++;
                 wordIndex = measuredWord->next;
                 lineStartOffset = measuredWord->startOffset + measuredWord->length;
             }
             // measuredWord->length == 0 means a newline character
-            else if (measuredWord->length == 0 || lineWidth + measuredWord->width > containerElement->dimensions.width) {
+            else if (measuredWord->length == 0 || candidateWidth > containerElement->dimensions.width) {
                 // Wrapped text lines list has overflowed, just render out the line
                 bool finalCharIsSpace = textElementData->text.chars[lineStartOffset + lineLengthChars - 1] == ' ';
                 Clay__WrappedTextLineArray_Add(&context->wrappedTextLines, CLAY__INIT(Clay__WrappedTextLine) { { lineWidth + (finalCharIsSpace ? -spaceWidth : 0), lineHeight }, { .length = lineLengthChars + (finalCharIsSpace ? -1 : 0), .chars = &textElementData->text.chars[lineStartOffset] } });

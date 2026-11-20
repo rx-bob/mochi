@@ -1,0 +1,71 @@
+{
+  "widths": [
+    285,
+    320,
+    640
+  ],
+  "checkpoints": [
+    "selected",
+    "reversed"
+  ],
+  "scale": 2,
+  "edgeTolerance": 1,
+  "channelDelta": 32,
+  "solidChannelDelta": 2,
+  "paint": {
+    "chromium": {
+      "regions": {
+        "panel": 0.052,
+        "title": 0.043,
+        "actions": 0.113,
+        "action-reverse": 0.086,
+        "action-details": 0.095,
+        "station-01": 0.032,
+        "station-02": 0.039,
+        "station-03": 0.022,
+        "selection": 0.04,
+        "details": 0.036
+      },
+      "focused": {
+        "action-details": 0.27,
+        "station-02": 0.153
+      }
+    },
+    "firefox": {
+      "regions": {
+        "panel": 0.075,
+        "title": 0.082,
+        "actions": 0.1,
+        "action-reverse": 0.085,
+        "action-details": 0.086,
+        "station-01": 0.06,
+        "station-02": 0.085,
+        "station-03": 0.052,
+        "selection": 0.085,
+        "details": 0.077
+      },
+      "focused": {
+        "action-details": 0.19,
+        "station-02": 0.13
+      }
+    },
+    "webkit": {
+      "regions": {
+        "panel": 0.049,
+        "title": 0.008,
+        "actions": 0.111,
+        "action-reverse": 0.082,
+        "action-details": 0.08,
+        "station-01": 0.007,
+        "station-02": 0.009,
+        "station-03": 0.007,
+        "selection": 0.008,
+        "details": 0.008
+      },
+      "focused": {
+        "action-details": 0.175,
+        "station-02": 0.073
+      }
+    }
+  }
+}

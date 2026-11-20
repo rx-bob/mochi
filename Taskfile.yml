@@ -27,7 +27,11 @@ vars:
   BUILD_LINK_FLAGS:
     sh: |
       if [ "$(uname -s)" = "Darwin" ]; then
-        echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a -Wl,-ld_classic"'
+        if [ -f "{{.ROOT_DIR}}/fragments/libs/libsorbet.a" ]; then
+          echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-force_load,{{.ROOT_DIR}}/fragments/libs/libsorbet.a -Wl,-ld_classic"'
+        else
+          echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,-rpath,{{.ROOT_DIR}}/fragments/libs"'
+        fi
       else
         echo '--link-flags="-L{{.ROOT_DIR}}/fragments/libs -Wl,--whole-archive,{{.ROOT_DIR}}/fragments/libs/libsorbet.a,--no-whole-archive"'
       fi
@@ -58,7 +62,11 @@ tasks:
         set -e
         {{.FRAG_CONFIG}}
         cd compiler
-        time crystal build src/mochi.cr -Dstatic_sorbet -o mochi {{.BUILD_LINK_FLAGS}}
+        sorbet_flag=
+        if [ "$(uname -s)" != "Darwin" ] || [ -f "{{.ROOT_DIR}}/fragments/libs/libsorbet.a" ]; then
+          sorbet_flag=-Dstatic_sorbet
+        fi
+        time crystal build src/mochi.cr $sorbet_flag -o mochi {{.BUILD_LINK_FLAGS}}
         if [ "$(uname -s)" = "Darwin" ]; then
           if otool -L mochi | grep -q '/usr/local/lib/libtree-sitter.0.27.dylib'; then
             install_name_tool -change /usr/local/lib/libtree-sitter.0.27.dylib "{{.ROOT_DIR}}/fragments/libs/libtree-sitter.dylib" mochi
@@ -179,6 +187,20 @@ tasks:
     deps: [build]
     cmds:
       - '{{.FRAG_CONFIG}} && runtime/desktop/test/run.sh'
+
+  desktop:parity:
+    desc: Compare the inspector in AppKit and all three browsers and save capture artifacts
+    deps: [build]
+    cmds:
+      - |
+        set -e
+        {{.FRAG_CONFIG}}
+        mkdir -p "{{.ROOT_DIR}}/build/desktop-parity"
+        export MOCHI_PARITY_DIR="$(mktemp -d "{{.ROOT_DIR}}/build/desktop-parity/run.XXXXXX")"
+        echo "Inspector captures: $MOCHI_PARITY_DIR"
+        sh runtime/desktop/test/capture.sh "$MOCHI_PARITY_DIR"
+        cd e2e
+        npx playwright test tests/gvm_desktop_parity.spec.ts --grep "inspector capture parity" --reporter=line
 
   framework:e2e:
     desc: Run portable framework browser regressions without Cowboy

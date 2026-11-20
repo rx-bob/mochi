@@ -28,9 +28,9 @@ class RecordInspector
 
   def html
     %Q{
-      <div class="panel">
-        <span class="title">Station records</span>
-        <div class="actions">
+      <div class="panel" data-view="panel">
+        <span class="title" data-view="title">Station records</span>
+        <div class="actions" data-view="actions">
           <button class="action" data-action="reverse" onclick="{reverse_records}">Reverse order</button>
           <button class="action" data-action="details" onclick="{toggle_details}">Details</button>
         </div>

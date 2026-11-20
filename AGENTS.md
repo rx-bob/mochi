@@ -64,6 +64,7 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
 | `task desktop:demo` | Build the experimental AppKit inspector in `build/desktop-mvp/Mochi.app` |
 | `task desktop:test` | Verify inspector rebuilds, resource inventories, bytecode identity, and AppKit interactions on macOS |
+| `task desktop:parity` | Compare recorded inspector checkpoints in AppKit and all three browsers on macOS |
 | `task e2e` / `task app:e2e` | Run the separate Cowboy application integration (requires that checkout) |
 | `task dev` | Build motestproj and serve `build_gvm` on port 27490 |
 | `task gvm:test` | Run the `mochi-gvm` Goose test suite |
@@ -164,6 +165,9 @@ target is the default. Desktop tests select accessible buttons and text with
 They support mount, unmount, remount, click, focus, focused-state, text and
 attribute assertions, and Enter, Space and Tab. Attribute assertions cover
 data attributes and button `aria-pressed` and `aria-label`.
+
+The [inspector parity guide](e2e/fixtures/clay_inspector/PARITY.md) documents
+the capture conditions, paint limits, and CI artifacts.
 
 ## Complete Ruby examples and contracts
 

@@ -4,6 +4,8 @@ Mochi::Test.test("select a station, reorder the rows, and inspect its details") 
   click "[data-id='02']"
   assert_text "[data-view='selection']", "Selected station 02"
   assert_attribute "[data-id='02']", "aria-pressed", "true"
+  focus "[data-id='02']"
+  checkpoint "selected"
   focus "[data-action='reverse']"
   press "Enter"
   assert_attribute "[data-id]", "data-id", "03"
@@ -12,6 +14,7 @@ Mochi::Test.test("select a station, reorder the rows, and inspect its details") 
   press "Space"
   assert_focused "[data-action='details']"
   assert_text "[data-view='details']", "Showing details for station 02"
+  checkpoint "reversed"
   remount
   assert_text "[data-view='selection']", "Selected station 01"
   assert_attribute "[data-id='01']", "aria-pressed", "true"

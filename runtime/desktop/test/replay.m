@@ -1,5 +1,8 @@
 #import "../Native.h"
 #import "AppKitEvents.h"
+#ifdef MOCHI_DESKTOP_CAPTURE
+#import "InspectorCapture.h"
+#endif
 
 static id readJSON(NSURL *url) {
     NSError *error = nil;
@@ -22,6 +25,10 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 - (instancetype)initWithProgram:(DesktopProgram *)program;
 - (void)runStep:(NSDictionary *)step;
 - (void)close;
+#ifdef MOCHI_DESKTOP_CAPTURE
+@property(nonatomic) NSInteger captureWidth;
+@property(nonatomic, copy) NSString *captureDirectory;
+#endif
 @end
 
 @implementation DesktopReplay {
@@ -49,6 +56,12 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
     _window.autorecalculatesKeyViewLoop = NO;
     _window.title = tag;
     _window.contentView = _view;
+#ifdef MOCHI_DESKTOP_CAPTURE
+    if (self.captureDirectory) {
+        _window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        [_window setContentSize:NSMakeSize(self.captureWidth, 660)];
+    }
+#endif
     [_window makeKeyAndOrderFront:nil];
     [_window display];
     _lastTag = tag;
@@ -106,6 +119,15 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 
 - (void)runStep:(NSDictionary *)step {
     NSString *operation = step[@"operation"];
+    if ([operation isEqual:@"checkpoint"]) {
+#ifdef MOCHI_DESKTOP_CAPTURE
+        if (self.captureDirectory) {
+            if (!_view) DesktopFailure(@"mount a component before capturing a checkpoint");
+            captureInspector(_view, self.captureDirectory, self.captureWidth, step[@"name"]);
+        }
+#endif
+        return;
+    }
     if ([operation isEqual:@"mount"] || [operation isEqual:@"remount"]) {
         if (_view && [operation isEqual:@"mount"]) DesktopFailure(@"each test can mount one root component");
         NSString *tag = [step[@"tag"] isKindOfClass:NSString.class] ? step[@"tag"] : _lastTag;
@@ -154,7 +176,11 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 
 int main(int argc, const char **argv) {
     @autoreleasepool {
+#ifdef MOCHI_DESKTOP_CAPTURE
+        if (argc != 3 && argc != 5) return 2;
+#else
         if (argc != 3) return 2;
+#endif
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [NSApp finishLaunching];
@@ -164,6 +190,12 @@ int main(int argc, const char **argv) {
             DesktopProgram *program = [[DesktopProgram alloc] initWithResources:[NSURL fileURLWithPath:@(argv[1])]];
             for (NSDictionary *test in plan[@"tests"]) {
                 DesktopReplay *replay = [[DesktopReplay alloc] initWithProgram:program];
+#ifdef MOCHI_DESKTOP_CAPTURE
+                if (argc == 5) {
+                    replay.captureDirectory = @(argv[3]);
+                    replay.captureWidth = [@(argv[4]) integerValue];
+                }
+#endif
                 NSString *origin = [NSString stringWithFormat:@"%@:%@", test[@"ruby_file"], test[@"line"]];
                 NSUInteger number = 0;
                 @try {

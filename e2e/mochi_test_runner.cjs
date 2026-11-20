@@ -319,7 +319,7 @@ async function settleFrames(page) {
   }));
 }
 
-async function runCase(browser, browserName, baseUrl, testCase) {
+async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
   let page;
   let origin = sourceLabel(testCase.ruby_file ? testCase : testCase.steps[0] || { ruby_file: "<ruby test>", line: 1 });
   let stepDescription = "";
@@ -504,6 +504,11 @@ async function runCase(browser, browserName, baseUrl, testCase) {
               return !!window.__mochiTestCaptureTarget();
             });
             if (captured) throw new Error(`${origin}: pointer capture remained active`);
+          }
+        } else if (step.operation === "checkpoint") {
+          if (onCheckpoint) {
+            await settleFrames(page);
+            await onCheckpoint(page, step.name);
           }
         } else if (step.operation === "press") {
           if (!host) throw new Error(`${origin}: mount a component before using press`);

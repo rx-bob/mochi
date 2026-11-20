@@ -47,6 +47,9 @@ void DesktopFailure(NSString *reason) __attribute__((noreturn));
 @end
 
 @interface DesktopView : NSView
+#ifdef MOCHI_DESKTOP_CAPTURE
+@property(nonatomic, readonly) NSArray<NSDictionary *> *layoutObservations;
+#endif
 @property(nonatomic, readonly) NSString *failureReason;
 - (instancetype)initWithResources:(NSURL *)resources;
 - (instancetype)initWithProgram:(DesktopProgram *)program;

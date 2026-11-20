@@ -50,6 +50,13 @@ module Mochi
         record("assert_focused", { "selector" => test_selector(selector) })
       end
 
+      def checkpoint(name)
+        unless name.is_a?(String) && name.match?(/\A[a-z][a-z0-9-]*\z/)
+          raise ArgumentError, "checkpoint names must use lowercase letters, digits or hyphens and start with a letter"
+        end
+        record("checkpoint", { "name" => name })
+      end
+
       def select_files(selector, files:)
         record("select_files", { "selector" => test_selector(selector), "files" => test_files(files) })
       end
