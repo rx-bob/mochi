@@ -375,7 +375,7 @@ static void detachButton(DesktopButton *button) {
     }
     NSDictionary *payload = @{@"type":@"click", @"dataset":dataset, @"current_target_dataset":dataset};
     NSArray *args = nil;
-    if ([method hasPrefix:@"__mochi_each_"] && box.rowArguments) args = [box.rowArguments arrayByAddingObject:payload];
+    if ([box.definition[@"row_context"] boolValue] && box.rowArguments) args = [box.rowArguments arrayByAddingObject:payload];
     else if ([box.definition[@"event_args"] intValue]) args = @[payload];
     @try {
         [_vm activate:method arguments:args payload:payload];

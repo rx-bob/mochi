@@ -6,9 +6,9 @@ class RecordInspector
 
   def initialize
     @records = [
-      {"id" => "01", "label" => "Harbor weather station"},
-      {"id" => "02", "label" => "Café observation from the northern coastal monitoring station"},
-      {"id" => "03", "label" => "West ridge sensor"}
+      {"id" => "01", "name" => "Harbor", "label" => " weather station"},
+      {"id" => "02", "name" => "Café", "label" => " observation from the northern coastal monitoring station"},
+      {"id" => "03", "name" => "West", "label" => " ridge sensor"}
     ]
     @selected = "01"
     @details = false
@@ -35,9 +35,9 @@ class RecordInspector
           <button class="action" data-action="details" onclick="{toggle_details}">Details</button>
         </div>
         {each @records as record, key: record["id"]}
-          <button class="record {if @selected == record['id']}selected{end}" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" onclick="{select_record($event)}">{record["label"]}</button>
+          <button class="record {if @selected == record['id']}selected{end}" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" onclick="{select_record($event)}">{record["name"]}{record["label"]}</button>
         {end}
-        <span class="selection" data-view="selection">Selected station {@selected}</span>
+        <span class="selection" data-view="selection">Selected st&#97;tion {@selected}</span>
         {if @details}
           <span class="detail" data-view="details">Showing details for station {@selected}</span>
         {end}

@@ -578,7 +578,8 @@ class Compiler
       source_locator,
       props,
       emits,
-      expression_parser
+      expression_parser,
+      portable: !@portable_project.nil?
     )
     manifest.helper_chi = helper_chi
     manifest.formatting = helper_formatting || component_source.includes?("MochiFormat")

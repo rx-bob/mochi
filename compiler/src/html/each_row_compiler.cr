@@ -33,8 +33,9 @@ class EachRowCompiler
     parser : TemplateExpressionParser,
     context : EachRowDomContext = EachRowDomContext.new,
     ids : EachRowIds = EachRowIds.new(block.id + 1),
+    portable : Bool = false,
   ) : EachRowTemplate
-    compile_row(block, parser, [] of EachRowScope, context, ids)
+    compile_row(block, parser, [] of EachRowScope, context, ids, portable)
   end
 
   private def self.compile_row(
@@ -43,6 +44,7 @@ class EachRowCompiler
     parent_scope : Array(EachRowScope),
     context : EachRowDomContext,
     ids : EachRowIds,
+    portable : Bool,
   ) : EachRowTemplate
     item_name = block.loop_def.item_name
     declared_index = block.loop_def.index_name
@@ -59,17 +61,19 @@ class EachRowCompiler
 
     entry = EachRowScope.new(item_name, index_name, declared_index)
     scope = parent_scope + [entry]
-    fragment = compile_fragment(block.content, block.id, parser, scope, context, ids, row_span)
-    EachRowTemplate.new(block.id, block.loop_def.array_name, item_name, index_name,
+    fragment = compile_fragment(block.content, block.id, parser, scope, context, ids, row_span, portable)
+    row = EachRowTemplate.new(block.id, block.loop_def.array_name, item_name, index_name,
       declared_index, fragment.template, fragment.bindings, fragment.events,
       fragment.children, scope, key_expression, row_span, fragment.attribute_conditionals,
       fragment.attribute_hashes, context.tag, context.namespace, fragment.conditionals)
+    row.portable_nodes = fragment.portable_nodes
+    row
   end
 
   private def self.compile_fragment(
     template : String, fragment_id : Int32, parser : TemplateExpressionParser,
     scope : Array(EachRowScope), context : EachRowDomContext, ids : EachRowIds,
-    row_span : TemplateSourceSpan?,
+    row_span : TemplateSourceSpan?, portable : Bool,
   ) : EachRowFragment
     scope_names = scope_names_for(scope)
     if with_directive = template.match(/\{with(?:\s|})/)
@@ -172,19 +176,24 @@ class EachRowCompiler
       end
     end
 
-    sentinel_template = template
-    replacements = [] of Tuple(Int32, Int32, String)
-    expressions.each_with_index do |expression, slot|
-      replacements << {expression.template_start, expression.template_end, sentinel(slot)}
-    end
-    replacements.sort_by! { |replacement| -replacement[0] }
-    replacements.each do |start, finish, token|
-      sentinel_template = sentinel_template.byte_slice(0, start) +
-                          token +
-                          sentinel_template.byte_slice(finish, sentinel_template.bytesize - finish)
+    if portable && children_blocks.empty? && blocks.empty?
+      captured, locations = capture_portable_row(template, expressions, row_events, context)
+      if locations.size == expressions.size
+        nodes = captured
+        classification = locations
+      end
     end
 
-    classification = classify_slots(sentinel_template, context)
+    sentinel_template = String.build do |io|
+      cursor = 0
+      expressions.each_with_index do |expression, slot|
+        io << template.byte_slice(cursor, expression.template_start - cursor)
+        io << sentinel(slot)
+        cursor = expression.template_end
+      end
+      io << template.byte_slice(cursor)
+    end
+    classification ||= classify_slots(sentinel_template, context)
     bindings = [] of EachRowBindingDescriptor
     expressions.each_with_index do |expression, slot|
       kind, attr_name = classification[slot]? || raise TemplateExpressionError.new(
@@ -213,7 +222,7 @@ class EachRowCompiler
     end
 
     children = children_blocks.map do |child|
-      compile_row(child, parser, scope, child_contexts[child.id]? || context, ids)
+      compile_row(child, parser, scope, child_contexts[child.id]? || context, ids, portable)
     end
     conditionals = blocks.map do |block|
       id = conditional_ids[block.id]
@@ -222,16 +231,16 @@ class EachRowCompiler
       conditions.each { |condition| parser.validate_source!(condition, "row condition") if condition }
       branches = block.branches.map do |branch|
         span = parser.locator.try(&.locate(branch.condition || branch.content)) || row_span
-        compile_fragment(branch.content, ids.take, parser, scope, branch_context, ids, span)
+        compile_fragment(branch.content, ids.take, parser, scope, branch_context, ids, span, portable)
       end
       EachRowConditional.new(id, conditions, branches, parser.locator.try(&.locate(block.condition)))
     end
     sentinel_template = TemplateAttributes.rewrite(sentinel_template, parser) do |attribute|
       attribute.name.starts_with?("data-mochi-bind-") ? "" : nil
     end
-    EachRowFragment.new(
+    fragment = EachRowFragment.new(
       fragment_id,
-      inert_svg_attributes(sentinel_template, context),
+      browser_row_template(sentinel_template, context, nodes),
       bindings,
       row_events,
       children,
@@ -243,6 +252,94 @@ class EachRowCompiler
       context.namespace,
       conditionals
     )
+    fragment.portable_nodes = nodes
+    fragment
+  end
+
+  # Lexbor decodes HTML entities. Carry the original expression ordinals
+  # through its input as inert text so even escaped literal braces stay text.
+  # The walk classifies those operands once and captures the typed row before
+  # the browser template is serialized with its own sentinel representation.
+  private def self.capture_portable_row(template, expressions, events, context)
+    prefix = "mochi-compile-operand-"
+    # Check the decoded input so authored entities cannot forge an operand.
+    decoded = HTML.unescape(template)
+    while decoded.includes?(prefix)
+      prefix += "-"
+    end
+    transport = String.build do |io|
+      cursor = 0
+      expressions.each_with_index do |expression, slot|
+        io << template.byte_slice(cursor, expression.template_start - cursor)
+        io << prefix << slot << "-"
+        cursor = expression.template_end
+      end
+      io << template.byte_slice(cursor)
+    end
+    token = Regex.new("#{Regex.escape(prefix)}(\\d+)-")
+    classification = {} of Int32 => Tuple(String, String?)
+    root = fragment_root(transport, context)
+    nodes = [] of PortableTemplate::Node
+    root.try do |body|
+      body.children.each { |child| nodes << capture_row_node(child, token, classification, events) }
+    end
+    {nodes, classification}
+  end
+
+  private def self.capture_row_node(node, token, classification, events) : PortableTemplate::Node
+    tag = node.tag_name
+    case tag
+    when "_text"
+      parts = row_parts(node.tag_text, token, classification, {"text", nil})
+      PortableTemplate::Text.new(parts)
+    when "_em_comment"
+      PortableTemplate::Comment.new
+    else
+      attrs = DomAttributes.read(node)
+      action = if method = attrs["data-mochi-click"]?
+                 event = events.find { |candidate| candidate.wrapper_sym == method }
+                 if event
+                   supported = event.actions.size <= 1 && event.args.size <= 1 && event.args.all? { |arg| arg.kind == "event" }
+                   PortableTemplate::Action.new(method, event.args.size, true, supported)
+                 else
+                   PortableTemplate::Action.new(method, 0, false)
+                 end
+               end
+      operands = {} of String => PortableTemplate::Parts
+      attrs.each do |name, value|
+        kind = attrs.has_key?("data-mochi-bind-#{name}") ? "prop" : "attr"
+        parts = row_parts(value, token, classification, {kind, name})
+        operands[name] = parts unless name.starts_with?("data-mochi-")
+      end
+      children = [] of PortableTemplate::Node
+      node.children.each { |child| children << capture_row_node(child, token, classification, events) }
+      PortableTemplate::Element.new(tag, operands, children, action)
+    end
+  end
+
+  private def self.row_parts(text, token, classification, kind) : PortableTemplate::Parts
+    ranges = [] of Tuple(Int32, Int32, PortableTemplate::Part)
+    text.scan(token) do |match|
+      slot = match[1].to_i
+      classification[slot] = kind
+      ranges << {match.byte_begin(0), match.byte_end(0), PortableTemplate::RowOperand.new(slot)}
+    end
+    PortableTemplate.parts(text, ranges)
+  end
+
+  private def self.browser_row_template(template : String, context : EachRowDomContext,
+                                        nodes : Array(PortableTemplate::Node)?) : String
+    if nodes && context.namespace == "html" && !contains_svg?(nodes)
+      template
+    else
+      inert_svg_attributes(template, context)
+    end
+  end
+
+  private def self.contains_svg?(nodes : Array(PortableTemplate::Node)) : Bool
+    nodes.any? do |node|
+      node.is_a?(PortableTemplate::Element) && (node.tag == "svg" || contains_svg?(node.children))
+    end
   end
 
   # SVG numeric/path parsers reject sentinel strings even in detached trees.

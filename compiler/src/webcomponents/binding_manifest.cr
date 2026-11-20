@@ -1,3 +1,4 @@
+require "../clay/portable_template"
 require "../html/event_argument"
 require "../html/each_row_template"
 require "../html/template_expression"
@@ -46,6 +47,7 @@ struct BindingDescriptor
 end
 
 struct ConditionalBranchDescriptor
+  property portable_nodes : Array(PortableTemplate::Node)?
   property html_template : String
   property bindings : Array(BindingDescriptor)
   property events : Array(EventDescriptor)
@@ -152,6 +154,7 @@ struct PropDescriptor
 end
 
 class ComponentManifest
+  property portable_nodes : Array(PortableTemplate::Node)?
   property desktop_styles = [] of Tuple(String, Hash(String, String))
   property tag_name : String
   property class_name : String

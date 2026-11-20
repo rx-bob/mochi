@@ -1,3 +1,4 @@
+require "../clay/portable_template"
 require "./event_argument"
 require "./event_action"
 require "./template_expression"
@@ -82,6 +83,7 @@ end
 # A fragment retains its lexical scope without introducing a loop variable.
 # Rows and conditional branches share slots, events, and structural children.
 class EachRowFragment
+  property portable_nodes : Array(PortableTemplate::Node)?
   getter block_id : Int32
   getter template : String
   getter bindings : Array(EachRowBindingDescriptor)

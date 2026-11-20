@@ -280,7 +280,13 @@ class MrbcCompiler
       end
     end
 
-    graph.component_order.each { |component| component.portable_profile.not_nil!.reject_child! }
+    graph.component_order.each do |component|
+      profile = component.portable_profile.not_nil!
+      profile.reject_child!
+      manifest = component.manifest
+      PortableTemplate::SourceMap.new(profile.source_marks, manifest.class_name,
+        manifest.source_file, manifest.source_line).apply(manifest.portable_nodes.not_nil!)
+    end
     root = graph.packages[graph.entry_packages.first].component.not_nil!
     packages = graph.order.map { |id| graph.packages[id].file }
     DesktopScene.new(root.manifest).write(packages, @capacity_config.fingerprint, root.portable_profile.not_nil!.fonts)

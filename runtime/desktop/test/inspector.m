@@ -42,22 +42,29 @@ static void expectComponentFailure(NSString *message, void (^operation)(void)) {
     DesktopFailure([@"Expected component failure: " stringByAppendingString:message]);
 }
 
-static void checkFingerprint(NSURL *resources) {
+static void checkSceneCompatibility(NSURL *resources) {
     NSFileManager *files = NSFileManager.defaultManager;
     NSURL *temp = [files.temporaryDirectory URLByAppendingPathComponent:NSUUID.UUID.UUIDString];
     check([files createDirectoryAtURL:temp withIntermediateDirectories:NO attributes:nil error:NULL],
-          @"create fingerprint test directory");
+          @"create scene validation test directory");
     @try {
         NSData *original = [NSData dataWithContentsOfURL:[resources URLByAppendingPathComponent:@"scene.json"]];
         NSMutableDictionary *scene = [NSJSONSerialization JSONObjectWithData:original
             options:NSJSONReadingMutableContainers error:NULL];
-        scene[@"capacity"] = @"wrong fingerprint";
-        NSData *altered = [NSJSONSerialization dataWithJSONObject:scene options:0 error:NULL];
-        check([altered writeToURL:[temp URLByAppendingPathComponent:@"scene.json"] atomically:YES],
-              @"write mismatched scene");
-        expectComponentFailure(@"capacity profile mismatch", ^{
-            __unused DesktopProgram *program = [[DesktopProgram alloc] initWithResources:temp];
-        });
+        NSURL *sceneURL = [temp URLByAppendingPathComponent:@"scene.json"];
+        NSArray *cases = @[
+            @[@"capacity", @"wrong fingerprint", @"capacity profile mismatch"],
+            @[@"version", @1, @"unsupported desktop scene version"]
+        ];
+        for (NSArray *entry in cases) {
+            NSMutableDictionary *bad = [scene mutableCopy];
+            bad[entry[0]] = entry[1];
+            NSData *altered = [NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL];
+            check([altered writeToURL:sceneURL atomically:YES], @"write mismatched scene");
+            expectComponentFailure(entry[2], ^{
+                __unused DesktopProgram *program = [[DesktopProgram alloc] initWithResources:temp];
+            });
+        }
     } @finally {
         [files removeItemAtURL:temp error:NULL];
     }
@@ -93,7 +100,7 @@ static void checkPatchBatches(NSDictionary *scene) {
 }
 
 static void inspect(NSURL *resources, NSString *capture) {
-    checkFingerprint(resources);
+    checkSceneCompatibility(resources);
     DesktopProgram *program = [[DesktopProgram alloc] initWithResources:resources];
     check(mochi_component_count() == 0, @"program validation leaves no mounted instances");
     checkFailedMount(program);

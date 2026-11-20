@@ -25,6 +25,7 @@ class ComponentGenerator
   @mochi_cmp_name : String = ""
   @ref_names : Array(String) = [] of String
   @expression_parser : TemplateExpressionParser
+  @portable = false
 
   # Includes top-level and branch-discovered each blocks so callers can inject
   # every generated each helper method after generation.
@@ -60,8 +61,10 @@ class ComponentGenerator
     props : Array(PropDescriptor) = [] of PropDescriptor,
     emits : Array(ComponentEventDescriptor) = [] of ComponentEventDescriptor,
     expression_parser : TemplateExpressionParser? = nil,
+    portable : Bool = false,
   ) : ComponentManifest
     @mochi_cmp_name = mochi_cmp_name
+    @portable = portable
     @conditionals = conditionals
     @each_blocks = each_blocks
     @each_row_templates.clear
@@ -77,7 +80,7 @@ class ComponentGenerator
     escaped_html = self.class.escape_double_braces(html)
     bindings = [] of BindingDescriptor
     events = [] of EventDescriptor
-    html_template = walk_html(escaped_html, bindings, events)
+    html_template, portable_nodes = walk_html(escaped_html, bindings, events)
     chi_file = "#{tag_name}.chi"
 
     validate_template_placeholders(mochi_cmp_name, html_template)
@@ -95,12 +98,13 @@ class ComponentGenerator
       emits: emits
     )
 
+    manifest.portable_nodes = portable_nodes
     validate_event_handlers(mochi_cmp_name, manifest.all_events, method_names)
     manifest
   end
 
   private def walk_html(html : String, bindings : Array(BindingDescriptor), events : Array(EventDescriptor),
-                        context : EachRowDomContext = EachRowDomContext.new) : String
+                        context : EachRowDomContext = EachRowDomContext.new) : Tuple(String, Array(PortableTemplate::Node)?)
     html = @expression_parser.html_safe(html)
     # Lexbor's document parser drops comments at the body boundary. Mochi uses
     # comment anchors as binding targets, so preserve those markers as inert
@@ -113,17 +117,21 @@ class ComponentGenerator
     end
     body = EachRowCompiler.fragment_root(source, context)
 
-    if body
-      body.children.each_with_index do |child, index|
-        walk(child, [index], bindings, events, context)
+    return {"", nil} unless body
+
+    nodes = [] of PortableTemplate::Node
+    fragment = PortableTemplate::Fragment.new(nodes) if @portable
+    body.children.each_with_index do |child, index|
+      if compiled = walk(child, [index], bindings, events, context, fragment)
+        nodes << compiled
       end
     end
+    fragment.try(&.project(bindings, events))
 
-    return "" unless body
-
-    body.inner_html.gsub(/<mochi-template-(if-anchor-\d+|each-anchor-\d+)><\/mochi-template-\1>/) do |_, match|
+    output = body.inner_html.gsub(/<mochi-template-(if-anchor-\d+|each-anchor-\d+)><\/mochi-template-\1>/) do |_, match|
       "<!--#{match[1]}-->"
     end
+    {output, fragment.try(&.nodes)}
   end
 
   private def anchor_comments_in_tree(html : String, context : EachRowDomContext) : Array(String)
@@ -167,25 +175,40 @@ class ComponentGenerator
     bindings : Array(BindingDescriptor),
     events : Array(EventDescriptor),
     parent_context : EachRowDomContext,
-  )
+    fragment : PortableTemplate::Fragment?,
+  ) : PortableTemplate::Node?
     tag = node.tag_name
 
-    if tag == "_text"
-      collect_text_bindings(node.tag_text, path, bindings)
-      return
-    end
-
-    if tag == "_em_comment"
-      collect_anchor_binding(node.tag_text, path, bindings, events, parent_context)
-      return
-    end
-
-    if match = tag.match(/^mochi-template-(if-anchor-\d+|each-anchor-\d+)$/)
-      collect_anchor_binding(match[1], path, bindings, events, parent_context)
-      return
-    end
-
     first_binding = bindings.size
+    first_event = events.size
+
+    if tag == "_text"
+      text = node.tag_text
+      collect_text_bindings(text, path, bindings)
+      if fragment
+        local = bindings[first_binding..]
+        compiled = PortableTemplate::Text.new(portable_parts(text, local))
+        fragment.attach(compiled, local, [] of EventDescriptor)
+        return compiled
+      end
+      return nil
+    end
+
+    anchor = case tag
+             when "_em_comment" then node.tag_text
+             else                    tag.match(/^mochi-template-(if-anchor-\d+|each-anchor-\d+)$/).try(&.[1])
+             end
+    if anchor
+      collect_anchor_binding(anchor, path, bindings, events, parent_context)
+      if fragment
+        local = bindings[first_binding..]
+        compiled = portable_anchor(local.first?)
+        fragment.attach(compiled, local, events[first_event..])
+        return compiled
+      end
+      return nil
+    end
+
     collect_attribute_bindings(node, path, bindings, events)
 
     # Browsers parse SVG geometry even in detached templates. Keep authored
@@ -201,6 +224,9 @@ class ComponentGenerator
       end
     end
 
+    binding_end = bindings.size
+    event_end = events.size
+    children = [] of PortableTemplate::Node if fragment
     node.children.each_with_index do |child, index|
       lowered_tag = tag.downcase
       child_namespace = if lowered_tag == "svg"
@@ -210,7 +236,48 @@ class ComponentGenerator
                         else
                           parent_context.namespace
                         end
-      walk(child, path + [index], bindings, events, EachRowDomContext.new(tag, child_namespace))
+      if compiled = walk(child, path + [index], bindings, events, EachRowDomContext.new(tag, child_namespace), fragment)
+        children.not_nil! << compiled
+      end
+    end
+    return unless fragment
+    local = bindings[first_binding...binding_end]
+    node_events = events[first_event...event_end]
+    attrs = DomAttributes.read(node).reject { |name, _| name.starts_with?("data-mochi-") }
+    operands = attrs.to_h do |name, text|
+      fields = local.select { |binding| binding.attr_name == name && binding.template_start }
+      {name, portable_parts(text, fields)}
+    end
+    click = node_events.find { |event| event.event == "click" }
+    action = if click
+               PortableTemplate::Action.new(click.method_sym, click.args.size, false,
+                 click.actions.size <= 1 && click.args.size <= 1 && click.args.all? { |arg| arg.kind == "event" })
+             end
+    compiled = PortableTemplate::Element.new(tag, operands, children.not_nil!, action)
+    fragment.attach(compiled, local, node_events)
+    compiled
+  end
+
+  private def portable_parts(text : String, fields : Array(BindingDescriptor)) : PortableTemplate::Parts
+    text = fields.first?.try(&.template_text) || text
+    ranges = [] of Tuple(Int32, Int32, PortableTemplate::Part)
+    fields.each do |binding|
+      if (start = binding.template_start) && (finish = binding.template_end)
+        ranges << {start, finish, PortableTemplate::BindingOperand.new(binding.id)}
+      end
+    end
+    PortableTemplate.parts(text, ranges)
+  end
+
+  private def portable_anchor(binding : BindingDescriptor?) : PortableTemplate::Node
+    return PortableTemplate::Comment.new unless binding
+    if rows = binding.each_rows
+      PortableTemplate::Rows.new(binding.id, rows.portable_nodes || [] of PortableTemplate::Node,
+        !rows.key_expression.nil?, rows.children.empty? && rows.conditionals.empty?)
+    else
+      PortableTemplate::Conditional.new(binding.id, binding.branches.map { |branch|
+        branch.portable_nodes || [] of PortableTemplate::Node
+      })
     end
   end
 
@@ -281,7 +348,7 @@ class ComponentGenerator
       return unless block
 
       ids = EachRowIds.new(@next_each_id)
-      row = EachRowCompiler.compile(block, @expression_parser, dom_context, ids)
+      row = EachRowCompiler.compile(block, @expression_parser, dom_context, ids, portable: @portable)
       @next_each_id = ids.next_id
       @each_row_templates << row
       row.all_events.each do |event|
@@ -543,10 +610,12 @@ class ComponentGenerator
 
     branch_bindings = [] of BindingDescriptor
     branch_events = [] of EventDescriptor
-    template = walk_html(each_result.html, branch_bindings, branch_events, context)
+    template, portable_nodes = walk_html(each_result.html, branch_bindings, branch_events, context)
     validate_template_placeholders(@mochi_cmp_name, template)
     template = self.class.unescape_double_braces(template)
-    ConditionalBranchDescriptor.new(template, branch_bindings, branch_events, context.tag, context.namespace, span)
+    descriptor = ConditionalBranchDescriptor.new(template, branch_bindings, branch_events, context.tag, context.namespace, span)
+    descriptor.portable_nodes = portable_nodes
+    descriptor
   end
 
   private def branch_with_anchors(branch : ConditionalBranch) : String

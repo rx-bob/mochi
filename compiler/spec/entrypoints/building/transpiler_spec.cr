@@ -1234,3 +1234,79 @@ describe "Portable build validation" do
     end
   end
 end
+
+describe "Portable template records" do
+  it "projects DOM paths and native operands for Unicode text in nested scopes" do
+    with_portable_spec_project do |project|
+      template = <<-HTML
+        <div>
+          <!-- keeps a DOM position -->
+          <span>É &amp; {first} · {last}</span><span>É &amp; {first} · {last}</span>
+          {if true}
+            <div>
+              {if false}
+                <span>Fallback</span>
+              {else}
+                {each [{"id" => 1, "active" => true}] as row, key: row["id"]}
+                  <button class="station {if row['active']}selected{end}" onclick="{pick($event)}">Café &lt;{row['id']}&gt; {row['id']} &#123;safe&#125;</button>
+                {end}
+              {end}
+            </div>
+          {end}
+        </div>
+        HTML
+      methods = <<-RUBY
+        def first; "North"; end
+        def last; "Bay"; end
+        def pick(event); event; end
+        RUBY
+      write_portable_spec_screen(project, template, methods)
+
+      desktop = compile_portable_spec(project, RenderTarget::Desktop)
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      scene_path = File.join(desktop, "scene.json")
+      descriptor_path = File.join(dom, "components/portable-screen.json")
+      scene = JSON.parse(File.read(scene_path))
+      descriptor = JSON.parse(File.read(descriptor_path))
+      scene["version"].as_i.should eq(DesktopScene::VERSION)
+      scene.to_json.should_not contain("html_template")
+      scene.to_json.should_not contain("if-anchor")
+      scene.to_json.should_not contain("each-anchor")
+      scene.to_json.should_not contain("\u{E002}")
+      scene.to_json.should_not contain("\"path\":")
+
+      labels = scene["nodes"][0]["nodes"].as_a.first(2)
+      first, second = labels.map { |label| label["nodes"][0] }
+      first["parts"].as_a.should eq(JSON.parse(%q(["É & ",{"binding":0}," · ",{"binding":1}])).as_a)
+      second["parts"].as_a.should eq(JSON.parse(%q(["É & ",{"binding":2}," · ",{"binding":3}])).as_a)
+      first["span"]["line"].should eq(second["span"]["line"])
+      second["span"]["column"].as_i.should eq(first["span"]["column"].as_i + %q(É &amp; {first} · {last}</span><span>).size)
+      first["span"]["file"].as_s.should eq("lib/PortableScreen.rb")
+      first["id"].as_i.should be < second["id"].as_i
+      descriptor["bindings"][0]["path"].as_a.map(&.as_i).should eq([0, 3, 0])
+      descriptor["bindings"][2]["path"].as_a.map(&.as_i).should eq([0, 4, 0])
+
+      outer = scene["nodes"][0]["nodes"][2]
+      inner = outer["branches"][0][0]["nodes"][0]
+      inner["branches"][0][0]["type"].as_s.should eq("label")
+      each = inner["branches"][1][0]
+      each["type"].as_s.should eq("each")
+      row_button = each["nodes"][0]
+      row_button["row_context"].as_bool.should be_true
+      row_button["style_names"].as_a.should eq(JSON.parse(%q([{"slot":0}])).as_a)
+      row_button["nodes"][0]["parts"].as_a.should eq(JSON.parse(%q(["Café <",{"slot":1},"> ",{"slot":2}," {safe}"])).as_a)
+
+      other = File.join(project, "second checkout")
+      Dir.mkdir(other)
+      FileUtils.cp_r(File.join(project, "lib"), other)
+      FileUtils.cp(File.join(project, PortableProject::FILE_NAME), other)
+      other_dom = compile_portable_spec(other, RenderTarget::Dom)
+      other_desktop = compile_portable_spec(other, RenderTarget::Desktop)
+      File.read(File.join(other_desktop, "scene.json")).should eq(File.read(scene_path))
+      File.read(File.join(other_dom, "components/portable-screen.json")).should eq(File.read(descriptor_path))
+      file = "components/portable-screen.chi"
+      bytes = File.read(File.join(desktop, file))
+      [dom, other_dom, other_desktop].each { |bundle| File.read(File.join(bundle, file)).should eq(bytes) }
+    end
+  end
+end

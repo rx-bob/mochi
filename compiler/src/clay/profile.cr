@@ -1,3 +1,5 @@
+require "html"
+require "./portable_template"
 require "string_scanner"
 require "../html/template_expression"
 require "../ruby/ruby_def"
@@ -15,6 +17,7 @@ end
 class ClayProfile
   getter rules = [] of Tuple(String, Hash(String, String))
   getter fonts = {} of String => String
+  getter source_marks = [] of PortableTemplate::SourceMark
   @child_use : Tuple(Int32, String)?
 
   # VM-only operations shared by the two hosts. Add host-backed operations
@@ -108,14 +111,23 @@ class ClayProfile
   private def validate_html(html : String, line : Int32, known_tags : Set(String), capability_receivers : Set(String)) : Nil
     scan = StringScanner.new(html)
     parents = [] of String
+    @source_marks.clear
+    text_start : Int32? = nil
     until scan.eos?
       at = scan.byte_offset
-      if scan.skip(/\s+/) || scan.skip(/<!--.*?-->/m)
+      if scan.skip(/\s+/)
         next
+      elsif scan.skip(/<!--.*?-->/m)
+        finish_text(html, text_start, at)
+        text_start = nil
       elsif scan.skip("</")
+        finish_text(html, text_start, at)
+        text_start = nil
         name = scan.scan(/[\w-]+/)
         reject(@path, line_at(html, at, line), "mismatched closing tag") unless name && parents.pop? == name && scan.skip(/\s*>/)
       elsif scan.skip('<')
+        finish_text(html, text_start, at)
+        text_start = nil
         name = scan.scan(/[\w:-]+/)
         unless name && name.in?("div", "span", "button")
           unless name && known_tags.includes?(name)
@@ -126,17 +138,42 @@ class ClayProfile
         reject(@path, line_at(html, at, line), "span and button accept text only") if parents.last?.in?("span", "button")
         parents << name
         validate_attributes(scan, html, line, name, capability_receivers)
+        mark(name, at, scan.byte_offset)
       elsif scan.check('{')
+        if scan.skip("{{")
+          reject(@path, line_at(html, at, line), "put text in a span or button") unless parents.last?.in?("span", "button")
+          text_start ||= at
+          next
+        end
         token = placeholder(scan, html, line, capability_receivers)
-        unless token.matches?(/\A\{(?:if\s|elsif\s|each\s|else\}|end\})/) || parents.last?.in?("span", "button")
-          reject(@path, line_at(html, at, line), "put text in a span or button")
+        if token.matches?(/\A\{(?:if\s|elsif\s|each\s|else\}|end\})/)
+          finish_text(html, text_start, at)
+          text_start = nil
+          mark("cond", at, scan.byte_offset) if token.starts_with?("{if")
+          mark("each", at, scan.byte_offset) if token.starts_with?("{each")
+        else
+          reject(@path, line_at(html, at, line), "put text in a span or button") unless parents.last?.in?("span", "button")
+          text_start ||= at
         end
       else
         reject(@path, line_at(html, at, line), "put text in a span or button") unless parents.last?.in?("span", "button")
+        text_start ||= at
         scan.skip(/[^<{]+/)
       end
     end
     reject(@path, line_at(html, html.bytesize, line), "unclosed <#{parents.last}>") unless parents.empty?
+  end
+
+  private def finish_text(html : String, start : Int32?, finish : Int32) : Nil
+    return unless start
+    text = html.byte_slice(start, finish - start)
+    mark("text", start, finish) unless HTML.unescape(text).strip.empty?
+  end
+
+  private def mark(kind : String, from : Int32, to : Int32) : Nil
+    start = @html_method.raw_string_start.not_nil!
+    @source_marks << PortableTemplate::SourceMark.new(kind,
+      TemplateSourceSpan.from_offsets(@source, @path, start + from, start + to))
   end
 
   private def validate_attributes(scan, html, line, tag, capability_receivers)
