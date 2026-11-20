@@ -33,6 +33,12 @@
 - (BOOL)resignFirstResponder { self.needsDisplay = YES; return [super resignFirstResponder]; }
 @end
 
+@interface DesktopLabel : NSAccessibilityElement
+@property(nonatomic, copy) NSDictionary *attributes;
+@end
+@implementation DesktopLabel
+@end
+
 @interface DesktopBox : NSObject
 @property(nonatomic) NSRect frame;
 @property(nonatomic, strong) NSFont *font;
@@ -86,7 +92,6 @@ static NSString *displayValue(id value) {
     NSMutableDictionary<NSString *, DesktopButton *> *_buttons;
     NSArray *_commands, *_accessibles;
     int _textUsed;
-    BOOL _failed;
 }
 
 - (void)viewDidMoveToWindow {
@@ -100,12 +105,16 @@ static NSString *displayValue(id value) {
 - (NSArray *)accessibilityChildren { return _accessibles; }
 
 - (instancetype)initWithResources:(NSURL *)resources {
+    return [self initWithProgram:[[DesktopProgram alloc] initWithResources:resources]];
+}
+
+- (instancetype)initWithProgram:(DesktopProgram *)program {
     if (!(self = [super initWithFrame:NSMakeRect(0, 0, 560, 400)])) return nil;
-    _vm = [[DesktopVM alloc] initWithResources:resources];
+    _vm = [[DesktopVM alloc] initWithProgram:program];
     _buttons = [NSMutableDictionary dictionary];
     NSMutableDictionary *fonts = [NSMutableDictionary dictionary];
     for (NSString *family in _vm.scene[@"fonts"]) {
-        NSURL *url = [resources URLByAppendingPathComponent:_vm.scene[@"fonts"][family]];
+        NSURL *url = [program.resources URLByAppendingPathComponent:_vm.scene[@"fonts"][family]];
         NSArray *descriptors = CFBridgingRelease(CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url));
         if (!descriptors.count) DesktopFailure([@"Cannot read bundled font " stringByAppendingString:family]);
         CTFontDescriptorRef descriptor = (__bridge CTFontDescriptorRef)descriptors.firstObject;
@@ -119,6 +128,12 @@ static NSString *displayValue(id value) {
     dispatch_once(&once, ^{ mochi_clay_init(); });
     [self refresh];
     return self;
+}
+
+- (NSDictionary *)attributesForAccessibilityElement:(id)element {
+    if ([element isKindOfClass:DesktopButton.class]) return ((DesktopButton *)element).item.attrs;
+    if ([element isKindOfClass:DesktopLabel.class]) return ((DesktopLabel *)element).attributes;
+    return nil;
 }
 
 - (NSString *)renderParts:(NSArray *)parts slots:(NSArray *)slots {
@@ -224,7 +239,7 @@ static NSString *displayValue(id value) {
 }
 
 - (void)refresh {
-    if (!_vm || _failed || self.bounds.size.width <= 0) return;
+    if (!_vm || self.failureReason || self.bounds.size.width <= 0) return;
     frameBoxes = [NSMutableArray arrayWithObject:[DesktopBox new]];
     paintCommands = [NSMutableArray array];
     @try {
@@ -245,6 +260,15 @@ static NSString *displayValue(id value) {
     }
 }
 
+static void detachButton(DesktopButton *button) {
+    button.enabled = NO;
+    button.target = nil;
+    button.action = NULL;
+    button.item = nil;
+    button.nextKeyView = nil;
+    [button removeFromSuperview];
+}
+
 - (void)syncControls:(NSArray<DesktopBox *> *)boxes {
     NSMutableDictionary *retained = [NSMutableDictionary dictionary];
     NSMutableArray *accessible = [NSMutableArray array];
@@ -257,6 +281,7 @@ static NSString *displayValue(id value) {
                 button = [[DesktopButton alloc] initWithFrame:box.frame];
                 button.bordered = NO;
                 button.focusRingType = NSFocusRingTypeNone;
+                button.accessibilityRole = NSAccessibilityButtonRole;
                 button.target = self;
                 button.action = @selector(activate:);
                 [self addSubview:button];
@@ -270,15 +295,16 @@ static NSString *displayValue(id value) {
             [order addObject:button];
             [accessible addObject:button];
         } else {
-            NSAccessibilityElement *label = [NSAccessibilityElement new];
+            DesktopLabel *label = [DesktopLabel new];
             label.accessibilityRole = NSAccessibilityStaticTextRole;
             label.accessibilityValue = box.label;
             label.accessibilityParent = self;
             label.accessibilityFrameInParentSpace = box.frame;
+            label.attributes = box.attrs;
             [accessible addObject:label];
         }
     }
-    for (NSString *key in _buttons) if (!retained[key]) [_buttons[key] removeFromSuperview];
+    for (NSString *key in _buttons) if (!retained[key]) detachButton(_buttons[key]);
     _buttons = retained;
     _accessibles = accessible;
     for (NSUInteger i = 0; i < order.count; i++) order[i].nextKeyView = order[(i+1) % order.count];
@@ -286,8 +312,8 @@ static NSString *displayValue(id value) {
 }
 
 - (void)activate:(DesktopButton *)button {
-    if (_failed) return;
     DesktopBox *box = button.item;
+    if (!_vm || self.failureReason || !box || _buttons[box.key] != button) return;
     NSString *method = box.definition[@"action"];
     if (!method) return;
     NSMutableDictionary *dataset = [NSMutableDictionary dictionary];
@@ -311,7 +337,7 @@ static NSString *displayValue(id value) {
 }
 
 - (void)showFailure:(NSString *)reason {
-    _failed = YES;
+    _failureReason = [reason copy];
     NSLog(@"Mochi desktop: %@", reason);
     for (NSButton *button in _buttons.allValues) button.enabled = NO;
     NSTextField *error = [NSTextField wrappingLabelWithString:reason];
@@ -341,5 +367,14 @@ static NSString *displayValue(id value) {
         }
     }
 }
-- (void)close { [_vm close]; _vm = nil; }
+- (void)close {
+    DesktopVM *vm = _vm;
+    _vm = nil;
+    self.window.initialFirstResponder = nil;
+    for (DesktopButton *button in _buttons.allValues) detachButton(button);
+    [_buttons removeAllObjects];
+    _accessibles = nil;
+    _commands = nil;
+    [vm close];
+}
 @end

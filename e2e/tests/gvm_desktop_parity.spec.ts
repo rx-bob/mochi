@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { runRubyProject, withCompiledProject } from "./framework_helpers";
 
@@ -54,4 +56,20 @@ test("station inspector uses real DOM buttons and preserves keyed state through 
 test("station inspector Ruby scenario passes through mochi test", ({ browserName }) => {
   expect(runRubyProject(fixture, browserName, "inspector_test.rb"))
     .toContain(`PASS [${browserName}] select a station, reorder the rows, and inspect its details`);
+});
+
+test("station inspector Ruby scenario reports a wrong assertion at the authored step", ({ browserName }) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-inspector-"));
+  try {
+    fs.cpSync(fixture, project, { recursive: true });
+    const scenario = path.join(project, "test/inspector_test.rb");
+    const source = fs.readFileSync(scenario, "utf8");
+    fs.writeFileSync(scenario, source.replace('"Selected station 02"', '"Selected station 99"'));
+
+    expect(() => runRubyProject(project, browserName, "inspector_test.rb")).toThrow(
+      "inspector_test.rb:5: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 4 assert_text [data-view='selection'])",
+    );
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
 });

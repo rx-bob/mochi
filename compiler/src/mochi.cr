@@ -109,8 +109,8 @@ OptionParser.parse do |p|
     with_tc = true
   end
 
-  p.on("--target=TARGET", "Build target: dom (default) or desktop (experimental macOS)") do |target|
-    abort "Unknown build target '#{target}'. Choose dom or desktop." unless target.in?("dom", "desktop")
+  p.on("--target=TARGET", "Build or test target: dom (default) or desktop (experimental macOS)") do |target|
+    abort "Unknown target '#{target}'. Choose dom or desktop." unless target.in?("dom", "desktop")
     render_target = RenderTarget.parse(target)
   end
 
@@ -196,8 +196,7 @@ OptionParser.parse do |p|
 end
 
 if is_ruby_test
-  abort "Use task desktop:test for the experimental desktop inspector" if render_target.desktop?
-  exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir, test_browsers, test_file)
+  exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir, test_browsers, test_file, render_target)
 elsif is_dev_server
   abort "mochi dev supports the dom target" if render_target.desktop?
   if dev_server_config_path.size < 1 || dev_server_root.size < 1

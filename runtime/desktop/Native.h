@@ -32,15 +32,24 @@ void mochi_clay_paint(void);
 
 void DesktopFailure(NSString *reason) __attribute__((noreturn));
 
+@interface DesktopProgram : NSObject
+@property(nonatomic, readonly) NSURL *resources;
+@property(nonatomic, readonly) NSDictionary *scene;
+- (instancetype)initWithResources:(NSURL *)resources;
+@end
+
 @interface DesktopVM : NSObject
 @property(nonatomic, readonly) NSDictionary *scene;
 @property(nonatomic, readonly) NSDictionary<NSNumber *, NSString *> *values;
-- (instancetype)initWithResources:(NSURL *)resources;
+- (instancetype)initWithProgram:(DesktopProgram *)program;
 - (void)activate:(NSString *)method arguments:(NSArray *)args payload:(NSDictionary *)payload;
 - (void)close;
 @end
 
 @interface DesktopView : NSView
+@property(nonatomic, readonly) NSString *failureReason;
 - (instancetype)initWithResources:(NSURL *)resources;
+- (instancetype)initWithProgram:(DesktopProgram *)program;
+- (NSDictionary *)attributesForAccessibilityElement:(id)element;
 - (void)close;
 @end

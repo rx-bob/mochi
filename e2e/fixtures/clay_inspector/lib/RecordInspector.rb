@@ -31,15 +31,15 @@ class RecordInspector
       <div class="panel">
         <span class="title">Station records</span>
         <div class="actions">
-          <button class="action" onclick="{reverse_records}">Reverse order</button>
-          <button class="action" onclick="{toggle_details}">Details</button>
+          <button class="action" data-action="reverse" onclick="{reverse_records}">Reverse order</button>
+          <button class="action" data-action="details" onclick="{toggle_details}">Details</button>
         </div>
         {each @records as record, key: record["id"]}
           <button class="record {if @selected == record['id']}selected{end}" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" onclick="{select_record($event)}">{record["label"]}</button>
         {end}
-        <span class="selection">Selected station {@selected}</span>
+        <span class="selection" data-view="selection">Selected station {@selected}</span>
         {if @details}
-          <span class="detail">Showing details for station {@selected}</span>
+          <span class="detail" data-view="details">Showing details for station {@selected}</span>
         {end}
       </div>
     }

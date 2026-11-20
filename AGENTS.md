@@ -157,6 +157,14 @@ directory. This profile supports one root component with local state, buttons,
 conditionals, and flat keyed lists. The Mac app bundles its executable, scene,
 Ruby bytecode, and referenced fonts.
 
+Run the same Ruby scenario on macOS with
+`mochi test --target=desktop -i e2e/fixtures/clay_inspector`. The browser
+target is the default. Desktop tests select accessible buttons and text with
+`[data-name]` or one exact quoted data attribute such as `[data-id='02']`.
+They support mount, unmount, remount, click, focus, focused-state, text and
+attribute assertions, and Enter, Space and Tab. Attribute assertions cover
+data attributes and button `aria-pressed` and `aria-label`.
+
 ## Complete Ruby examples and contracts
 
 The [shared UI fixtures](e2e/fixtures/ui_contracts/README.md) provide portable

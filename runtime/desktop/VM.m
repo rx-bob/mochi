@@ -8,21 +8,17 @@ static uint32_t symbol(NSString *name) {
     return mochi_intern((const uint8_t *)name.UTF8String, (int32_t)strlen(name.UTF8String));
 }
 
-@implementation DesktopVM {
-    uint64_t _instance;
-    NSMutableDictionary<NSNumber *, NSString *> *_patches;
-}
-
-- (NSDictionary *)values { return _patches; }
-
-- (void)failureIn:(NSString *)method {
-    NSNumber *line = self.scene[@"methods"][method];
-    DesktopFailure([NSString stringWithFormat:@"%@:%@ (%@): %s", self.scene[@"source"],
+static void failIn(NSDictionary *scene, NSString *method) {
+    NSNumber *line = scene[@"methods"][method];
+    DesktopFailure([NSString stringWithFormat:@"%@:%@ (%@): %s", scene[@"source"],
                     line ?: @1, method, desktop_vm_error()]);
 }
 
+@implementation DesktopProgram
+
 - (instancetype)initWithResources:(NSURL *)resources {
     if (!(self = [super init])) return nil;
+    _resources = resources;
     NSError *error = nil;
     NSData *data = [NSData dataWithContentsOfURL:[resources URLByAppendingPathComponent:@"scene.json"]
                                         options:0 error:&error];
@@ -33,22 +29,36 @@ static uint32_t symbol(NSString *name) {
         DesktopFailure(@"Desktop scene and VM capacity profiles differ");
     static dispatch_once_t once;
     dispatch_once(&once, ^{ goose_init(0, NULL); });
-    if (mochi_init_runtime()) [self failureIn:@"initialize"];
+    if (mochi_init_runtime()) failIn(_scene, @"initialize");
     for (NSString *file in _scene[@"packages"]) {
         NSData *body = [NSData dataWithContentsOfURL:[resources URLByAppendingPathComponent:file]];
         if (!body || body.length > INT32_MAX - 10) DesktopFailure([@"Cannot load bytecode " stringByAppendingString:file]);
         NSMutableData *irep = [NSMutableData dataWithBytes:"RITE0400\0\0" length:10];
         [irep appendData:body];
-        if (mochi_load_irep(irep.bytes, (int32_t)irep.length)) [self failureIn:file];
+        if (mochi_load_irep(irep.bytes, (int32_t)irep.length)) failIn(_scene, file);
     }
+    return self;
+}
+@end
+
+@implementation DesktopVM {
+    uint64_t _instance;
+    NSMutableDictionary<NSNumber *, NSString *> *_patches;
+}
+
+- (NSDictionary *)values { return _patches; }
+
+- (instancetype)initWithProgram:(DesktopProgram *)program {
+    if (!(self = [super init])) return nil;
+    _scene = program.scene;
     const char *name = [_scene[@"class"] UTF8String];
     _instance = mochi_mount_component((const uint8_t *)name, (int32_t)strlen(name));
-    if (!_instance) [self failureIn:@"initialize"];
+    if (!_instance) failIn(_scene, @"initialize");
     _patches = [NSMutableDictionary dictionary];
     @try {
         NSDictionary *getters = _scene[@"getters"];
         for (NSString *key in getters) {
-            if (mochi_register_binding(_instance, key.intValue, symbol(getters[key]))) [self failureIn:getters[key]];
+            if (mochi_register_binding(_instance, key.intValue, symbol(getters[key]))) failIn(_scene, getters[key]);
         }
         [self lifecycle:@"mounted"];
         [self flush:@"initialize"];
@@ -60,9 +70,13 @@ static uint32_t symbol(NSString *name) {
     return self;
 }
 
+- (void)dealloc {
+    if (_instance) mochi_unmount_component(_instance);
+}
+
 - (void)flush:(NSString *)method {
     int count = mochi_flush_patches(_instance);
-    if (count < 0) [self failureIn:method];
+    if (count < 0) failIn(_scene, method);
     if (mochi_fetch_outbox_len() || mochi_emit_outbox_len())
         DesktopFailure([NSString stringWithFormat:@"%@: %@ requested an unsupported desktop host operation", _scene[@"source"], method]);
     const uint8_t *p = desktop_patch_data();
@@ -88,7 +102,7 @@ static uint32_t symbol(NSString *name) {
     NSData *json = [NSJSONSerialization dataWithJSONObject:args options:0 error:&error];
     if (!json) DesktopFailure(error.localizedDescription);
     if (mochi_dispatch_event_args(_instance, symbol(method), json.bytes, (int32_t)json.length) != 1)
-        [self failureIn:method];
+        failIn(_scene, method);
 }
 
 - (void)lifecycle:(NSString *)method {

@@ -16,6 +16,7 @@ class DesktopScene
         j.field "version", 1
         j.field "capacity", fingerprint
         j.field "class", @manifest.class_name
+        j.field "tag", @manifest.tag_name
         j.field "source", @manifest.source_file
         j.field "methods", @manifest.method_lines
         j.field "packages", packages

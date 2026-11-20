@@ -1,6 +1,9 @@
 // Integration test linked with the production desktop view and GVM. Input is
 // delivered by an actual NSWindow; observations use AppKit's public controls.
 #import "../Native.h"
+#import "AppKitEvents.h"
+
+extern int32_t mochi_component_count(void);
 
 static void check(BOOL ok, NSString *why) {
     if (!ok) DesktopFailure(why);
@@ -19,27 +22,9 @@ static BOOL label(DesktopView *view, NSString *text) {
     return NO;
 }
 
-static void click(NSWindow *window, NSButton *target) {
-    NSPoint middle = NSMakePoint(NSMidX(target.bounds), NSMidY(target.bounds));
-    NSPoint point = [target convertPoint:middle toView:nil];
-    NSEvent *(^event)(NSEventType) = ^(NSEventType type) {
-        return [NSEvent mouseEventWithType:type location:point modifierFlags:0
-            timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber
-            context:nil eventNumber:1 clickCount:1 pressure:1];
-    };
-    [NSApp postEvent:event(NSEventTypeLeftMouseUp) atStart:YES];
-    [window sendEvent:event(NSEventTypeLeftMouseDown)];
-}
-
-static void press(NSWindow *window, NSString *text, unsigned short code) {
-    NSEvent *key = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0
-        timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber context:nil
-        characters:text charactersIgnoringModifiers:text isARepeat:NO keyCode:code];
-    [window sendEvent:key];
-}
-
 static void inspect(NSURL *resources, NSString *capture) {
-    DesktopView *view = [[DesktopView alloc] initWithResources:resources];
+    DesktopProgram *program = [[DesktopProgram alloc] initWithResources:resources];
+    DesktopView *view = [[DesktopView alloc] initWithProgram:program];
     NSWindow *window = [[NSWindow alloc] initWithContentRect:view.bounds
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     window.title = @"Mochi desktop regression";
@@ -86,6 +71,16 @@ static void inspect(NSURL *resources, NSString *capture) {
         check([png writeToFile:capture atomically:YES], @"capture native drawing");
     }
     [view close];
+    check(mochi_component_count() == 0, @"closing the view unregisters the Ruby instance");
+    check(!cafe.superview && !cafe.enabled && !cafe.target && !cafe.action &&
+          ![cafe accessibilityPerformPress], @"detached native row cannot dispatch");
+    DesktopView *replacement = [[DesktopView alloc] initWithProgram:program];
+    window.contentView = replacement;
+    check(mochi_component_count() == 1 && button(replacement, @"Café") != cafe &&
+          ![cafe accessibilityPerformPress] && label(replacement, @"Selected station 01"),
+          @"stale row cannot dispatch after remount");
+    [replacement close];
+    check(mochi_component_count() == 0, @"remounted instance unregisters on close");
     [window close];
     check(!window.isVisible, @"native window closes");
 }
@@ -98,7 +93,7 @@ int main(int argc, const char **argv) {
         [NSApp finishLaunching];
         @try {
             inspect([NSURL fileURLWithPath:@(argv[1])], argc > 2 ? @(argv[2]) : nil);
-            puts("PASS native inspector: click, accessibility, keyed identity and focus, keyboard, resize, drawing, teardown");
+            puts("PASS native inspector: click, accessibility, keyed identity and focus, keyboard, resize, drawing, teardown and stale row rejection");
         } @catch (NSException *exception) {
             fprintf(stderr, "FAIL %s\n", exception.reason.UTF8String);
             return 1;

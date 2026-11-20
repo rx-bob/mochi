@@ -322,6 +322,7 @@ async function settleFrames(page) {
 async function runCase(browser, browserName, baseUrl, testCase) {
   let page;
   let origin = sourceLabel(testCase.ruby_file ? testCase : testCase.steps[0] || { ruby_file: "<ruby test>", line: 1 });
+  let stepDescription = "";
   try {
     page = await browser.newPage();
     const drainDiagnostics = collectDiagnostics(page);
@@ -380,8 +381,10 @@ async function runCase(browser, browserName, baseUrl, testCase) {
     await page.waitForFunction(() => window.MochiLoader && window.MochiLoader.manifest);
     assertDiagnostics(await drainDiagnostics(), origin);
 
-    for (const step of testCase.steps) {
+    for (const [index, step] of testCase.steps.entries()) {
+      const subject = step.selector || step.key || step.tag;
       origin = sourceLabel(step);
+      stepDescription = ` (step ${index + 1} ${step.operation}${subject ? ` ${subject}` : ""})`;
       if (step.operation === "expect_error") {
         assertDiagnostics(await drainDiagnostics(), origin);
         if (expectedError !== null) throw new Error(`${expectationOrigin}: expect_error must be followed by an action`);
@@ -666,7 +669,7 @@ async function runCase(browser, browserName, baseUrl, testCase) {
             }
           }
           else {
-            host = step.tag || detachedHost;
+            host = step.tag || targetTag;
             detachedHost = null;
             await readyComponent(page, host);
             await settleFrames(page);
@@ -687,8 +690,8 @@ async function runCase(browser, browserName, baseUrl, testCase) {
     console.log(`PASS [${browserName}] ${testCase.name}`);
     return true;
   } catch (error) {
-    if (error.message.startsWith(`${origin}:`)) throw error;
-    throw new Error(`${origin}: ${error.message}`);
+    const message = error.message.startsWith(`${origin}:`) ? error.message : `${origin}: ${error.message}`;
+    throw new Error(message + stepDescription);
   } finally {
     if (page) await page.close();
   }
