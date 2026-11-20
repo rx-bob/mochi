@@ -1,11 +1,14 @@
 require "digest/sha1"
 require "./resource_manifest"
 
+record CssSource, text : String, path : String, line : Int32
+
 struct CssComposition
   getter css : String
   getter resources : Array(PackageResource)
+  getter sources : Array(CssSource)
 
-  def initialize(@css : String, @resources : Array(PackageResource))
+  def initialize(@css : String, @resources : Array(PackageResource), @sources : Array(CssSource))
   end
 
   def style_resource_ids : Array(String)
@@ -31,7 +34,7 @@ class StyleComposer
   @source_path : String
   @display_path : String
   @resources : Array(PackageResource)
-  @style_ids : Array(String)
+  @sources : Array(CssSource)
   @seen_ids : Set(String)
   @seen_paths : Set(String)
 
@@ -39,39 +42,49 @@ class StyleComposer
     @component_name : String,
     @source_path : String,
     display_path : String? = nil,
+    @portable_root : String? = nil,
   )
     @display_path = display_path || @source_path
     @resources = [] of PackageResource
-    @style_ids = [] of String
+    @sources = [] of CssSource
     @seen_ids = Set(String).new
     @seen_paths = Set(String).new
   end
 
-  def compose(css : String) : CssComposition
-    local_css, imports = scan(css, @display_path, "component '#{@component_name}'")
+  def compose(css : String, line : Int32 = 1) : CssComposition
+    local_css, imports, source = scan(css, @display_path, "component '#{@component_name}'", line)
     imports.each do |import|
-      collect_fragment(import, File.dirname(@source_path), [@source_path])
+      collect_fragment(import, @source_path, @display_path, [@source_path])
     end
-    CssComposition.new(local_css.strip, @resources)
+    @sources << source if @portable_root
+    CssComposition.new(local_css.strip, @resources, @sources)
   end
 
-  private def collect_fragment(import : ImportRef, base_dir : String, stack : Array(String)) : Nil
-    path = File.expand_path(import.path, base_dir)
+  private def collect_fragment(import : ImportRef, source_path : String, display_path : String, stack : Array(String)) : Nil
+    path = File.expand_path(import.path, File.dirname(source_path))
+    diagnostic_path = path
+    if root = @portable_root
+      unless !Path[import.path].absolute? && path.starts_with?(root + "/")
+        raise "Component '#{@component_name}' CSS import #{import.path.inspect} at #{display_path}:#{import.line} must stay inside the project"
+      end
+      diagnostic_path = path.lchop(root + "/")
+    end
     if stack.includes?(path)
-      chain = (stack + [path]).join(" -> ")
-      raise "Component '#{@component_name}' has a CSS import cycle at #{import.path}: #{chain}"
+      chain = (stack + [path]).map { |entry| @portable_root.try { |root| entry.lchop(root + "/") } || entry }
+      raise "Component '#{@component_name}' has a CSS import cycle at #{display_path}:#{import.line}: #{chain.join(" -> ")}"
     end
     return if @seen_paths.includes?(path)
 
     unless File.file?(path)
-      raise "Component '#{@component_name}' CSS import #{import.path.inspect} at #{@display_path}:#{import.line} was not found (resolved to #{path})"
+      resolved = @portable_root ? diagnostic_path : path
+      raise "Component '#{@component_name}' CSS import #{import.path.inspect} at #{display_path}:#{import.line} was not found (resolved to #{resolved})"
     end
 
     @seen_paths << path
     content = File.read(path)
-    local_css, imports = scan(content, path, "CSS fragment #{path.inspect} imported by component '#{@component_name}'")
+    local_css, imports, source = scan(content, diagnostic_path, "CSS fragment imported by component '#{@component_name}'")
     imports.each do |nested|
-      collect_fragment(nested, File.dirname(path), stack + [path])
+      collect_fragment(nested, path, diagnostic_path, stack + [path])
     end
 
     local_css = local_css.strip
@@ -81,16 +94,16 @@ class StyleComposer
     unless @seen_ids.includes?(id)
       @seen_ids << id
       @resources << PackageResource.new(id, "style", text: local_css, source_path: path)
-      @style_ids << id
+      @sources << source if @portable_root
     end
   end
 
-  private def scan(css : String, context_path : String, context : String) : Tuple(String, Array(ImportRef))
+  private def scan(css : String, context_path : String, context : String, line : Int32 = 1) : Tuple(String, Array(ImportRef), CssSource)
     imports = [] of ImportRef
     local = String::Builder.new
     segment_start = 0
+    segment_line = line
     i = 0
-    line = 1
     brace_depth = 0
     seen_local_css = false
     length = css.bytesize
@@ -161,6 +174,7 @@ class StyleComposer
           line += consumed_newlines
           i = finish.not_nil!
           segment_start = i
+          segment_line = line
         else
           seen_local_css = true if brace_depth == 0
           i += 1
@@ -177,8 +191,11 @@ class StyleComposer
     if brace_depth != 0
       raise_parse(context, context_path, line, "unclosed block")
     end
-    local << css.byte_slice(segment_start, length - segment_start)
-    {local.to_s, imports}
+    remaining = css.byte_slice(segment_start, length - segment_start)
+    local << remaining
+    # The import prelude contains only whitespace and comments apart from
+    # imports. Carry the remaining source and its original starting line.
+    {local.to_s, imports, CssSource.new(remaining, context_path, segment_line)}
   end
 
   private def at_import?(css : String, index : Int32) : Bool

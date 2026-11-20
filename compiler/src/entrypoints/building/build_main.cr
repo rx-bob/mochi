@@ -194,11 +194,15 @@ class BuildMain
         InstallationPaths.new.validate_build_resources!
       end
       validate_build_paths(input_dir, output_dir)
+      portable_project = PortableProject.read(input_dir)
+      if render_target.desktop? && !portable_project
+        raise "The desktop target requires #{PortableProject::FILE_NAME}"
+      end
       print_separator
       puts "1. input_dir:#{input_dir}, output_dir:#{output_dir}"
       builder_man = BuilderMan.new(input_dir, output_dir)
       bundle_dir = render_target.desktop? ? File.join(builder_man.workspace_dir, "desktop") : output_dir
-      prepare_output_dir(bundle_dir) unless render_target.desktop?
+      prepare_output = render_target.dom? ? -> { prepare_output_dir(bundle_dir) } : nil
 
       # steps 2-4
       puts "BuildID: #{builder_man.build_id}"
@@ -222,7 +226,8 @@ class BuildMain
       transpiler = Compiler.new(
         verbose: ENV["MOCHI_VERBOSE_BUILD"]? == "1",
         render_target: render_target,
-        capacity_config_path: capacity_config_path
+        capacity_config_path: capacity_config_path,
+        portable_project: portable_project
       )
       puts "5. Transpiling Mochi Components"
 
@@ -235,7 +240,8 @@ class BuildMain
             trace,
             sequence_id,
             builder_man.pre_tp_dir,
-            builder_man.input_dir
+            builder_man.input_dir,
+            prepare_output
           )
         end
       end
@@ -247,7 +253,8 @@ class BuildMain
         paths = InstallationPaths.new
         gvm = paths.gvm_root || raise "Desktop builds need a matching mochi-gvm checkout (MOCHI_GVM_DIR)"
         script = File.join(InstallationPaths::DEVELOPMENT_ROOT, "runtime/desktop/package.rb")
-        args = [script, gvm, File.expand_path(input_dir), bundle_dir, File.expand_path(output_dir)]
+        project = portable_project.not_nil!
+        args = [script, gvm, File.expand_path(input_dir), bundle_dir, File.expand_path(output_dir), project.app_id, project.display_name]
         raise "Desktop packaging failed" unless Process.run("ruby", args, output: STDOUT, error: STDERR).success?
       else
         puts "6. Copying Entry Page & Static Assets"
@@ -293,7 +300,7 @@ class BuildMain
     BuildPath.validate_input_tree(input_path, output_path)
   end
 
-  private def prepare_output_dir(output_dir : String)
+  private def prepare_output_dir(output_dir : String) : Nil
     Dir.mkdir_p(output_dir)
     remove_directory(File.join(output_dir, "components"))
     File.delete(File.join(output_dir, "bundle.js")) if File.exists?(File.join(output_dir, "bundle.js"))

@@ -14,6 +14,9 @@ for build in 1 2; do
   compiler/mochi --target=desktop -i "$project" -o "$desktop"
 done
 codesign --verify --strict "$app"
+plist="$app/Contents/Info.plist"
+test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = org.mochi.stations
+test "$(plutil -extract CFBundleName raw -o - "$plist")" = Stations
 ruby -rjson -e '
   resources, dom = ARGV
   scene = JSON.parse(File.read(File.join(resources, "scene.json")))

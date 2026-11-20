@@ -1,4 +1,5 @@
 require "./webcomponents/binding_manifest"
+require "./clay/profile"
 
 # Helper code that must execute once before components from the same Ruby file.
 # `key` is the deterministic .chi filename, not a user-facing component name.
@@ -34,6 +35,7 @@ class MochiComponent
   # The dependency graph uses it to find require, constant, and component
   # references without serializing the source into the manifest.
   property original_source : String = ""
+  property portable_profile : ClayProfile?
 
   def initialize(
     @absolute_path : String,

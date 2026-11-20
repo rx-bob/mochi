@@ -104,6 +104,9 @@ class MrbcCompiler
     search_roots : Array(String) = [] of String,
     project_root : String? = nil,
     legacy_prelude : Bool = false,
+    portable_project : PortableProject? = nil,
+    staged_project_dir : String? = nil,
+    before_emit : Proc(Nil)? = nil,
   ) : Nil
     @chi_paths.clear
     @helper_chi_paths.clear
@@ -113,26 +116,31 @@ class MrbcCompiler
     @host_adapter_paths.clear
     @package_graph = nil
     @warnings.clear
-    manifest_path = File.join(output_dir, "mochi-manifest.json")
-    File.delete(manifest_path) if File.exists?(manifest_path)
     validate_component_inventory(components)
-    Dir.mkdir_p(output_dir)
-    components_dir = File.join(output_dir, COMPONENTS_DIR)
-    Dir.mkdir_p(components_dir)
-    # The output directory can be reused between builds. Descriptors from a
-    # previous source tree must not look like part of this bundle.
-    Dir.glob(File.join(components_dir, "*.json")).each { |path| File.delete(path) }
-
-    @mrbc_path ||= resolved_mrbc_path
-
     @package_graph = MochiPackaging::PackageGraph.build(
       components,
       prelude_sources,
       helpers,
       search_roots,
-      project_root
+      project_root,
+      portable_project.try(&.root)
     )
     graph = @package_graph.not_nil!
+    desktop_scene = if portable_project
+                      validate_portable_project(graph, portable_project, staged_project_dir.not_nil!)
+                    end
+    if @render_target.desktop? && !desktop_scene
+      raise "The desktop target requires #{PortableProject::FILE_NAME}"
+    end
+
+    @mrbc_path ||= resolved_mrbc_path
+    before_emit.try(&.call)
+    manifest_path = File.join(output_dir, "mochi-manifest.json")
+    File.delete(manifest_path) if File.exists?(manifest_path)
+    components_dir = File.join(output_dir, COMPONENTS_DIR)
+    Dir.mkdir_p(components_dir)
+    # Descriptors from a previous source tree must not enter this bundle.
+    Dir.glob(File.join(components_dir, "*.json")).each { |path| File.delete(path) }
 
     if legacy_prelude && !prelude_sources.empty?
       @prelude_path = compile_prelude(prelude_sources.first.source, components_dir)
@@ -186,7 +194,9 @@ class MrbcCompiler
     end
     @chi_paths = compiled_paths[package_count, sorted_components.size]
     if @render_target.desktop?
-      write_desktop_scene(graph, sorted_components, output_dir)
+      path = File.join(output_dir, "scene.json")
+      File.write(path, desktop_scene.not_nil!)
+      @manifest_path = path
       return
     end
     sorted_components.each do |component|
@@ -229,23 +239,51 @@ class MrbcCompiler
       @warnings << "mochi-loader.js not found; set MOCHI_LOADER or add runtime/mochi-loader.js"
     end
 
-    package_resources = collect_resources(components, resources)
+    package_resources = collect_resources(sorted_components, resources)
     emit_resource_files(package_resources, output_dir)
 
     @manifest_path = manifest_path
     File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components, package_resources))
   end
 
-  private def write_desktop_scene(graph : MochiPackaging::PackageGraph, components : Array(MochiComponent), output_dir : String) : Nil
-    raise "Desktop target requires one root component" unless components.size == 1
-    root = components.first.manifest
-    unless graph.capabilities.values.all? { |cap| cap.host.nil? } && root.props.empty? && root.emits.empty?
-      raise "#{root.source_file}: desktop target supports standalone components with local Ruby state and pure Ruby helpers"
+  private def validate_portable_project(
+    graph : MochiPackaging::PackageGraph,
+    project : PortableProject,
+    staged_root : String,
+  ) : String
+    known_tags = graph.packages.values.compact_map { |node| node.component.try(&.manifest.tag_name) }.to_set
+    receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject(&.includes?('.')).to_set
+    graph.component_order.each do |component|
+      manifest = component.manifest
+      profile = component.portable_profile.not_nil!
+      profile.validate_template(known_tags, receivers)
+      if prop = manifest.props.first?
+        raise "#{prop.source_file}:#{prop.source_line}: portable component '#{component.name}': declared props require child component support"
+      end
+      if event = manifest.emits.first?
+        raise "#{event.source_file}:#{event.source_line}: portable component '#{component.name}': child events require child component support"
+      end
+      composition = profile.compose_styles(component.absolute_path, staged_root, project.fonts)
+      manifest.css = component.css = composition.css
+      manifest.style_resources = composition.resources
+      manifest.desktop_styles = profile.rules
+
+      package = graph.packages[manifest.package_id]
+      package.resources = manifest.style_resource_ids
+      dependencies = graph.reachable_from(package.id)
+      # Diagnose calls in a package before calls inside its dependencies.
+      graph.order.reverse_each do |id|
+        next unless dependencies.includes?(id)
+        node = graph.packages[id]
+        next if node.component? && node.id != package.id
+        ClayProfile.validate_ruby(node.source, node.source_path, node.line_offset, component.name, receivers)
+      end
     end
-    packages = graph.ruby_order.map(&.file) + [root.chi_file]
-    path = File.join(output_dir, "scene.json")
-    File.write(path, DesktopScene.new(root).write(packages, @capacity_config.fingerprint))
-    @manifest_path = path
+
+    graph.component_order.each { |component| component.portable_profile.not_nil!.reject_child! }
+    root = graph.packages[graph.entry_packages.first].component.not_nil!
+    packages = graph.order.map { |id| graph.packages[id].file }
+    DesktopScene.new(root.manifest).write(packages, @capacity_config.fingerprint, root.portable_profile.not_nil!.fonts)
   end
 
   private def collect_resources(

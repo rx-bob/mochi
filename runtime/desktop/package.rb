@@ -4,7 +4,7 @@ require "tmpdir"
 require "json"
 require "open3"
 
-gvm, project, compiled, output = ARGV
+gvm, project, compiled, output, app_id, display_name = ARGV
 abort "macOS AppKit is required to build a desktop application" unless RUBY_PLATFORM.include?("darwin")
 scene = JSON.parse(File.read(File.join(compiled, "scene.json")))
 product = File.join(output, "Mochi.app")
@@ -23,17 +23,10 @@ Dir.mktmpdir(".mochi-desktop-", output) do |work|
     FileUtils.cp(File.join(compiled, "components", name), File.join(resources, name))
   end
 
-  # Match the CSS family to a local asset basename, independent of its internal
-  # PostScript name. WOFF2 is a build input; the native host receives an sfnt.
   public_dir = File.join(project, "public")
-  files = Dir.glob("**/*.{woff2,otf,ttf}", base: public_dir).sort
   scene["fonts"] = {}
-  families = scene["styles"].map { |rule| rule["values"]["face"] }.compact.uniq
-  families.each do |family|
-    next if %w[sans-serif monospace].include?(family)
-    matches = files.select { |f| File.basename(f, ".*").downcase.delete("-_") == family.downcase.delete("-_") }
-    abort "#{scene['source']}: expected one bundled font named for #{family} under public/" unless matches.one?
-    source = File.join(public_dir, matches.first)
+  scene.delete("font_assets").each do |family, asset|
+    source = File.join(project, asset)
     if File.extname(source) == ".woff2"
       temp = File.join(work, "font.woff2")
       FileUtils.cp(source, temp)
@@ -51,10 +44,9 @@ Dir.mktmpdir(".mochi-desktop-", output) do |work|
   FileUtils.cp(File.expand_path("../clay/LICENSE.clay.txt", __dir__), resources)
   File.write(File.join(resources, "scene.json"), JSON.generate(scene))
   plist = File.join(app, "Contents", "Info.plist")
-  identifier = "org.mochi.desktop." + scene.fetch("class").gsub(/[^A-Za-z0-9-]/, "-")
   File.write(plist, JSON.generate({
-    CFBundleIdentifier: identifier, CFBundleExecutable: "Mochi", CFBundlePackageType: "APPL",
-    CFBundleName: scene.fetch("class"), CFBundleVersion: "1", NSHighResolutionCapable: true,
+    CFBundleIdentifier: app_id, CFBundleExecutable: "Mochi", CFBundlePackageType: "APPL",
+    CFBundleName: display_name, CFBundleVersion: "1", NSHighResolutionCapable: true,
     MochiDesktopProduct: "1"
   }))
   checked("plutil", "-convert", "xml1", plist)

@@ -1,5 +1,7 @@
 require "digest/sha1"
+require "lexbor"
 require "../mochi_cmp"
+require "../tooling/portable_project"
 require "../tree-sitter/imports_extractor"
 require "../tree-sitter/source_symbols"
 
@@ -193,6 +195,7 @@ module MochiPackaging
       helpers : Array(HelperUnit),
       search_roots : Array(String),
       project_root : String? = nil,
+      portable_root : String? = nil,
     ) : PackageGraph
       packages = {} of String => PackageNode
       absolute_to_package = {} of String => String
@@ -226,8 +229,12 @@ module MochiPackaging
       end
 
       graph = new(packages, [] of String, [] of String, [] of MochiComponent, {} of String => Capability)
-      graph.resolve_dependencies(search_roots, project_root)
-      graph.resolve_entries_and_order(components, project_root)
+      root_id = portable_root.try { |tag| component_package_id(tag) }
+      if root_id && !packages.has_key?(root_id)
+        raise "#{PortableProject::FILE_NAME}: declared root <#{portable_root}> was not found"
+      end
+      reachable = graph.resolve_dependencies(search_roots, project_root, root_id)
+      graph.resolve_entries_and_order(components, project_root, reachable, root_id)
       graph.resolve_capabilities
       graph.sync_components
       graph
@@ -360,7 +367,7 @@ module MochiPackaging
       result
     end
 
-    def resolve_dependencies(search_roots : Array(String), project_root : String?) : Nil
+    def resolve_dependencies(search_roots : Array(String), project_root : String?, portable_root : String?) : Set(String)?
       roots = search_roots.map { |root| self.class.normalize_absolute(root) }.reject(&.empty?)
       if project_root
         root = self.class.normalize_absolute(project_root)
@@ -375,18 +382,42 @@ module MochiPackaging
         end
       end
 
-      @packages.each_value do |node|
+      tag_index = @packages.values.select(&.component?).to_h { |node| {node.component.not_nil!.manifest.tag_name, node.id} }
+      pending = portable_root ? [portable_root] : @packages.keys.reverse
+      seen = Set(String).new
+      while id = pending.pop?
+        next unless seen.add?(id)
+        node = @packages[id]
         resolve_requires(node, roots, export_index)
         resolve_constants(node, export_index)
-        if node.component?
-          resolve_component_tags(node)
+        if component = node.component
+          template = component.manifest.html_template
+          if portable_root
+            node.dependencies.concat(portable_template_dependencies([template], tag_index))
+          else
+            # Keep the established eager dependency behavior for ordinary DOM builds.
+            template.scan(/<([A-Za-z][A-Za-z0-9-]*)\b/) do |match|
+              if child = tag_index[match[1]]?
+                node.dependencies << child
+              end
+            end
+          end
         end
         collections_id = self.class.ruby_package_id("lib/mochi_builtin_collections.rb")
         if @packages.has_key?(collections_id) && node.method_calls.any? { |name| name.in?("sum", "min", "max") }
           node.dependencies << collections_id unless node.id == collections_id
         end
         node.dependencies = node.dependencies.reject(&.==(node.id)).uniq.sort
+        if portable_root
+          pending.concat(node.dependencies)
+          if component = node.component
+            # Conditional and row references belong to the product closure
+            # without making their packages eager browser dependencies.
+            pending.concat(portable_template_dependencies(component_template_text(component), tag_index))
+          end
+        end
       end
+      seen if portable_root
     end
 
     private def resolve_requires(
@@ -429,7 +460,7 @@ module MochiPackaging
 
       resolved = candidates.compact_map { |candidate| package_id_for_absolute(candidate) }.uniq
       if resolved.size > 1
-        raise "ambiguous Ruby dependency '#{import.path}' at #{node.source_path}:#{import.line}: " \
+        raise "ambiguous Ruby dependency '#{import.path}' at #{node.source_path}:#{node.line_offset + import.line - 1}: " \
               "#{resolved.sort.join(", ")}"
       end
       return resolved.first unless resolved.empty?
@@ -443,7 +474,7 @@ module MochiPackaging
         return nil
       end
 
-      raise "missing Ruby dependency '#{import.path}' required at #{node.source_path}:#{import.line}"
+      raise "missing Ruby dependency '#{import.path}' required at #{node.source_path}:#{node.line_offset + import.line - 1}"
     end
 
     # The absolute path index is rebuilt here because the package graph only
@@ -499,27 +530,24 @@ module MochiPackaging
       references
     end
 
-    private def resolve_component_tags(node : PackageNode) : Nil
-      component = node.component.not_nil!
-      tag_index = @packages.values.select(&.component?).to_h { |candidate| {candidate.component.not_nil!.manifest.tag_name, candidate} }
-      tags = [] of String
-      # Only child tags in the always-rendered template are eager package
-      # dependencies. Tags inside conditionals or list rows mount later, so
-      # their bytecode belongs to the child's own first-use load. This is what
-      # keeps a route-owned screen out of the shell's initial request closure.
-      [component.manifest.html_template].each do |text|
-        text.scan(/<([A-Za-z][A-Za-z0-9-]*)\b/) do |match|
-          tag = match[1]
-          tags << tag unless tags.includes?(tag)
+    private def portable_template_dependencies(texts : Array(String), tag_index : Hash(String, String)) : Array(String)
+      ids = Set(String).new
+      texts.each do |text|
+        doc = Lexbor.new(text)
+        if root = doc.root
+          collect_component_tags(root, tag_index, ids)
         end
+      ensure
+        doc.try(&.free)
       end
+      ids.to_a.sort
+    end
 
-      tags.sort.each do |tag|
-        next if tag == component.manifest.tag_name
-        if candidate = tag_index[tag]?
-          node.dependencies << candidate.id
-        end
+    private def collect_component_tags(node : Lexbor::Node, tag_index : Hash(String, String), ids : Set(String)) : Nil
+      if id = tag_index[node.tag_name]?
+        ids << id
       end
+      node.children.each { |child| collect_component_tags(child, tag_index, ids) }
     end
 
     private def component_template_text(component : MochiComponent) : Array(String)
@@ -541,13 +569,21 @@ module MochiPackaging
       rows.each_template { |fragment| texts << fragment.template }
     end
 
-    def resolve_entries_and_order(components : Array(MochiComponent), project_root : String?) : Nil
-      roots = entry_components(components, project_root)
-      @entry_packages = roots.map { |component| self.class.component_package_id(component.manifest.tag_name) }.sort
+    def resolve_entries_and_order(
+      components : Array(MochiComponent),
+      project_root : String?,
+      portable_closure : Set(String)?,
+      portable_root : String?,
+    ) : Nil
+      if portable_root
+        @entry_packages = [portable_root]
+      else
+        roots = entry_components(components, project_root)
+        @entry_packages = roots.map { |component| self.class.component_package_id(component.manifest.tag_name) }.sort
+      end
       component_packages = @packages.values.select(&.component?).map(&.id).sort
-      reachable = reachable_packages(component_packages)
-      order = topological_order(reachable.to_a)
-      @order = order.select { |id| reachable.includes?(id) }
+      reachable = portable_closure || reachable_packages(component_packages)
+      @order = topological_order(reachable.to_a)
       @component_order = @order.compact_map do |id|
         node = @packages[id]?
         node ? node.component : nil
@@ -640,8 +676,7 @@ module MochiPackaging
 
     def resolve_capabilities : Nil
       @capabilities = {} of String => Capability
-      component_packages = @packages.values.select(&.component?).map(&.id)
-      reachable = reachable_packages(component_packages)
+      reachable = @order.to_set
       CAPABILITY_DEFINITIONS.each do |definition|
         active_packages = @packages.values
           .select do |node|
@@ -703,7 +738,7 @@ module MochiPackaging
       end
     end
 
-    private def reachable_from(id : String) : Set(String)
+    def reachable_from(id : String) : Set(String)
       reachable_packages([id])
     end
   end

@@ -116,6 +116,9 @@ class RubyTestRunner
   end
 
   private def stage_project(project_root : String, stage_dir : String) : Nil
+    if declaration = PortableProject.declaration_path(project_root)
+      FileUtils.cp(declaration, stage_dir)
+    end
     %w[lib icons public].each do |name|
       source = File.join(project_root, name)
       next unless Dir.exists?(source)

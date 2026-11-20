@@ -31,7 +31,12 @@ class Compiler
   @ruby_parser : TreeSitter::RubyParser
   @verbose : Bool
 
-  def initialize(@verbose : Bool = false, @capacity_config_path : String? = nil, @render_target : RenderTarget = RenderTarget::Dom)
+  def initialize(
+    @verbose : Bool = false,
+    @capacity_config_path : String? = nil,
+    @render_target : RenderTarget = RenderTarget::Dom,
+    @portable_project : PortableProject? = nil,
+  )
     @ruby_parser = TreeSitter::RubyParser.new
   end
 
@@ -43,6 +48,7 @@ class Compiler
     sequence_id : UInt32 = 1_u32,
     project_dir : String? = nil,
     asset_root : String? = nil,
+    before_emit : Proc(Nil)? = nil,
   )
     puts "inputDir:'#{input_dir}', outDir:'#{output_dir}', build_dir:'#{builder_man.build_dir}'" if @verbose
 
@@ -93,7 +99,7 @@ class Compiler
 
     puts "Done with preparing components for transpilation (#{Time.monotonic})" if @verbose
 
-    resources = if root = project_dir
+    resources = if !@portable_project && (root = project_dir)
                   source_root = asset_root || root
                   scan_paths = builder_man.staged_ruby_source_paths
                   index_path = File.join(source_root, "index.html")
@@ -117,7 +123,10 @@ class Compiler
         resources,
         false,
         [input_dir, project_dir].compact,
-        asset_root || project_dir
+        asset_root || project_dir,
+        portable_project: @portable_project,
+        staged_project_dir: project_dir,
+        before_emit: before_emit,
       )
       compiler.validate_emitted_resources!
       compiler.warnings.each { |warning| STDERR.puts "Warning: #{warning}" }
@@ -168,7 +177,8 @@ class Compiler
     unless legacy_source
       helper_source = TreeSitter::SourceSlicer.remove_ranges(
         rb_file,
-        component_decls.map(&.range)
+        component_decls.map(&.range),
+        preserve_lines: !@portable_project.nil?
       )
       helper = build_helper(helper_source, absolute_path, display_path)
     end
@@ -196,6 +206,11 @@ class Compiler
                                      ["html", "css"]
                                    )
                                  end
+      source_line = if legacy_source || (@portable_project && declaration.wrapper_start_byte != declaration.start_byte)
+                      1
+                    else
+                      source_line_for(rb_file, declaration.wrapper_start_byte)
+                    end
       transpile_class(
         declaration,
         source,
@@ -205,7 +220,7 @@ class Compiler
         rb_file,
         absolute_path,
         display_path,
-        legacy_source ? 1 : source_line_for(rb_file, declaration.wrapper_start_byte),
+        source_line,
         i,
         helper_formatting
       )
@@ -378,7 +393,7 @@ class Compiler
 
     removals.concat(TreeSitter::MethodBodyExtractor.method_ranges_from_class(component.node, methods_to_remove))
 
-    TreeSitter::SourceSlicer.remove_ranges(source, removals)
+    TreeSitter::SourceSlicer.remove_ranges(source, removals, preserve_lines: !!@portable_project && methods_to_remove.empty?)
   end
 
   private def build_helper(
@@ -465,13 +480,12 @@ class Compiler
           else
             ""
           end
-    if @render_target.desktop?
-      profile = ClayProfile.new(rb_file, source_path)
-      profile.validate_template(html_method)
-      profile.parse_styles(methods["css"]?)
+    if @portable_project
+      profile = ClayProfile.new(rb_file, source_path, cls_name, html_method, methods["css"]?)
+    else
+      css_composition = StyleComposer.new(cls_name, absolute_path, source_path).compose(css)
+      css = css_composition.css
     end
-    css_composition = StyleComposer.new(cls_name, absolute_path, source_path).compose(css)
-    css = css_composition.css
     html = html_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
     source_locator = TemplateSourceLocator.new(
       rb_file,
@@ -570,8 +584,7 @@ class Compiler
     manifest.formatting = helper_formatting || component_source.includes?("MochiFormat")
     manifest.source_file = source_path
     manifest.source_line = declaration.line
-    manifest.desktop_styles = profile.rules if profile
-    manifest.style_resources = css_composition.resources
+    manifest.style_resources = css_composition.resources if css_composition
     manifest.method_lines = methods.transform_values(&.start_line)
     manifest.all_events.each do |event|
       if span = event.actions.first?.try(&.span)
@@ -623,6 +636,7 @@ class Compiler
       source_line_offset
     )
     component.original_source = component_source
+    component.portable_profile = profile
     component
   end
 

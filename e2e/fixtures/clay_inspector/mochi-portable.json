@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "root": "record-inspector",
+  "app_id": "org.mochi.stations",
+  "display_name": "Stations",
+  "fonts": {
+    "StationSans": "public/station-sans.woff2"
+  }
+}

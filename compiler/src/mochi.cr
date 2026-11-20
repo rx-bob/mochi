@@ -109,7 +109,7 @@ OptionParser.parse do |p|
     with_tc = true
   end
 
-  p.on("--target=TARGET", "Build or test target: dom (default) or desktop (experimental macOS)") do |target|
+  p.on("--target=TARGET", "Build or test target: dom (default) or desktop (macOS, requires mochi-portable.json)") do |target|
     abort "Unknown target '#{target}'. Choose dom or desktop." unless target.in?("dom", "desktop")
     render_target = RenderTarget.parse(target)
   end

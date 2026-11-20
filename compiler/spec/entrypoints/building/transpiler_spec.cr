@@ -1,6 +1,7 @@
 require "spec"
 require "file_utils"
 require "json"
+require "../../../src/entrypoints/building/builder_man"
 require "../../../src/entrypoints/building/transpiler"
 require "../../../src/gvm/mrbc_compiler"
 
@@ -1035,6 +1036,201 @@ RUBY
           FileUtils.rm_rf(output)
         end
       end
+    end
+  end
+end
+
+private def write_portable_spec_declaration(project : String, root = "portable-screen") : Nil
+  declaration = {
+    version:      PortableProject::VERSION,
+    root:         root,
+    app_id:       "org.mochi.spec",
+    display_name: "Portable spec",
+    fonts:        {} of String => String,
+  }
+  File.write(File.join(project, PortableProject::FILE_NAME), declaration.to_json)
+end
+
+private def write_portable_spec_screen(project : String, content : String, state = "") : Nil
+  File.write(File.join(project, "lib/PortableScreen.rb"), <<-RUBY)
+    class PortableScreen
+      @tag_name = "portable-screen"
+      #{state}
+
+      def html
+        %q{
+          #{content}
+        }
+      end
+
+      def css
+        %q{
+          @import "styles/shared.css";
+          .screen { gap: 4px; }
+        }
+      end
+    end
+    RUBY
+end
+
+private def with_portable_spec_project(&)
+  project = temp_output_dir("mochi_portable_spec")
+  FileUtils.mkdir_p(File.join(project, "lib/styles"))
+  File.write(File.join(project, "lib/styles/base.css"), ".screen { padding: 8px; }")
+  File.write(File.join(project, "lib/styles/shared.css"), <<-CSS)
+    @import "base.css";
+    .screen {
+      display: flex;
+    }
+    CSS
+  File.write(File.join(project, "lib/WebScreen.rb"), <<-RUBY)
+    class WebScreen
+      @tag_name = "web-screen"
+
+      def html
+        %q{<main class="grid"><input type="search"></main>}
+      end
+
+      def css
+        %q{
+          .grid {
+            display: grid;
+          }
+        }
+      end
+    end
+    RUBY
+  File.write(File.join(project, "index.html"), "<web-screen></web-screen>")
+  write_portable_spec_screen(project, %q(<div class="screen"><span>Stations</span></div>))
+  write_portable_spec_declaration(project)
+  yield project
+ensure
+  FileUtils.rm_rf(project) if project
+end
+
+private def compile_portable_spec(project : String, target : RenderTarget, before_emit : Proc(Nil)? = nil) : String
+  output = File.join(project, target.to_s.downcase)
+  builder = BuilderMan.new(project, output)
+  builder.copy_ruby_code_to_pre_tp
+  staged = builder.pre_tp_dir
+  Compiler.new(render_target: target, portable_project: PortableProject.read(project)).transpile_directory(
+    File.join(staged, "lib"), output, builder, project_dir: staged, asset_root: project, before_emit: before_emit
+  )
+  output
+ensure
+  builder.try(&.cleanup)
+end
+
+private def portable_diagnostic(project : String, message : String) : Nil
+  diagnostics = RenderTarget.values.map do |target|
+    expect_raises(Exception, message) { compile_portable_spec(project, target) }.message
+  end
+  diagnostics[0].should eq(diagnostics[1])
+end
+
+describe "Portable build validation" do
+  it "compiles the declared root and its ordered shared styles on both targets" do
+    with_portable_spec_project do |project|
+      # The HTML entry and a template comment name an unrelated screen.
+      write_portable_spec_screen(project, %q(<div class="screen"><!-- <web-screen> --><span>Stations</span></div>))
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      desktop = compile_portable_spec(project, RenderTarget::Desktop)
+      manifest = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))
+      manifest["entry_packages"].as_a.map(&.as_s).should eq(["component:portable-screen"])
+      manifest["packages"].as_h.keys.should eq(["component:portable-screen"])
+      manifest["resources"].as_h.size.should eq(2)
+      scene = JSON.parse(File.read(File.join(desktop, "scene.json")))
+      scene["tag"].as_s.should eq("portable-screen")
+      scene["styles"].as_a.map { |rule| rule["values"].as_h.keys }.should eq([["padding"], ["flex"], ["gap"]])
+      File.read(File.join(dom, "components/portable-screen.chi")).should eq(File.read(File.join(desktop, "components/portable-screen.chi")))
+    end
+  end
+
+  it "checks grid in a second screen referenced only by an inactive branch" do
+    with_portable_spec_project do |project|
+      screen = File.join(project, "lib/WebScreen.rb")
+      File.write(screen, File.read(screen).sub(%q(<main class="grid"><input type="search"></main>), %q(<div class="grid"><span>Web</span></div>)))
+      write_portable_spec_screen(project, %q(<div>{if false}<web-screen></web-screen>{end}</div>))
+      portable_diagnostic(project, "lib/WebScreen.rb:11: portable component 'WebScreen': unsupported CSS 'display: grid'")
+    end
+  end
+
+  it "reports the original line in a nested shared stylesheet" do
+    with_portable_spec_project do |project|
+      File.write(File.join(project, "lib/styles/base.css"), "/* Café */\n\n.screen { gap: 4em; }\n")
+      portable_diagnostic(project, "lib/styles/base.css:3: portable component 'PortableScreen': unsupported CSS 'gap: 4em'")
+      File.write(File.join(project, "lib/styles/base.css"), ".screen { padding: 8px; }")
+      fragment = File.join(project, "lib/styles/shared.css")
+      File.write(fragment, File.read(fragment).sub("display: flex", "display: grid"))
+      portable_diagnostic(project, "lib/styles/shared.css:3: portable component 'PortableScreen': unsupported CSS 'display: grid'")
+    end
+  end
+
+  it "reports an unsupported host operation at its authored Ruby dependency call" do
+    with_portable_spec_project do |project|
+      File.write(File.join(project, "lib/station_source.rb"), <<-RUBY)
+        module StationSource
+          def self.label
+            Mochi.host_async("layout", "measure", ["panel"], :received)
+          end
+        end
+        RUBY
+      write_portable_spec_screen(project, %q(<div><span>{station_label}</span></div>), "def station_label; StationSource.label; end")
+      portable_diagnostic(project, %q(lib/station_source.rb:3: portable component 'PortableScreen': unsupported host operation Mochi.host_async("layout", "measure")))
+    end
+  end
+
+  it "checks host operations inside inactive template expressions" do
+    with_portable_spec_project do |project|
+      write_portable_spec_screen(project, %q(<div>{if false}<span>{Mochi.storage_get("station")}</span>{end}</div>))
+      portable_diagnostic(project, "lib/PortableScreen.rb:7: portable component 'PortableScreen': unsupported host operation Mochi.storage_get")
+    end
+  end
+
+  it "checks font declarations and paths relative to the project" do
+    with_portable_spec_project do |project|
+      stylesheet = File.join(project, "lib/styles/base.css")
+      File.write(stylesheet, ".screen { font-family: LocalFace, sans-serif; }")
+      portable_diagnostic(project, "lib/styles/base.css:1: portable component 'PortableScreen': font family 'LocalFace' is missing from mochi-portable.json")
+
+      path = File.join(project, PortableProject::FILE_NAME)
+      declaration = JSON.parse(File.read(path)).as_h
+      declaration["fonts"] = JSON.parse(%q({"LocalFace":"public/type/primary.woff2"}))
+      File.write(path, declaration.to_json)
+      portable_diagnostic(project, %q(mochi-portable.json: font "LocalFace" must be a local file at public/type/primary.woff2))
+    end
+  end
+
+  it "preserves an existing bundle when the declared root is missing" do
+    with_portable_spec_project do |project|
+      write_portable_spec_declaration(project, "absent-screen")
+      RenderTarget.values.each do |target|
+        output = File.join(project, target.to_s.downcase)
+        Dir.mkdir_p(output)
+        manifest = File.join(output, "mochi-manifest.json")
+        File.write(manifest, "prior output")
+        prepare = -> { File.delete(manifest); nil }
+        expect_raises(Exception, "mochi-portable.json: declared root <absent-screen> was not found") do
+          compile_portable_spec(project, target, prepare)
+        end
+        File.read(manifest).should eq("prior output")
+      end
+    end
+  end
+
+  it "keeps grid and regular resource collection available in ordinary DOM builds" do
+    with_portable_spec_project do |project|
+      File.delete(File.join(project, PortableProject::FILE_NAME))
+      icons = File.join(project, "icons")
+      Dir.mkdir_p(icons)
+      File.write(File.join(icons, "pin.svg"), %q(<svg xmlns="http://www.w3.org/2000/svg" id="mochi-icon"></svg>))
+      index = File.join(project, "index.html")
+      File.write(index, File.read(index) + %q(<span icon="pin"></span>))
+      output = compile_portable_spec(project, RenderTarget::Dom)
+      descriptor = JSON.parse(File.read(File.join(output, "components/web-screen.json")))
+      descriptor["css"].as_s.should contain("display: grid")
+      descriptor["html_template"].as_s.should contain("type=\"search\"")
+      File.file?(File.join(output, "mochi-icons/pin.svg")).should be_true
     end
   end
 end

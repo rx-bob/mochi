@@ -9,7 +9,7 @@ class DesktopScene
   def initialize(@manifest : ComponentManifest)
   end
 
-  def write(packages : Array(String), fingerprint : String) : String
+  def write(packages : Array(String), fingerprint : String, fonts : Hash(String, String)) : String
     @next_id = 0
     JSON.build do |j|
       j.object do
@@ -20,6 +20,7 @@ class DesktopScene
         j.field "source", @manifest.source_file
         j.field "methods", @manifest.method_lines
         j.field "packages", packages
+        j.field "font_assets", fonts
         j.field "getters", @manifest.all_bindings.to_h { |b| {b.id.to_s, b.getter_sym} }
         j.field "styles" do
           j.array do
@@ -73,15 +74,18 @@ class DesktopScene
           j.field "id", @next_id
           case tag
           when "_em_comment"
-            if parent.tag_name.in?("span", "button")
-              raise "#{@manifest.source_file}: desktop text leaves support scalar bindings; place conditionals and lists around the leaf"
-            end
             b = local.first
+            if parent.tag_name.in?("span", "button")
+              reject(b.span, "text leaves support scalar bindings; place conditionals and lists around the leaf")
+            end
             j.field "type", b.kind
             j.field "binding", b.id
             if rows = b.each_rows
               unless rows.key_expression && rows.children.empty? && rows.conditionals.empty?
-                raise "#{rows.span}: desktop lists require an explicit key and a flat row template"
+                reject(rows.span, "lists require an explicit key and a flat row template")
+              end
+              rows.events.each do |event|
+                validate_click(event.actions, event.args, event.span)
               end
               j.field("nodes") { fragment(j, rows.template, [] of BindingDescriptor, [] of EventDescriptor, true) }
             else
@@ -98,9 +102,7 @@ class DesktopScene
             if method = attrs.delete("data-mochi-click")
               j.field "action", method
               if !row && (event = events.find { |e| e.path == path && e.event == "click" })
-                unless event.args.size <= 1 && event.args.all? { |arg| arg.kind == "event" }
-                  raise "#{@manifest.source_file}: desktop buttons accept a handler or $event"
-                end
+                validate_click(event.actions, event.args, event.actions.first?.try(&.span))
                 j.field "event_args", event.args.size
               end
             end
@@ -126,11 +128,22 @@ class DesktopScene
             end
             j.field("nodes") { children(j, node, path, bindings, events, row) }
           else
-            raise "#{@manifest.source_file}: unsupported desktop node #{tag}"
+            reject(nil, "unsupported node #{tag}")
           end
         end
       end
     end
+  end
+
+  private def validate_click(actions, args, span) : Nil
+    unless actions.size <= 1 && args.size <= 1 && args.all? { |arg| arg.kind == "event" }
+      reject(span, "buttons accept one handler with an optional $event argument")
+    end
+  end
+
+  private def reject(span : TemplateSourceSpan?, message : String) : NoReturn
+    location = span || "#{@manifest.source_file}:#{@manifest.source_line}"
+    raise "#{location}: portable component '#{@manifest.class_name}': #{message}"
   end
 
   private def parts(j, value, fields, row)
