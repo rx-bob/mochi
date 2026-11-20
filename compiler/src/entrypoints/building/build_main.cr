@@ -165,6 +165,7 @@ class BuildMain
     with_tc : Bool,
     keep_granular_build_artifacts : Bool,
     capacity_config_path : String? = nil,
+    render_target : RenderTarget = RenderTarget::Dom,
   )
     start_time = Time.monotonic.total_nanoseconds.to_u64
     sequence_id = 1_u32
@@ -186,14 +187,18 @@ class BuildMain
       end
 
       capacity_config = capacity_config_path.try { |path| CapacityConfig.read(path) }
-      if capacity_config.nil? || capacity_config.fingerprint == CapacityConfig.default.fingerprint
+      if render_target.desktop?
+        raise "The desktop host currently builds on macOS" unless {{ flag?(:darwin) }}
+        raise "The desktop target uses the default capacity profile" if capacity_config_path
+      elsif capacity_config.nil? || capacity_config.fingerprint == CapacityConfig.default.fingerprint
         InstallationPaths.new.validate_build_resources!
       end
       validate_build_paths(input_dir, output_dir)
       print_separator
       puts "1. input_dir:#{input_dir}, output_dir:#{output_dir}"
       builder_man = BuilderMan.new(input_dir, output_dir)
-      prepare_output_dir(output_dir)
+      bundle_dir = render_target.desktop? ? File.join(builder_man.workspace_dir, "desktop") : output_dir
+      prepare_output_dir(bundle_dir) unless render_target.desktop?
 
       # steps 2-4
       puts "BuildID: #{builder_man.build_id}"
@@ -216,6 +221,7 @@ class BuildMain
       print_separator
       transpiler = Compiler.new(
         verbose: ENV["MOCHI_VERBOSE_BUILD"]? == "1",
+        render_target: render_target,
         capacity_config_path: capacity_config_path
       )
       puts "5. Transpiling Mochi Components"
@@ -224,7 +230,7 @@ class BuildMain
         trace_slice(trace, "Transpiling", sequence_id, "build") do
           transpiler.transpile_directory(
             "#{builder_man.pre_tp_dir}/lib",
-            output_dir,
+            bundle_dir,
             builder_man,
             trace,
             sequence_id,
@@ -236,9 +242,18 @@ class BuildMain
       puts "> Compilation took #{mochi_comp_time.total_milliseconds.to_i}ms"
 
       print_separator
-      puts "6. Copying Entry Page & Static Assets"
-      copy_entry_page(input_dir, output_dir)
-      copy_static_assets(input_dir, output_dir)
+      if render_target.desktop?
+        puts "6. Linking native application"
+        paths = InstallationPaths.new
+        gvm = paths.gvm_root || raise "Desktop builds need a matching mochi-gvm checkout (MOCHI_GVM_DIR)"
+        script = File.join(InstallationPaths::DEVELOPMENT_ROOT, "runtime/desktop/package.rb")
+        args = [script, gvm, File.expand_path(input_dir), bundle_dir, File.expand_path(output_dir)]
+        raise "Desktop packaging failed" unless Process.run("ruby", args, output: STDOUT, error: STDERR).success?
+      else
+        puts "6. Copying Entry Page & Static Assets"
+        copy_entry_page(input_dir, output_dir)
+        copy_static_assets(input_dir, output_dir)
+      end
 
       if keep_granular_build_artifacts
         puts "Keeping owned build workspace at #{builder_man.workspace_dir}"

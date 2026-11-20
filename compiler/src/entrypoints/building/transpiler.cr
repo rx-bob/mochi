@@ -31,7 +31,7 @@ class Compiler
   @ruby_parser : TreeSitter::RubyParser
   @verbose : Bool
 
-  def initialize(@verbose : Bool = false, @capacity_config_path : String? = nil)
+  def initialize(@verbose : Bool = false, @capacity_config_path : String? = nil, @render_target : RenderTarget = RenderTarget::Dom)
     @ruby_parser = TreeSitter::RubyParser.new
   end
 
@@ -108,7 +108,7 @@ class Compiler
                 end
 
     trace_slice(trace, "EmitBytecode", sequence_id) do
-      compiler = MrbcCompiler.new(capacity_config_path: @capacity_config_path)
+      compiler = MrbcCompiler.new(capacity_config_path: @capacity_config_path, render_target: @render_target)
       compiler.compile_graph(
         components,
         output_dir,
@@ -465,6 +465,11 @@ class Compiler
           else
             ""
           end
+    if @render_target.desktop?
+      profile = ClayProfile.new(rb_file, source_path)
+      profile.validate_template(html_method)
+      profile.parse_styles(methods["css"]?)
+    end
     css_composition = StyleComposer.new(cls_name, absolute_path, source_path).compose(css)
     css = css_composition.css
     html = html_method.raw_string || RubyUnderstander.extract_raw_string_from_def_body(html_method.body, "html")
@@ -565,6 +570,7 @@ class Compiler
     manifest.formatting = helper_formatting || component_source.includes?("MochiFormat")
     manifest.source_file = source_path
     manifest.source_line = declaration.line
+    manifest.desktop_styles = profile.rules if profile
     manifest.style_resources = css_composition.resources
     manifest.method_lines = methods.transform_values(&.start_line)
     manifest.all_events.each do |event|

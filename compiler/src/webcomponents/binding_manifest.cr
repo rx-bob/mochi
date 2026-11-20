@@ -152,6 +152,7 @@ struct PropDescriptor
 end
 
 class ComponentManifest
+  property desktop_styles = [] of Tuple(String, Hash(String, String))
   property tag_name : String
   property class_name : String
   property chi_file : String

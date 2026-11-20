@@ -62,6 +62,8 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
 | `task framework:e2e` | Run portable framework browser regressions, including all UI fixtures |
 | `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
+| `task desktop:demo` | Build the experimental AppKit inspector in `build/desktop-mvp/Mochi.app` |
+| `task desktop:test` | Verify inspector rebuilds, resource inventories, bytecode identity, and AppKit interactions on macOS |
 | `task e2e` / `task app:e2e` | Run the separate Cowboy application integration (requires that checkout) |
 | `task dev` | Build motestproj and serve `build_gvm` on port 27490 |
 | `task gvm:test` | Run the `mochi-gvm` Goose test suite |
@@ -140,6 +142,20 @@ The output is a ready-to-serve GVM bundle. Load `mochi-loader.js` from the
 entry page; it validates the manifest and fetches a component's descriptor,
 dependency packages, shared styles, and `.chi` file when that component first
 connects.
+
+### Experimental macOS inspector
+
+Run `task desktop:demo` and open `build/desktop-mvp/Mochi.app`. The build uses
+Xcode command line tools, the matching `mochi-gvm` checkout with generated
+`dist/goose_vm.c`, and `woff2_decompress` for the fixture font. Set
+`MOCHI_GVM_DIR` to select the checkout.
+
+Build the same [station inspector](e2e/fixtures/clay_inspector) for the web with
+`mochi -i e2e/fixtures/clay_inspector -o build/station-web`. To choose the
+experimental native build, add `--target=desktop` and use a separate output
+directory. This profile supports one root component with local state, buttons,
+conditionals, and flat keyed lists. The Mac app bundles its executable, scene,
+Ruby bytecode, and referenced fonts.
 
 ## Complete Ruby examples and contracts
 

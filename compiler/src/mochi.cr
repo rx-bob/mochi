@@ -76,6 +76,7 @@ project_name = ""
 input_dir = ""
 output_dir = ""
 with_tc = false
+render_target = RenderTarget::Dom
 is_dev_server = false
 dev_server_root = ""
 dev_server_config_path = ""
@@ -106,6 +107,11 @@ OptionParser.parse do |p|
 
   p.on("--typecheck", "Run typechecks with Sorbet") do |o|
     with_tc = true
+  end
+
+  p.on("--target=TARGET", "Build target: dom (default) or desktop (experimental macOS)") do |target|
+    abort "Unknown build target '#{target}'. Choose dom or desktop." unless target.in?("dom", "desktop")
+    render_target = RenderTarget.parse(target)
   end
 
   p.on("typecheck", "typecheck the current directory") do
@@ -190,8 +196,10 @@ OptionParser.parse do |p|
 end
 
 if is_ruby_test
+  abort "Use task desktop:test for the experimental desktop inspector" if render_target.desktop?
   exit RubyTestRunner.new.run(input_dir.empty? ? "." : input_dir, test_browsers, test_file)
 elsif is_dev_server
+  abort "mochi dev supports the dom target" if render_target.desktop?
   if dev_server_config_path.size < 1 || dev_server_root.size < 1
     puts "No arguments provided, intended usage:".colorize(:red)
     puts "  mochi dev --config=</path/to/dev_server_config.json> --root=</path/to/ruby/src>"
@@ -222,6 +230,7 @@ else
       with_tc,
       keep_granular_build_artifacts,
       capacity_config_path,
+      render_target,
     )
   end
 end

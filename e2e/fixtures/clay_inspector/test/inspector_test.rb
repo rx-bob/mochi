@@ -1,0 +1,15 @@
+Mochi::Test.test("select a station, reorder the rows, and inspect its details") do
+  mount "record-inspector"
+  click "[data-id='02']"
+  assert_text ".selection", "Selected station 02"
+  assert_attribute "[data-id='02']", "aria-pressed", "true"
+  focus ".action"
+  press "Enter"
+  assert_text ".record", "West ridge sensor"
+  assert_text ".selection", "Selected station 02"
+  focus ".action:last-child"
+  press "Space"
+  assert_text ".detail", "Showing details for station 02"
+  remount "record-inspector"
+  assert_text ".selection", "Selected station 01"
+end

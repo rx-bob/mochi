@@ -2,6 +2,8 @@ require "json"
 require "file_utils"
 require "digest/sha1"
 require "../mochi_cmp"
+require "../clay/profile"
+require "../clay/desktop_scene"
 require "../tooling/installation_paths"
 require "../sorbet/type_stripper"
 require "../webcomponents/resource_manifest"
@@ -42,6 +44,7 @@ class MrbcCompiler
     @format_host_source : String? = ENV["MOCHI_FORMAT_HOST"]?,
     @host_adapter_sources : Hash(String, String)? = nil,
     capacity_config_path : String? = nil,
+    @render_target : RenderTarget = RenderTarget::Dom,
   )
     @capacity_config = capacity_config_path ? CapacityConfig.read(capacity_config_path) : CapacityConfig.default
     @capacity_artifacts = nil
@@ -182,6 +185,10 @@ class MrbcCompiler
       @helper_chi_paths << compiled_paths[index] if package.helper
     end
     @chi_paths = compiled_paths[package_count, sorted_components.size]
+    if @render_target.desktop?
+      write_desktop_scene(graph, sorted_components, output_dir)
+      return
+    end
     sorted_components.each do |component|
       write_component_descriptor(component.manifest, output_dir)
     end
@@ -227,6 +234,18 @@ class MrbcCompiler
 
     @manifest_path = manifest_path
     File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components, package_resources))
+  end
+
+  private def write_desktop_scene(graph : MochiPackaging::PackageGraph, components : Array(MochiComponent), output_dir : String) : Nil
+    raise "Desktop target requires one root component" unless components.size == 1
+    root = components.first.manifest
+    unless graph.capabilities.values.all? { |cap| cap.host.nil? } && root.props.empty? && root.emits.empty?
+      raise "#{root.source_file}: desktop target supports standalone components with local Ruby state and pure Ruby helpers"
+    end
+    packages = graph.ruby_order.map(&.file) + [root.chi_file]
+    path = File.join(output_dir, "scene.json")
+    File.write(path, DesktopScene.new(root).write(packages, @capacity_config.fingerprint))
+    @manifest_path = path
   end
 
   private def collect_resources(
