@@ -29,7 +29,7 @@ class RecordInspector
   def html
     %Q{
       <div class="panel" data-view="panel">
-        <span class="title" data-view="title">Station records</span>
+        <span class="title" data-view="title">Station records Ω</span>
         <div class="actions" data-view="actions">
           <button class="action" data-action="reverse" onclick="{reverse_records}">Reverse order</button>
           <button class="action" data-action="details" onclick="{toggle_details}">Details</button>
@@ -54,11 +54,12 @@ class RecordInspector
         padding: 16px;
         background-color: #eff4f2;
         color: #162d27;
-        font-family: StationSans, sans-serif;
+        font-family: StationSans, StationSymbols, sans-serif;
         font-size: 16px;
         line-height: 24px;
       }
       .title {
+        font-weight: 700;
         font-size: 22px;
         line-height: 30px;
       }
@@ -68,7 +69,7 @@ class RecordInspector
         gap: 8px;
       }
       .action {
-        font-family: StationSans, sans-serif;
+        font-family: StationSans, StationSymbols, sans-serif;
         font-size: 14px;
         line-height: 20px;
         padding: 8px;
@@ -78,7 +79,7 @@ class RecordInspector
         background-color: #26634f;
       }
       .record {
-        font-family: StationSans, sans-serif;
+        font-family: StationSans, StationSymbols, sans-serif;
         font-size: 16px;
         line-height: 24px;
         padding: 8px;

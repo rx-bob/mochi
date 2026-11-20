@@ -10,17 +10,41 @@ the browser and the experimental macOS host.
   "app_id": "org.mochi.stations",
   "display_name": "Stations",
   "fonts": {
-    "StationSans": "public/station-sans.woff2"
+    "StationSans": {
+      "400": { "file": "public/station-sans.woff2", "license": "public/OFL.txt" },
+      "700": { "file": "public/station-sans-bold.woff2", "license": "public/OFL.txt" }
+    },
+    "StationSymbols": {
+      "700": { "file": "public/station-symbols-bold.woff2", "license": "public/OFL.txt" }
+    }
   }
 }
 ```
 
 `root` is the component's `@tag_name`. Give `app_id` a stable reverse DNS
-identifier and `display_name` the name users should see. `fonts` maps CSS family
-names to local WOFF2, OTF or TTF files under `public/`. Use an empty object
-when the screen uses only generic fonts. Mount the declared tag in your
-`index.html` and define its `@font-face` URLs there. The native packager uses
-the declared asset paths.
+identifier and `display_name` the name users should see. Mount the declared
+tag in `index.html`. Mochi loads each component's font stylesheet on mount
+and the browser downloads the faces needed by its text.
+
+Use static WOFF2, OTF or TTF files under `public/` and declare each face's
+weight from 100 to 900 in steps of 100. A string path is shorthand for weight
+400 and picks up an adjacent `OFL.txt` when present. The weighted form can
+name a local license file explicitly. Install `woff2_decompress` to build
+projects that use WOFF2. Mochi packages the faces that can reach a text
+leaf and their licenses through the font resource graph.
+
+List local faces in order, for example
+`font-family: StationSans, StationSymbols, sans-serif;`. Mochi resolves the
+exact declared weight and assigns glyphs to the first matching face.
+If the local stack has no face for the requested weight, both builds report
+the authored CSS location. The optional generic tail uses the platform
+default for glyphs outside the local stack's coverage. An empty `fonts`
+object supports a generic-only screen.
+
+The inspector verifies printable ASCII, precomposed é, and Ω from its
+bundled symbol face. Regular and bold text share explicit line heights
+and the AppKit baseline is rounded to the nearest logical pixel.
+The parity fixture exercises 1× and 2× captures around its wrap boundary.
 
 ```sh
 mochi -i . -o build/web

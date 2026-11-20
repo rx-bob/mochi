@@ -39,15 +39,45 @@
 @implementation DesktopLabel
 @end
 
+@interface DesktopTypography : NSObject
+@property(nonatomic, copy) NSArray *fonts;
+@property(nonatomic, copy) NSArray<NSCharacterSet *> *coverage;
+@property(nonatomic) CGFloat ascent, descent;
+- (id)line:(NSString *)text color:(NSColor *)color;
+@end
+
+@implementation DesktopTypography
+- (id)line:(NSString *)text color:(NSColor *)color {
+    NSMutableAttributedString *run = [[NSMutableAttributedString alloc] initWithString:text attributes:@{
+        (__bridge NSString *)kCTFontAttributeName: self.fonts.firstObject,
+        (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)color.CGColor
+    }];
+    if (self.fonts.count > 1) {
+        [text enumerateSubstringsInRange:NSMakeRange(0, text.length)
+             options:NSStringEnumerationByComposedCharacterSequences
+             usingBlock:^(NSString *cluster, NSRange range, NSRange enclosing, BOOL *stop) {
+            for (NSUInteger i = 0; i < self.fonts.count; i++) {
+                if ([cluster rangeOfCharacterFromSet:self.coverage[i]].location != NSNotFound) continue;
+                if (i) [run addAttribute:(__bridge NSString *)kCTFontAttributeName value:self.fonts[i] range:range];
+                break;
+            }
+        }];
+    }
+    return CFBridgingRelease(CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)run));
+}
+@end
+
 @interface DesktopBox : NSObject
 @property(nonatomic) NSRect frame;
-@property(nonatomic, strong) NSFont *font;
+@property(nonatomic, strong) DesktopTypography *typography;
 @property(nonatomic, strong) NSColor *color, *background;
 @property(nonatomic, copy) NSString *key, *label;
 @property(nonatomic, copy) NSDictionary *attrs, *definition;
 @property(nonatomic, copy) NSArray *rowArguments;
 #ifdef MOCHI_DESKTOP_CAPTURE
 @property(nonatomic, strong) NSMutableArray<NSString *> *lines;
+@property(nonatomic, strong) NSMutableArray<NSArray<NSNumber *> *> *lineFrames;
+@property(nonatomic, strong) NSMutableArray<NSArray<NSString *> *> *lineFaces;
 #endif
 @end
 @implementation DesktopBox
@@ -62,7 +92,9 @@ static NSString *utf8(const char *bytes, int length) {
 }
 void mochi_clay_fail(const char *message, int length) { DesktopFailure(utf8(message, length)); }
 float mochi_clay_measure(const char *text, int length, int font) {
-    return [utf8(text, length) sizeWithAttributes:@{NSFontAttributeName:frameBoxes[font].font}].width;
+    DesktopBox *box = frameBoxes[font];
+    id line = [box.typography line:utf8(text, length) color:box.color];
+    return CTLineGetTypographicBounds((__bridge CTLineRef)line, NULL, NULL, NULL);
 }
 void mochi_clay_rectangle(int node, float x, float y, float width, float height) {
     DesktopBox *box = frameBoxes[node];
@@ -71,13 +103,25 @@ void mochi_clay_rectangle(int node, float x, float y, float width, float height)
 }
 void mochi_clay_line(const char *text, int length, int font, float x, float y, float height) {
     DesktopBox *box = frameBoxes[font];
-    NSDictionary *attrs = @{NSFontAttributeName:box.font, NSForegroundColorAttributeName:box.color};
-    NSString *line = utf8(text, length);
+    NSString *label = [utf8(text, length) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    id line = [box.typography line:label color:box.color];
+    // Use a logical-pixel baseline for the CSS line box. All glyph runs,
+    // including fallback runs, retain the same baseline.
+    CGFloat baseline = round(y + (height + box.typography.ascent - box.typography.descent) / 2);
 #ifdef MOCHI_DESKTOP_CAPTURE
-    [box.lines addObject:[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
+    [box.lines addObject:label];
+    double width = CTLineGetTypographicBounds((__bridge CTLineRef)line, NULL, NULL, NULL);
+    [box.lineFrames addObject:@[@(x), @(y), @(width), @(height), @(baseline)]];
+    NSMutableArray *faces = [NSMutableArray array];
+    for (id glyphRun in (__bridge NSArray *)CTLineGetGlyphRuns((__bridge CTLineRef)line)) {
+        NSDictionary *attributes = (__bridge NSDictionary *)CTRunGetAttributes((__bridge CTRunRef)glyphRun);
+        id usedFont = attributes[(__bridge NSString *)kCTFontAttributeName];
+        NSUInteger index = [box.typography.fonts indexOfObjectIdenticalTo:usedFont];
+        [faces addObject:index == NSNotFound ? @"system" : @(index).stringValue];
+    }
+    [box.lineFaces addObject:faces];
 #endif
-    CGFloat top = y + (height - [line sizeWithAttributes:attrs].height) / 2;
-    [paintCommands addObject:@{@"point":[NSValue valueWithPoint:NSMakePoint(x, top)], @"text":line, @"attrs":attrs}];
+    [paintCommands addObject:@{@"point":[NSValue valueWithPoint:NSMakePoint(x, baseline)], @"line":line}];
 }
 
 static NSColor *color(NSNumber *rgb) {
@@ -94,7 +138,8 @@ static NSString *displayValue(id value) {
 
 @implementation DesktopView {
     DesktopVM *_vm;
-    NSDictionary *_fontNames;
+    NSDictionary *_graphicsFonts;
+    NSMutableDictionary<NSArray *, DesktopTypography *> *_typography;
     NSMutableDictionary<NSString *, DesktopButton *> *_buttons;
     NSArray *_commands, *_accessibles;
     int _textUsed;
@@ -119,17 +164,17 @@ static NSString *displayValue(id value) {
     _vm = [[DesktopVM alloc] initWithProgram:program];
     _buttons = [NSMutableDictionary dictionary];
     NSMutableDictionary *fonts = [NSMutableDictionary dictionary];
-    for (NSString *family in _vm.scene[@"fonts"]) {
-        NSURL *url = [program.resources URLByAppendingPathComponent:_vm.scene[@"fonts"][family]];
-        NSArray *descriptors = CFBridgingRelease(CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url));
-        if (!descriptors.count) DesktopFailure([@"Cannot read bundled font " stringByAppendingString:family]);
-        CTFontDescriptorRef descriptor = (__bridge CTFontDescriptorRef)descriptors.firstObject;
-        NSString *name = CFBridgingRelease(CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute));
-        CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, NULL);
-        if (!name || ![NSFont fontWithName:name size:16]) DesktopFailure([@"Cannot register font " stringByAppendingString:family]);
-        fonts[family] = name;
+    for (NSString *face in _vm.scene[@"fonts"]) {
+        NSURL *url = [program.resources URLByAppendingPathComponent:_vm.scene[@"fonts"][face]];
+        CGDataProviderRef provider = CGDataProviderCreateWithURL((__bridge CFURLRef)url);
+        if (!provider) DesktopFailure([@"Cannot read bundled font " stringByAppendingString:face]);
+        CGFontRef font = CGFontCreateWithDataProvider(provider);
+        CGDataProviderRelease(provider);
+        if (!font) DesktopFailure([@"Cannot open bundled font " stringByAppendingString:face]);
+        fonts[face] = CFBridgingRelease(font);
     }
-    _fontNames = fonts;
+    _graphicsFonts = [fonts copy];
+    _typography = [NSMutableDictionary dictionary];
     static dispatch_once_t once;
     dispatch_once(&once, ^{ mochi_clay_init(); });
     [self refresh];
@@ -167,6 +212,47 @@ static NSString *displayValue(id value) {
             [style addEntriesFromDictionary:rules[index.unsignedIntegerValue][@"values"]];
     }
     return style;
+}
+
+- (DesktopTypography *)typographyFor:(NSDictionary *)style {
+    NSString *family = style[@"face"] ?: @"sans-serif";
+    NSNumber *weight = style[@"weight"] ?: @400;
+    NSNumber *size = style[@"size"] ?: @16;
+    NSArray *key = @[family, weight, size];
+    DesktopTypography *cached = _typography[key];
+    if (cached) return cached;
+
+    DesktopTypography *type = [DesktopTypography new];
+    NSDictionary *stack = _vm.scene[@"font_stacks"][family][weight.stringValue];
+    NSMutableArray *fonts = [NSMutableArray array];
+    if (stack) {
+        NSMutableArray *coverage = [NSMutableArray array];
+        for (NSString *face in stack[@"faces"]) {
+            CGFontRef graphics = (__bridge CGFontRef)_graphicsFonts[face];
+            if (!graphics) DesktopFailure([@"Missing bundled font " stringByAppendingString:face]);
+            CTFontRef font = CTFontCreateWithGraphicsFont(graphics, size.doubleValue, NULL, NULL);
+            NSCharacterSet *characters = CFBridgingRelease(CTFontCopyCharacterSet(font));
+            [coverage addObject:characters.invertedSet];
+            [fonts addObject:CFBridgingRelease(font)];
+        }
+        type.coverage = coverage;
+        type.ascent = [stack[@"ascent"] doubleValue] * size.doubleValue;
+        type.descent = [stack[@"descent"] doubleValue] * size.doubleValue;
+    } else {
+        if (![family isEqual:@"monospace"] && ![family isEqual:@"sans-serif"])
+            DesktopFailure([NSString stringWithFormat:@"%@: unresolved font stack %@ weight %@",
+                            _vm.scene[@"source"], family, weight]);
+        NSFontWeight platformWeight = weight.intValue >= 600 ? NSFontWeightBold : NSFontWeightRegular;
+        NSFont *font = [family isEqual:@"monospace"]
+            ? [NSFont monospacedSystemFontOfSize:size.doubleValue weight:platformWeight]
+            : [NSFont systemFontOfSize:size.doubleValue weight:platformWeight];
+        type.ascent = font.ascender;
+        type.descent = -font.descender;
+        [fonts addObject:font];
+    }
+    type.fonts = fonts;
+    _typography[key] = type;
+    return type;
 }
 
 - (void)layoutNodes:(NSArray *)nodes parent:(NSDictionary *)parent stretch:(BOOL)stretch
@@ -211,16 +297,11 @@ static NSString *displayValue(id value) {
         box.rowArguments = rowArgs;
 #ifdef MOCHI_DESKTOP_CAPTURE
         box.lines = [NSMutableArray array];
+        box.lineFrames = [NSMutableArray array];
+        box.lineFaces = [NSMutableArray array];
 #endif
         box.color = color(style[@"ink"] ?: @0);
         if (style[@"fill"]) box.background = color(style[@"fill"]);
-        CGFloat size = [(style[@"size"] ?: @16) doubleValue];
-        NSString *family = style[@"face"] ?: @"sans-serif";
-        NSString *fontName = _fontNames[family];
-        box.font = fontName ? [NSFont fontWithName:fontName size:size] :
-            ([family isEqual:@"monospace"] ? [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular] : [NSFont systemFontOfSize:size]);
-        if ([style[@"weight"] integerValue] >= 600)
-            box.font = [NSFontManager.sharedFontManager convertFont:box.font toHaveTrait:NSBoldFontMask];
         int font = (int)frameBoxes.count;
         [frameBoxes addObject:box];
         int pad = [style[@"padding"] intValue];
@@ -230,6 +311,7 @@ static NSString *displayValue(id value) {
         if ([type isEqual:@"box"]) {
             [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots arguments:rowArgs];
         } else {
+            box.typography = [self typographyFor:style];
             NSMutableString *label = [NSMutableString string];
             for (NSDictionary *child in node[@"nodes"])
                 [label appendString:[self renderParts:child[@"parts"] slots:slots]];
@@ -239,7 +321,7 @@ static NSString *displayValue(id value) {
             if (text.length > mochi_clay_string_capacity() - _textUsed) DesktopFailure(@"Clay frame exceeds its UTF-8 text capacity");
             if (text.length) {
                 memcpy(mochi_clay_string_buffer() + _textUsed, text.bytes, text.length);
-                mochi_clay_text_leaf(_textUsed, (int)text.length, font, [(style[@"leading"] ?: @(ceil(size * 1.2))) intValue]);
+                mochi_clay_text_leaf(_textUsed, (int)text.length, font, [(style[@"leading"] ?: @20) intValue]);
                 _textUsed += (int)text.length;
             }
         }
@@ -301,7 +383,7 @@ static NSString *displayValue(id value) {
             @"pressed":attrs[@"aria-pressed"] ? [element accessibilityValue] ?: NSNull.null : NSNull.null,
             @"fill":box.background ? @[@(lround(box.background.redComponent * 255)),
                 @(lround(box.background.greenComponent * 255)), @(lround(box.background.blueComponent * 255))] : NSNull.null,
-            @"font":box.font.fontName,
+            @"lineFrames":box.lineFrames, @"lineFaces":box.lineFaces,
         };
         [controls addObject:control];
     }
@@ -412,7 +494,15 @@ static void detachButton(DesktopButton *button) {
             [command[@"fill"] setFill];
             NSRectFill([command[@"rect"] rectValue]);
         } else {
-            [command[@"text"] drawAtPoint:[command[@"point"] pointValue] withAttributes:command[@"attrs"]];
+            NSPoint point = [command[@"point"] pointValue];
+            CGContextRef context = NSGraphicsContext.currentContext.CGContext;
+            CGContextSaveGState(context);
+            CGContextTranslateCTM(context, point.x, point.y);
+            CGContextScaleCTM(context, 1, -1);
+            CGContextSetTextMatrix(context, CGAffineTransformIdentity);
+            CGContextSetTextPosition(context, 0, 0);
+            CTLineDraw((__bridge CTLineRef)command[@"line"], context);
+            CGContextRestoreGState(context);
         }
     }
 }

@@ -23,23 +23,20 @@ Dir.mktmpdir(".mochi-desktop-", output) do |work|
     FileUtils.cp(File.join(compiled, "components", name), File.join(resources, name))
   end
 
-  public_dir = File.join(project, "public")
-  scene["fonts"] = {}
-  scene.delete("font_assets").each do |family, asset|
-    source = File.join(project, asset)
+  scene["fonts"] = scene.delete("font_assets").to_h do |id, face|
+    source = File.join(project, face.fetch("file"))
     if File.extname(source) == ".woff2"
-      temp = File.join(work, "font.woff2")
+      temp = File.join(work, "#{id}.woff2")
       FileUtils.cp(source, temp)
       checked("woff2_decompress", temp)
-      source = File.join(work, "font.ttf")
+      source = File.join(work, "#{id}.ttf")
     end
-    name = "font-#{scene['fonts'].size}#{File.extname(source)}"
+    name = "#{id}#{File.extname(source)}"
     FileUtils.cp(source, File.join(resources, name))
-    scene["fonts"][family] = name
+    [id, name]
   end
-  licenses = Dir.glob("**/{OFL,LICENSE}*.{txt,md}", base: public_dir).sort
-  licenses.each_with_index do |file, i|
-    FileUtils.cp(File.join(public_dir, file), File.join(resources, "#{i}-#{File.basename(file)}"))
+  scene.delete("font_licenses").each_with_index do |license, index|
+    FileUtils.cp(File.join(project, license), File.join(resources, "#{index}-#{File.basename(license)}"))
   end
   FileUtils.cp(File.expand_path("../clay/LICENSE.clay.txt", __dir__), resources)
   File.write(File.join(resources, "scene.json"), JSON.generate(scene))

@@ -10,6 +10,9 @@ const contentTypes = {
   ".wasm": "application/wasm",
   ".chi": "application/octet-stream",
   ".css": "text/css; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
   ".svg": "image/svg+xml",
 };
 

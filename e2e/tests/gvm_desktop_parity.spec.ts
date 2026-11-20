@@ -11,10 +11,12 @@ const fixture = path.join(__dirname, "../fixtures/clay_inspector");
 const matrix = JSON.parse(fs.readFileSync(path.join(fixture, "parity.json"), "utf8"));
 const artifactRoot = process.env.MOCHI_PARITY_DIR;
 
-for (const width of matrix.widths as number[]) {
-  test(`inspector capture parity at ${width} points`, async ({ browser, browserName }, testInfo) => {
+const sizes = (matrix.widths as number[]).map(width => ({ width, scale: matrix.scale as number }));
+sizes.push(...(matrix.wrapWidths as number[]).map(width => ({ width, scale: 1 })));
+for (const { width, scale } of sizes) {
+  test(`inspector capture parity at ${width} points (${scale}x)`, async ({ browser, browserName }, testInfo) => {
     test.skip(!artifactRoot || !matrix.paint[browserName], "requires native inspector captures and a renderer in the matrix");
-    const output = path.join(artifactRoot!, browserName);
+    const output = path.join(artifactRoot!, scale === 2 ? browserName : browserName + "-1x");
     fs.mkdirSync(output, { recursive: true });
     const plan = JSON.parse(fs.readFileSync(path.join(artifactRoot!, "test-plan.json"), "utf8"));
     expect(plan.tests).toHaveLength(1);
@@ -29,7 +31,7 @@ for (const width of matrix.widths as number[]) {
       fs.writeFileSync(entry, html);
       const sizedBrowser = {
         newPage: () => browser.newPage({
-          viewport: { width, height: 660 }, deviceScaleFactor: matrix.scale, colorScheme: "light",
+          viewport: { width, height: 660 }, deviceScaleFactor: scale, colorScheme: "light",
         }),
       };
       const captures: { name: string; dom: Capture; native: Capture; mismatches: unknown[] }[] = [];
@@ -37,25 +39,28 @@ for (const width of matrix.widths as number[]) {
         expect(matrix.checkpoints).toContain(name);
         const testName = `${width}-${name}`;
         const domStem = path.join(output, testName);
-        const nativeStem = path.join(artifactRoot!, "native", testName);
+        const nativeStem = path.join(artifactRoot!, scale === 2 ? "native" : "native-1x", testName);
         const dom = await captureDOM(page, domStem);
         const native: Capture = JSON.parse(fs.readFileSync(nativeStem + ".json", "utf8"));
         const mismatches: unknown[] = compareObservations(dom, native, matrix.edgeTolerance);
         const paint = await comparePaint(page, dom, native, domStem + ".png", nativeStem + ".png", domStem + ".diff.png", matrix);
         for (const solid of paint.solids) mismatches.push({ ...solid, check: "solid fill pixels" });
         const limits = matrix.paint[browserName];
+        const override = scale === 1 ? matrix.paint1x[browserName] : undefined;
+        const regions = { ...limits.regions, ...override?.regions };
+        const focused = { ...limits.focused, ...override?.focused };
         for (const [id, actual] of Object.entries(paint.fractions)) {
-          const ceiling = (dom.focus === id ? limits.focused[id] : undefined) ?? limits.regions[id];
+          const ceiling = (dom.focus === id ? focused[id] : undefined) ?? regions[id];
           if (ceiling === undefined || !Number.isFinite(actual) || actual > ceiling)
             mismatches.push({ control: id, check: "paint fraction", actual, ceiling });
         }
-        if (paint.sizes.some(([w, h], index) => w !== width * matrix.scale ||
-            h !== Math.ceil((index === 0 ? dom : native).height * matrix.scale))) {
+        if (paint.sizes.some(([w, h], index) => w !== width * scale ||
+            h !== Math.ceil((index === 0 ? dom : native).height * scale))) {
           mismatches.push({ control: "panel", check: "capture resolution", sizes: paint.sizes });
         }
         const report = domStem + ".comparison.json";
         fs.writeFileSync(report, JSON.stringify({
-          browser: browserName, browserVersion: browser.version(), width, name, paint, mismatches,
+          browser: browserName, browserVersion: browser.version(), width, scale, name, paint, mismatches,
         }, null, 2));
         await testInfo.attach(testName, { path: report, contentType: "application/json" });
         if (mismatches.length) {
@@ -70,6 +75,12 @@ for (const width of matrix.widths as number[]) {
         expect(capture.mismatches, `${browserName} ${width} ${capture.name}, first mismatch ${JSON.stringify(capture.mismatches[0])}`).toEqual([]);
       }
 
+      for (const { dom, native } of captures) {
+        expect(native.controls.find(control => control.id === "title")!.lineFaces?.[0]).toContain("1");
+        const cafe = dom.controls.find(control => control.id === "station-02")!;
+        if (width === 315) expect(cafe.lines[0]).toBe("Café observation from the");
+        if (width === 318) expect(cafe.lines[0]).toBe("Café observation from the northern");
+      }
       const selected = captures[0];
       const padding = structuredClone(selected.native);
       padding.controls.find(c => c.id === "action-reverse")!.rect[0] += 2;
@@ -111,8 +122,9 @@ test("station inspector uses real DOM buttons and preserves keyed state through 
     const details = host.getByRole("button", { name: "Details" });
     await details.press("Space");
     await expect(host.locator(".detail")).toHaveText("Showing details for station 02");
-    const fontLoaded = await page.evaluate(async () => {
-      const faces = await document.fonts.load('16px StationSans', 'Café');
+    const fontLoaded = await cafe.evaluate(async element => {
+      const style = getComputedStyle(element);
+      const faces = await document.fonts.load(`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, "Café");
       return faces.some(face => face.status === "loaded");
     });
     expect(fontLoaded).toBe(true);
@@ -146,6 +158,58 @@ test("station inspector Ruby scenario reports a wrong assertion at the authored 
     expect(() => runRubyProject(project, browserName, "inspector_test.rb")).toThrow(
       "inspector_test.rb:5: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 4 assert_text [data-view='selection'])",
     );
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("a later portable screen requests its own font only on mount", async ({ page }) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-screen-font-"));
+  try {
+    fs.cpSync(fixture, project, { recursive: true });
+    const source = path.join(project, "lib/RecordInspector.rb");
+    fs.writeFileSync(source, fs.readFileSync(source, "utf8").replace("  def initialize",
+      "  def preview_class; FontPreview; end\n\n  def initialize"));
+    fs.writeFileSync(path.join(project, "lib/FontPreview.rb"), `
+class FontPreview
+  @tag_name = "font-preview"
+
+  def html
+    %q{<span class="sample">Preview</span>}
+  end
+
+  def css
+    %q{.sample { font-family: PreviewSans, sans-serif; line-height: 24px; }}
+  end
+end
+`);
+    const previewFont = path.join(__dirname, "../../devground/public/fonts/noto-sans/static/NotoSans-Regular.ttf");
+    fs.copyFileSync(previewFont, path.join(project, "public/preview.ttf"));
+    const config = path.join(project, "mochi-portable.json");
+    const declaration = JSON.parse(fs.readFileSync(config, "utf8"));
+    declaration.fonts.PreviewSans = { "400": { file: "public/preview.ttf", license: "public/OFL.txt" } };
+    fs.writeFileSync(config, JSON.stringify(declaration));
+
+    await withCompiledProject(project, async (url, bundle) => {
+      const manifest = JSON.parse(fs.readFileSync(path.join(bundle, "mochi-manifest.json"), "utf8"));
+      const resources = Object.values(manifest.resources) as { kind: string; file: string }[];
+      const preview = resources.find(resource => resource.kind === "font" && resource.file.endsWith(".ttf"))!;
+      const requests: string[] = [];
+      page.on("request", request => requests.push(new URL(request.url()).pathname));
+      await page.goto(url);
+      await expect(page.locator("record-inspector .title")).toHaveText("Station records Ω");
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      expect(requests).not.toContain("/" + preview.file);
+
+      await page.evaluate(() => document.body.append(document.createElement("font-preview")));
+      const label = page.locator("font-preview .sample");
+      await expect(label).toHaveText("Preview");
+      await label.evaluate(async element => {
+        const style = getComputedStyle(element);
+        await document.fonts.load(`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, "Preview");
+      });
+      expect(requests.filter(path => path === "/" + preview.file)).toHaveLength(1);
+    });
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }

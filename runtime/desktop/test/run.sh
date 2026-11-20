@@ -7,6 +7,13 @@ project="$work/Station inspector"
 dom="$work/Web bundle"
 desktop="$work/Mac bundle"
 cp -R e2e/fixtures/clay_inspector "$project"
+cp "$project/public/station-sans.woff2" "$project/public/unused.woff2"
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  declaration = JSON.parse(File.read(path))
+  declaration.fetch("fonts")["Unused"] = "public/unused.woff2"
+  File.write(path, JSON.generate(declaration))
+' "$project/mochi-portable.json"
 app="$desktop/Mochi.app"
 resources="$app/Contents/Resources"
 for build in 1 2; do
@@ -32,8 +39,13 @@ ruby -rjson -e '
       File.binread(File.join(dom, "components", name))
   end
   files = Dir.glob("**/*", base: dom).select { |file| File.file?(File.join(dom, file)) }
+  manifest = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))
+  fonts = manifest.fetch("resources").values.group_by { |resource| resource.fetch("kind") }
+  abort "unexpected portable font inventory" unless
+    fonts.transform_values(&:size) == { "font" => 3, "font-license" => 1, "font-style" => 1 }
   expected = %w[index.html mochi-manifest.json mochi-gvm.wasm mochi-gvm.js mochi-loader.js
-    components/record-inspector.json components/record-inspector.chi public/OFL.txt public/station-sans.woff2]
+    components/record-inspector.json components/record-inspector.chi] +
+    fonts.values.flatten.map { |resource| resource.fetch("file") }
   abort "unexpected DOM inventory: #{files.sort}" unless files.sort == expected.sort
   abort "unexpected DOM loader contents" unless File.binread(File.join(dom, "mochi-loader.js")) ==
     File.binread("runtime/mochi-loader.js")

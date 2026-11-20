@@ -1310,3 +1310,54 @@ describe "Portable template records" do
     end
   end
 end
+
+describe "Portable font resolution" do
+  it "requires an exact weight and resolves ordered fallback faces and licenses" do
+    with_portable_spec_project do |project|
+      public_dir = File.join(project, "public")
+      Dir.mkdir(public_dir)
+      fixture = File.expand_path("../../../../e2e/fixtures/clay_inspector/public", __DIR__)
+      %w[station-sans.woff2 station-sans-bold.woff2 station-symbols-bold.woff2 OFL.txt].each do |name|
+        FileUtils.cp(File.join(fixture, name), public_dir)
+      end
+      write_portable_spec_screen(project, %q(<div class="screen"><span>Élan Ω</span><span class="bold">Élan Ω</span></div>))
+      css_path = File.join(project, "lib/styles/base.css")
+      File.write(css_path, ".screen { font-family: Primary, Fallback, sans-serif; }\n.bold { font-weight: 700; }")
+      declaration_path = File.join(project, PortableProject::FILE_NAME)
+      declaration = JSON.parse(File.read(declaration_path)).as_h
+      declaration["fonts"] = JSON.parse(<<-JSON)
+        {"Primary":"public/station-sans.woff2","Fallback":"public/station-sans.woff2"}
+        JSON
+      File.write(declaration_path, declaration.to_json)
+      portable_diagnostic(project, "lib/styles/base.css:2: portable component 'PortableScreen': font stack 'Primary, Fallback, sans-serif' has no declared face for weight 700")
+
+      # Primary lacks 700. Resolve the exact-weight fallback for Latin, then
+      # the following face for Omega, using the coverage declared by the files.
+      declaration["fonts"] = JSON.parse(<<-JSON)
+        {
+          "Primary":"public/station-sans.woff2",
+          "Fallback":{"700":{"file":"public/station-sans-bold.woff2","license":"public/OFL.txt"}},
+          "Symbols":{"700":{"file":"public/station-symbols-bold.woff2","license":"public/OFL.txt"}},
+          "Unused":{"400":{"file":"public/station-sans-bold.woff2"}}
+        }
+        JSON
+      File.write(declaration_path, declaration.to_json)
+      File.write(css_path, File.read(css_path).sub("Primary, Fallback, sans-serif", "Primary, Fallback, Symbols, sans-serif"))
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      desktop = compile_portable_spec(project, RenderTarget::Desktop)
+      scene = JSON.parse(File.read(File.join(desktop, "scene.json")))
+      stack = scene["font_stacks"]["Primary, Fallback, Symbols, sans-serif"]
+      stack["400"]["faces"].as_a.size.should eq(1)
+      stack["700"]["faces"].as_a.size.should eq(2)
+      resources = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))["resources"].as_h
+      resources.values.count { |resource| resource["kind"].as_s == "font" }.should eq(3)
+      resources.values.count { |resource| resource["kind"].as_s == "font-license" }.should eq(1)
+      stylesheet = resources.values.find! { |resource| resource["kind"].as_s == "font-style" }["file"].as_s
+      File.read(File.join(dom, stylesheet)).should contain("unicode-range:U+3a9")
+
+      declaration["fonts"].as_h["Fallback"] = JSON.parse(%q({"700":{"file":"public/station-sans.woff2"}}))
+      File.write(declaration_path, declaration.to_json)
+      portable_diagnostic(project, "mochi-portable.json: public/station-sans.woff2 declares weight 700, but the face reports 400")
+    end
+  end
+end

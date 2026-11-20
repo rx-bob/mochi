@@ -1,8 +1,14 @@
 {
   "widths": [
     285,
+    315,
+    318,
     320,
     640
+  ],
+  "wrapWidths": [
+    315,
+    318
   ],
   "checkpoints": [
     "selected",
@@ -65,6 +71,33 @@
       "focused": {
         "action-details": 0.175,
         "station-02": 0.073
+      }
+    }
+  },
+  "paint1x": {
+    "chromium": {
+      "regions": {
+        "title": 0.055
+      },
+      "focused": {
+        "action-details": 0.315
+      }
+    },
+    "firefox": {
+      "regions": {
+        "actions": 0.14,
+        "action-reverse": 0.145,
+        "action-details": 0.175
+      },
+      "focused": {
+        "action-details": 0.315
+      }
+    },
+    "webkit": {
+      "regions": {
+      },
+      "focused": {
+        "station-02": 0.085
       }
     }
   }

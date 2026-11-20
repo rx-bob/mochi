@@ -4,6 +4,12 @@
   "app_id": "org.mochi.stations",
   "display_name": "Stations",
   "fonts": {
-    "StationSans": "public/station-sans.woff2"
+    "StationSans": {
+      "400": { "file": "public/station-sans.woff2", "license": "public/OFL.txt" },
+      "700": { "file": "public/station-sans-bold.woff2", "license": "public/OFL.txt" }
+    },
+    "StationSymbols": {
+      "700": { "file": "public/station-symbols-bold.woff2", "license": "public/OFL.txt" }
+    }
   }
 }

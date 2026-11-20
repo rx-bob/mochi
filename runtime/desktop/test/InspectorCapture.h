@@ -1,6 +1,6 @@
 #import "../Native.h"
 
-static void captureInspector(DesktopView *view, NSString *directory, NSInteger width, NSString *name) {
+static void captureInspector(DesktopView *view, NSString *directory, NSInteger width, NSInteger scale, NSString *name) {
     if ([name rangeOfString:@"\\A[a-z][a-z0-9-]*\\z" options:NSRegularExpressionSearch].location == NSNotFound)
         DesktopFailure(@"invalid inspector checkpoint name");
     NSArray *observations = view.layoutObservations;
@@ -11,7 +11,6 @@ static void captureInspector(DesktopView *view, NSString *directory, NSInteger w
         DesktopFailure(@"unexpected inspector panel bounds");
     NSInteger height = (NSInteger)ceil([rect[3] doubleValue]);
     NSRect crop = NSMakeRect(0, 0, width, height);
-    NSInteger scale = 2;
     NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:NULL pixelsWide:width * scale pixelsHigh:height * scale
         bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO

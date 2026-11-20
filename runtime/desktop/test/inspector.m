@@ -54,7 +54,7 @@ static void checkSceneCompatibility(NSURL *resources) {
         NSURL *sceneURL = [temp URLByAppendingPathComponent:@"scene.json"];
         NSArray *cases = @[
             @[@"capacity", @"wrong fingerprint", @"capacity profile mismatch"],
-            @[@"version", @1, @"unsupported desktop scene version"]
+            @[@"version", @2, @"unsupported desktop scene version"]
         ];
         for (NSArray *entry in cases) {
             NSMutableDictionary *bad = [scene mutableCopy];

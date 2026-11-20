@@ -11,7 +11,8 @@ export type Control = {
   lines: string[];
   pressed: boolean | null;
   fill: RGB | null;
-  font: string;
+  lineFrames: [number, number, number, number, number][];
+  lineFaces?: string[][];
 };
 export type Capture = {
   width: number;
@@ -25,12 +26,20 @@ type Mismatch = { control: string; check: string; dom: unknown; native: unknown 
 
 export async function captureDOM(page: Page, stem: string): Promise<Capture> {
   const root = page.locator("record-inspector");
-  await page.evaluate(async () => {
-    const faces = await document.fonts.load("16px StationSans", "Café");
-    if (!faces.some(face => face.status === "loaded")) throw new Error("inspector font unavailable");
+  const selectors = "[data-view], [data-action], [data-id]";
+  await root.locator(selectors).evaluateAll(async elements => {
+    await Promise.all(elements.filter(el => !["panel", "actions"].includes((el as HTMLElement).dataset.view || "")).map(async el => {
+      const style = getComputedStyle(el);
+      const faces = await document.fonts.load(`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, el.textContent || "");
+      if (!faces.length || faces.some(face => face.status !== "loaded")) throw new Error("inspector font unavailable");
+      if ((el as HTMLElement).dataset.view === "title" &&
+          (faces.length !== 2 || !faces.some(face => face.unicodeRange.toLowerCase() === "u+3a9"))) {
+        throw new Error("inspector title did not load its bold Latin and Omega faces");
+      }
+    }));
+    await document.fonts.ready;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
-  const selectors = "[data-view], [data-action], [data-id]";
   const capture = await root.locator(selectors).evaluateAll((elements): Capture => {
     const panel = elements[0].getBoundingClientRect();
     const focused = elements[0].getRootNode() as ShadowRoot;
@@ -42,22 +51,37 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
       const bounds = el.getBoundingClientRect();
       const container = view === "panel" || view === "actions";
       const lines: string[] = [];
+      const lineFrames: Control["lineFrames"] = [];
+      const style = getComputedStyle(el);
       if (!container) {
         const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
         const range = document.createRange();
+        const metrics = document.createElement("canvas").getContext("2d")!;
+        metrics.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const ascent = metrics.measureText("H").fontBoundingBoxAscent;
+        const descent = metrics.measureText("H").fontBoundingBoxDescent;
+        const leading = Number.parseFloat(style.lineHeight);
         let top = -Infinity;
         while (walker.nextNode()) {
           const node = walker.currentNode as Text;
           for (const word of node.data.matchAll(/\S+/g)) {
             range.setStart(node, word.index!);
             range.setEnd(node, word.index! + word[0].length);
-            const current = range.getBoundingClientRect().top;
-            if (Math.abs(current - top) < 0.5) lines[lines.length - 1] += " " + word[0];
-            else { lines.push(word[0]); top = current; }
+            const rect = range.getBoundingClientRect();
+            const current = rect.top;
+            const left = rect.left - panel.left, right = rect.right - panel.left;
+            if (Math.abs(current - top) < 0.5) {
+              lines[lines.length - 1] += " " + word[0];
+              lineFrames[lineFrames.length - 1][2] = right - lineFrames[lineFrames.length - 1][0];
+            } else {
+              lines.push(word[0]);
+              top = current;
+              const baseline = top - panel.top + ascent;
+              lineFrames.push([left, baseline - (leading + ascent - descent) / 2, right - left, leading, baseline]);
+            }
           }
         }
       }
-      const style = getComputedStyle(el);
       const rgba = style.backgroundColor.match(/[\d.]+/g)?.map(Number);
       if (!rgba || (rgba.length !== 3 && rgba[3] !== 0))
         throw new Error(`unexpected fixture background for ${key}: ${style.backgroundColor}`);
@@ -66,7 +90,7 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
         id: key, name: null, lines, role: container ? null : el.tagName === "BUTTON" ? "button" : "text",
         rect: [bounds.x - panel.x, bounds.y - panel.y, bounds.width, bounds.height],
         pressed: pressed === null ? null : pressed === "true",
-        fill: rgba.length === 3 ? [rgba[0], rgba[1], rgba[2]] : null, font: style.fontFamily,
+        fill: rgba.length === 3 ? [rgba[0], rgba[1], rgba[2]] : null, lineFrames,
       };
     });
     return { width: panel.width, height: panel.height, scale: devicePixelRatio, focus, controls };
@@ -105,6 +129,12 @@ export function compareObservations(dom: Capture, native: Capture, edgeTolerance
     if (!mac) continue;
     for (const field of ["role", "name", "pressed", "lines", "fill"] as const) {
       compare(web.id, field, web[field], mac[field]);
+    }
+    for (const [index, line] of web.lineFrames.entries()) {
+      const other = mac.lineFrames[index];
+      if (!other || line.some((value, coordinate) => Math.abs(value - other[coordinate]) > edgeTolerance)) {
+        mismatches.push({ control: web.id, check: `line ${index + 1} frame and baseline`, dom: line, native: other });
+      }
     }
     const edges = ([x, y, width, height]: Rect) => [x, y, x + width, y + height];
     const webEdges = edges(web.rect), macEdges = edges(mac.rect);

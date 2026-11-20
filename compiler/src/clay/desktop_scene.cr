@@ -3,12 +3,12 @@ require "../webcomponents/binding_manifest"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 2
+  VERSION = 3
 
   def initialize(@manifest : ComponentManifest)
   end
 
-  def write(packages : Array(String), fingerprint : String, fonts : Hash(String, String)) : String
+  def write(packages : Array(String), fingerprint : String, fonts : PortableFonts) : String
     JSON.build do |j|
       j.object do
         j.field "version", VERSION
@@ -18,7 +18,9 @@ class DesktopScene
         j.field "source", @manifest.source_file
         j.field "methods", @manifest.method_lines
         j.field "packages", packages
-        j.field "font_assets", fonts
+        j.field "font_assets", fonts.faces
+        j.field "font_licenses", fonts.licenses.to_a.sort
+        j.field "font_stacks", fonts.native_stacks
         j.field "getters", @manifest.all_bindings.to_h { |b| {b.id.to_s, b.getter_sym} }
         j.field "styles" do
           j.array do
@@ -36,7 +38,7 @@ class DesktopScene
                       when "font-size"      then j.field "size", value.to_i(strict: false)
                       when "line-height"    then j.field "leading", value.to_i(strict: false)
                       when "font-weight"    then j.field "weight", value.to_i
-                      when "font-family"    then j.field "face", value.split(',').first.strip
+                      when "font-family"    then j.field "face", value
                       when "display"        then j.field "flex", true
                       when "flex-direction" then j.field "vertical", value == "column"
                       end

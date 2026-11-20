@@ -259,7 +259,7 @@ class BuildMain
       else
         puts "6. Copying Entry Page & Static Assets"
         copy_entry_page(input_dir, output_dir)
-        copy_static_assets(input_dir, output_dir)
+        copy_static_assets(input_dir, output_dir, portable_project)
       end
 
       if keep_granular_build_artifacts
@@ -319,14 +319,18 @@ class BuildMain
     puts "> Copied index.html"
   end
 
-  private def copy_static_assets(input_dir : String, output_dir : String)
+  private def copy_static_assets(input_dir : String, output_dir : String, portable_project : PortableProject?)
     return if File.expand_path(input_dir) == File.expand_path(output_dir)
 
     public_src = File.join(input_dir, "public")
     if File.directory?(public_src)
       public_dst = File.join(output_dir, "public")
       remove_directory(public_dst) if File.exists?(public_dst)
-      FileUtils.cp_r(public_src, public_dst)
+      if portable_project
+        copy_portable_public(input_dir, output_dir, "public", portable_project.managed_font_assets(input_dir))
+      else
+        FileUtils.cp_r(public_src, public_dst)
+      end
       puts "> Copied public/"
     end
 
@@ -337,6 +341,18 @@ class BuildMain
       next unless STATIC_ASSET_EXTS.includes?(ext)
       FileUtils.cp(src_path, File.join(output_dir, entry))
       puts "> Copied #{entry}"
+    end
+  end
+
+  private def copy_portable_public(input : String, output : String, relative : String, fonts : Set(String)) : Nil
+    return if fonts.includes?(relative)
+    source = File.join(input, relative)
+    if File.directory?(source)
+      Dir.children(source).each { |name| copy_portable_public(input, output, File.join(relative, name), fonts) }
+    else
+      destination = File.join(output, relative)
+      Dir.mkdir_p(File.dirname(destination))
+      FileUtils.cp(source, destination)
     end
   end
 

@@ -26,7 +26,7 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 - (void)runStep:(NSDictionary *)step;
 - (void)close;
 #ifdef MOCHI_DESKTOP_CAPTURE
-@property(nonatomic) NSInteger captureWidth;
+@property(nonatomic) NSInteger captureWidth, captureScale;
 @property(nonatomic, copy) NSString *captureDirectory;
 #endif
 @end
@@ -123,7 +123,7 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 #ifdef MOCHI_DESKTOP_CAPTURE
         if (self.captureDirectory) {
             if (!_view) DesktopFailure(@"mount a component before capturing a checkpoint");
-            captureInspector(_view, self.captureDirectory, self.captureWidth, step[@"name"]);
+            captureInspector(_view, self.captureDirectory, self.captureWidth, self.captureScale, step[@"name"]);
         }
 #endif
         return;
@@ -177,7 +177,7 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 int main(int argc, const char **argv) {
     @autoreleasepool {
 #ifdef MOCHI_DESKTOP_CAPTURE
-        if (argc != 3 && argc != 5) return 2;
+        if (argc != 3 && argc != 6) return 2;
 #else
         if (argc != 3) return 2;
 #endif
@@ -191,9 +191,11 @@ int main(int argc, const char **argv) {
             for (NSDictionary *test in plan[@"tests"]) {
                 DesktopReplay *replay = [[DesktopReplay alloc] initWithProgram:program];
 #ifdef MOCHI_DESKTOP_CAPTURE
-                if (argc == 5) {
+                if (argc == 6) {
                     replay.captureDirectory = @(argv[3]);
                     replay.captureWidth = [@(argv[4]) integerValue];
+                    replay.captureScale = [@(argv[5]) integerValue];
+                    if (replay.captureWidth <= 0 || (replay.captureScale != 1 && replay.captureScale != 2)) return 2;
                 }
 #endif
                 NSString *origin = [NSString stringWithFormat:@"%@:%@", test[@"ruby_file"], test[@"line"]];

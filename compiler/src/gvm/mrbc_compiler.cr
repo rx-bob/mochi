@@ -1,3 +1,4 @@
+require "../clay/portable_fonts"
 require "json"
 require "file_utils"
 require "digest/sha1"
@@ -127,7 +128,7 @@ class MrbcCompiler
     )
     graph = @package_graph.not_nil!
     desktop_scene = if portable_project
-                      validate_portable_project(graph, portable_project, staged_project_dir.not_nil!)
+                      validate_portable_project(graph, portable_project, staged_project_dir.not_nil!, project_root.not_nil!)
                     end
     if @render_target.desktop? && !desktop_scene
       raise "The desktop target requires #{PortableProject::FILE_NAME}"
@@ -250,6 +251,7 @@ class MrbcCompiler
     graph : MochiPackaging::PackageGraph,
     project : PortableProject,
     staged_root : String,
+    project_dir : String,
   ) : String
     known_tags = graph.packages.values.compact_map { |node| node.component.try(&.manifest.tag_name) }.to_set
     receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject(&.includes?('.')).to_set
@@ -263,7 +265,7 @@ class MrbcCompiler
       if event = manifest.emits.first?
         raise "#{event.source_file}:#{event.source_line}: portable component '#{component.name}': child events require child component support"
       end
-      composition = profile.compose_styles(component.absolute_path, staged_root, project.fonts)
+      composition = profile.compose_styles(component.absolute_path, staged_root)
       manifest.css = component.css = composition.css
       manifest.style_resources = composition.resources
       manifest.desktop_styles = profile.rules
@@ -280,16 +282,27 @@ class MrbcCompiler
       end
     end
 
+    font_plans = {} of String => PortableFonts
     graph.component_order.each do |component|
       profile = component.portable_profile.not_nil!
       profile.reject_child!
       manifest = component.manifest
       PortableTemplate::SourceMap.new(profile.source_marks, manifest.class_name,
         manifest.source_file, manifest.source_line).apply(manifest.portable_nodes.not_nil!)
+      fonts = PortableFonts.new(project, project_dir, profile)
+      fonts.resolve(manifest.portable_nodes.not_nil!)
+      manifest.css = component.css = fonts.browser_css(manifest.css)
+      manifest.font_resources = fonts.resources
+      if resource = fonts.style_resource
+        manifest.font_style = resource.id
+        manifest.font_resources << resource
+      end
+      graph.packages[manifest.package_id].resources.concat(manifest.font_resources.map(&.id))
+      font_plans[manifest.tag_name] = fonts
     end
     root = graph.packages[graph.entry_packages.first].component.not_nil!
     packages = graph.order.map { |id| graph.packages[id].file }
-    DesktopScene.new(root.manifest).write(packages, @capacity_config.fingerprint, root.portable_profile.not_nil!.fonts)
+    DesktopScene.new(root.manifest).write(packages, @capacity_config.fingerprint, font_plans[root.manifest.tag_name])
   end
 
   private def collect_resources(
@@ -297,7 +310,7 @@ class MrbcCompiler
     extra : Array(PackageResource),
   ) : Array(PackageResource)
     resources = {} of String => PackageResource
-    (components.flat_map(&.manifest.style_resources) + extra).each do |resource|
+    (components.flat_map { |component| component.manifest.style_resources + component.manifest.font_resources } + extra).each do |resource|
       if previous = resources[resource.id]?
         if previous.kind != resource.kind || previous.text != resource.text ||
            previous.output_file != resource.output_file
@@ -837,6 +850,7 @@ class MrbcCompiler
         end
       end
     end
+    json.field "font_style", manifest.font_style if manifest.font_style
     json.field "css", manifest.css
     if source_file = manifest.source_file
       json.field "source" do

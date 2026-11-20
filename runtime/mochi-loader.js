@@ -2366,9 +2366,11 @@
       );
     }).then(function (descriptor) {
       var styleIds = descriptor.style_resources || [];
-      return Promise.all(styleIds.map(function (id) {
+      var styles = styleIds.map(function (id) {
         return loadStyleResource(id, manifest, manifestUrl, descriptor.tag_name || entry.tag_name);
-      })).then(function () {
+      });
+      if (descriptor.font_style) styles.push(loadFontStyle(descriptor.font_style, manifest, manifestUrl));
+      return Promise.all(styles).then(function () {
         return Object.assign({}, entry, descriptor, { descriptor: entry.descriptor });
       });
     }).catch(function (error) {
@@ -2378,6 +2380,29 @@
     });
 
     state.descriptorPromises.set(url, promise);
+    return promise;
+  }
+
+  function loadFontStyle(id, manifest, manifestUrl) {
+    var resource = manifest.resources && manifest.resources[id];
+    if (!resource || resource.kind !== "font-style" || typeof resource.file !== "string") {
+      return Promise.reject(new Error("mochi-loader: missing font stylesheet " + id));
+    }
+    var url = absoluteUrl(resource.file, manifestUrl);
+    if (state.styleTextPromises.has(url)) return state.styleTextPromises.get(url);
+    var link = global.document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = url;
+    var promise = new Promise(function (resolve, reject) {
+      link.onload = resolve;
+      link.onerror = function () {
+        link.remove();
+        state.styleTextPromises.delete(url);
+        reject(new Error("mochi-loader: failed to load font stylesheet " + url));
+      };
+      global.document.head.appendChild(link);
+    });
+    state.styleTextPromises.set(url, promise);
     return promise;
   }
 

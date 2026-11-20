@@ -16,7 +16,7 @@ end
 # authored CSS sources, including markup that mounts only in a later state.
 class ClayProfile
   getter rules = [] of Tuple(String, Hash(String, String))
-  getter fonts = {} of String => String
+  getter font_locations = [] of Hash(String, String)
   getter source_marks = [] of PortableTemplate::SourceMark
   @child_use : Tuple(Int32, String)?
 
@@ -47,14 +47,14 @@ class ClayProfile
     validate_html(html, line, known_tags, capability_receivers)
   end
 
-  def compose_styles(absolute_path : String, staged_root : String, assets : Hash(String, String)) : CssComposition
+  def compose_styles(absolute_path : String, staged_root : String) : CssComposition
     css, line = @css_method.try { |method| literal(method) } || {"", 1}
     composition = StyleComposer.new(@component, absolute_path, @path, staged_root).compose(css, line)
-    composition.sources.each { |source| parse_styles(source, assets) }
+    composition.sources.each { |source| parse_styles(source) }
     composition
   end
 
-  private def parse_styles(source : CssSource, assets : Hash(String, String)) : Nil
+  private def parse_styles(source : CssSource) : Nil
     css = source.text
     scan = StringScanner.new(css)
     until scan.eos?
@@ -67,6 +67,8 @@ class ClayProfile
       end
       declarations = {} of String => String
       @rules << {selector[1..], declarations}
+      locations = {} of String => String
+      @font_locations << locations
       loop do
         scan.skip(/(?:\s+|\/\*.*?\*\/)+/m)
         break if scan.skip('}')
@@ -79,12 +81,8 @@ class ClayProfile
         unless supported_style?(name, value)
           reject(source.path, line_at(css, at, source.line), "unsupported CSS '#{name}: #{value}'")
         end
-        if name == "font-family"
-          family = value.split(',').first.strip
-          unless family.in?("sans-serif", "monospace")
-            asset = assets[family]? || reject(source.path, line_at(css, at, source.line), "font family '#{family}' is missing from #{PortableProject::FILE_NAME}")
-            @fonts[family] = asset
-          end
+        if name.in?("font-family", "font-weight")
+          locations[name] = "#{source.path}:#{line_at(css, at, source.line)}"
         end
         declarations[name] = value
         scan.skip(';')
@@ -99,8 +97,11 @@ class ClayProfile
     when "color", "background-color" then value.matches?(/\A#[0-9a-fA-F]{6}\z/)
     when "width", "height", "gap", "padding", "font-size", "line-height"
       value.matches?(/\A(?:[0-9]{1,4}px|0)\z/)
-    when "font-family"      then value.matches?(/\A[a-zA-Z][\w-]*(?:,\s*(?:sans-serif|monospace))?\z/)
-    when "font-weight"      then value.in?("400", "500", "600", "700")
+    when "font-family"
+      families = value.split(',').map(&.strip)
+      families.all? { |family| family.matches?(/\A[a-zA-Z][\w-]*\z/) } &&
+        families[0...-1].none? { |family| family.in?("sans-serif", "monospace") }
+    when "font-weight"      then value.matches?(/\A[1-9]00\z/)
     when "text-align"       then value == "left"
     when "box-sizing"       then value == "border-box"
     when "border", "margin" then value == "0"
@@ -209,6 +210,10 @@ class ClayProfile
     expression = token.byte_slice(1, token.bytesize - 2)
     self.class.validate_ruby(expression, @path, line_at(html, at, line), @component, capability_receivers)
     token
+  end
+
+  def font_error(location : String, reason : String) : NoReturn
+    raise "#{location}: portable component '#{@component}': #{reason}"
   end
 
   def reject_child! : Nil

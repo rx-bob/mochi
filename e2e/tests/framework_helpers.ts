@@ -43,7 +43,10 @@ export async function withCompiledProject<T>(fixture: string, run: (baseURL: str
         path.extname(file) === ".js" ? "text/javascript" :
         path.extname(file) === ".json" ? "application/json" :
         path.extname(file) === ".chi" ? "application/octet-stream" :
+        path.extname(file) === ".css" ? "text/css; charset=utf-8" :
         path.extname(file) === ".woff2" ? "font/woff2" :
+        path.extname(file) === ".ttf" ? "font/ttf" :
+        path.extname(file) === ".otf" ? "font/otf" :
         path.extname(file) === ".svg" ? "image/svg+xml" : "text/html; charset=utf-8";
       response.writeHead(200, { "content-type": type }).end(content);
     });
