@@ -5176,6 +5176,9 @@
             console.error("[mochi] " + tag + " stale mount failed", error);
             throw error;
           });
+        // Detached or rejected children may have no readiness waiter. The
+        // mount already reported the failure through mochi:error.
+        this._mochiReady.catch(function () {});
       }
 
       _observeAttributes(module, instance) {

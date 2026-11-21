@@ -23,7 +23,8 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 
 @interface DesktopReplay : NSObject
 - (instancetype)initWithProgram:(DesktopProgram *)program;
-- (void)runStep:(NSDictionary *)step;
+- (void)runRecordedStep:(NSDictionary *)step;
+- (void)finish;
 - (void)close;
 #ifdef MOCHI_DESKTOP_CAPTURE
 @property(nonatomic) NSInteger captureWidth, captureScale;
@@ -36,20 +37,36 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
     DesktopView *_view;
     NSWindow *_window;
     NSString *_lastTag;
+    NSString *_expectedError;
+    NSMutableArray<NSString *> *_diagnostics;
 }
 
 - (instancetype)initWithProgram:(DesktopProgram *)program {
-    if ((self = [super init])) _program = program;
+    if ((self = [super init])) {
+        _program = program;
+        _diagnostics = [NSMutableArray array];
+    }
     return self;
 }
 
 - (void)mount:(NSString *)tag props:(NSDictionary *)props {
-    if (![tag isEqual:_program.scene[@"tag"]])
-        DesktopFailure([NSString stringWithFormat:@"unknown root '%@'; expected '%@'", tag, _program.scene[@"tag"]]);
-    if (![props isKindOfClass:NSDictionary.class] || props.count)
-        DesktopFailure(@"desktop root props are unsupported");
+    if (![tag isEqual:_program.scene[@"root"]])
+        DesktopFailure([NSString stringWithFormat:@"unknown root '%@'; expected '%@'", tag, _program.scene[@"root"]]);
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    for (NSString *name in props) {
+        id value = props[name];
+        if (value == NSNull.null) continue;
+        if ([value isKindOfClass:NSString.class]) attributes[name] = value;
+        else {
+            NSData *json = [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingFragmentsAllowed error:NULL];
+            if (!json) DesktopFailure(@"invalid component input attribute");
+            attributes[name] = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+        }
+    }
 
-    _view = [[DesktopView alloc] initWithProgram:_program];
+    NSMutableArray *diagnostics = _diagnostics;
+    _view = [[DesktopView alloc] initWithProgram:_program attributes:attributes
+                                    diagnostics:^(NSString *reason) { [diagnostics addObject:reason]; }];
     _window = [[NSWindow alloc] initWithContentRect:_view.bounds styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
     _window.releasedWhenClosed = NO;
@@ -76,21 +93,46 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
     }
 }
 
-- (id)find:(NSString *)selector {
-    static NSRegularExpression *attribute;
+static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *attributes) {
+    static NSRegularExpression *pattern;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        attribute = [NSRegularExpression regularExpressionWithPattern:
-            @"\\A\\[(data-[a-z][a-z0-9-]*)(?:=(['\"])([^'\"]*)\\2)?\\]\\z" options:0 error:NULL];
+        pattern = [NSRegularExpression regularExpressionWithPattern:
+            @"\\A\\[(data-[a-z][a-z0-9-]*)(?:=(['\\x22])([^'\\x22]*)\\2)?\\]\\z" options:0 error:NULL];
     });
-    NSTextCheckingResult *match = [attribute firstMatchInString:selector options:0 range:NSMakeRange(0, selector.length)];
-    if (!match) DesktopFailure(@"unsupported desktop selector; use a single [data-name] or [data-name='value']");
+    if (tag && [selector isEqual:tag]) return YES;
+    NSTextCheckingResult *match = [pattern firstMatchInString:selector options:0 range:NSMakeRange(0, selector.length)];
+    if (!match) {
+        if (tag && [selector rangeOfString:@"\\A[a-z][a-z0-9-]*-[a-z0-9-]+\\z"
+                              options:NSRegularExpressionSearch].location != NSNotFound) return NO;
+        DesktopFailure(@"unsupported desktop selector; use a single [data-name] or [data-name='value']");
+    }
     NSString *name = [selector substringWithRange:[match rangeAtIndex:1]];
     NSRange range = [match rangeAtIndex:3];
     NSString *value = range.location == NSNotFound ? nil : [selector substringWithRange:range];
+    return attributes[name] && (!value || [attributes[name] isEqual:value]);
+}
+
+- (id)find:(NSString *)selector {
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *part in [selector componentsSeparatedByString:@">>>"])
+        [parts addObject:[part stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]];
+    // Validate the leaf selector even if the current screen has no matching scope.
+    matchesSelector(parts.lastObject, nil, @{});
     for (id element in _view.accessibilityChildren) {
-        NSString *actual = [_view attributesForAccessibilityElement:element][name];
-        if (actual && (!value || [value isEqual:actual])) return element;
+        NSDictionary *attrs = [_view attributesForAccessibilityElement:element];
+        if (!matchesSelector(parts.lastObject, nil, attrs)) continue;
+        NSArray *ancestors = [_view componentAncestorsForAccessibilityElement:element];
+        if (ancestors.count + 1 != parts.count) continue;
+        BOOL matches = YES;
+        for (NSUInteger i = 0; i < ancestors.count; i++) {
+            NSDictionary *ancestor = ancestors[i];
+            if (!matchesSelector(parts[i], ancestor[@"tag"], ancestor[@"attributes"])) {
+                matches = NO;
+                break;
+            }
+        }
+        if (matches) return element;
     }
     DesktopFailure(@"selector matched no accessible control or text");
 }
@@ -99,7 +141,7 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
     if (![element isKindOfClass:NSButton.class] || ![[element accessibilityRole] isEqual:NSAccessibilityButtonRole])
         DesktopFailure(@"selector must identify an accessible button");
     NSButton *button = element;
-    if (button.window != _window || button.hidden || !button.enabled || NSIsEmptyRect(button.bounds))
+    if (button.window != _window || button.hidden || !button.enabled || NSIsEmptyRect(button.visibleRect))
         DesktopFailure(@"button must be visible and enabled");
     return button;
 }
@@ -117,8 +159,40 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
     DesktopFailure([NSString stringWithFormat:@"unsupported desktop attribute '%@' on this element", name]);
 }
 
+- (void)runRecordedStep:(NSDictionary *)step {
+    if ([step[@"operation"] isEqual:@"expect_error"]) {
+        if (_expectedError) DesktopFailure(@"expect_error must be followed by an action");
+        _expectedError = step[@"message"];
+        return;
+    }
+    @try { [self runStep:step]; }
+    @catch (NSException *error) {
+        // Root mount diagnostics are thrown before an application view exists.
+        if (!_expectedError || ![step[@"operation"] isEqual:@"mount"] ||
+            ![error.reason containsString:_expectedError]) @throw;
+        [_diagnostics addObject:error.reason];
+    }
+    for (NSString *reason in _diagnostics) {
+        if (!_expectedError || ![reason containsString:_expectedError]) DesktopFailure(reason);
+    }
+    if (_expectedError && !_diagnostics.count)
+        DesktopFailure([NSString stringWithFormat:@"expected desktop error containing '%@', but no error occurred", _expectedError]);
+    [_diagnostics removeAllObjects];
+    _expectedError = nil;
+}
+
+- (void)finish {
+    if (_expectedError) DesktopFailure(@"expect_error must be followed by an action");
+}
+
 - (void)runStep:(NSDictionary *)step {
     NSString *operation = step[@"operation"];
+    if ([operation isEqual:@"wait"]) return;
+    if ([operation isEqual:@"wait_for"]) {
+        if (!_view) DesktopFailure(@"mount a component before waiting for a control");
+        [self find:step[@"selector"]];
+        return;
+    }
     if ([operation isEqual:@"checkpoint"]) {
 #ifdef MOCHI_DESKTOP_CAPTURE
         if (self.captureDirectory) {
@@ -204,8 +278,9 @@ int main(int argc, const char **argv) {
                     @try {
                         for (NSDictionary *step in test[@"steps"]) {
                             origin = stepLocation(step, ++number);
-                            [replay runStep:step];
+                            [replay runRecordedStep:step];
                         }
+                        [replay finish];
                     } @finally { [replay close]; }
                     printf("PASS [desktop] %s\n", [test[@"name"] UTF8String]);
                 } @catch (NSException *exception) {

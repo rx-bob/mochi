@@ -3,6 +3,10 @@ class RecordInspector
   @records
   @selected
   @details
+  @station_name
+  @metadata
+  @confirmations
+  @confirmation
 
   def initialize
     @records = [
@@ -11,11 +15,17 @@ class RecordInspector
       {"id" => "03", "name" => "West", "label" => " ridge sensor"}
     ]
     @selected = "01"
+    @station_name = "Harbor"
+    @metadata = {"note" => ["parent"]}
+    @confirmations = 0
+    @confirmation = "No station confirmed"
     @details = false
   end
 
   def select_record(event)
-    @selected = event["current_target_dataset"]["id"]
+    dataset = event["current_target_dataset"]
+    @selected = dataset["id"]
+    @station_name = dataset["name"]
   end
 
   def reverse_records
@@ -24,6 +34,11 @@ class RecordInspector
 
   def toggle_details
     @details = !@details
+  end
+
+  def confirm_station(event)
+    @confirmations += 1
+    @confirmation = "#{event["id"] + 100}: #{event["name"]} / #{@confirmations} / #{@metadata["note"][0]}"
   end
 
   def html
@@ -35,11 +50,12 @@ class RecordInspector
           <button class="action-default action" data-action="details" onclick="{toggle_details}">Details</button>
         </div>
         {each @records as record, key: record["id"]}
-          <button class="{if @selected == record['id']}selected{end} record" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" onclick="{select_record($event)}">{record["name"]}{record["label"]}</button>
+          <button class="{if @selected == record['id']}selected{end} record" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" data-name="{record['name']}" onclick="{select_record($event)}">{record["name"]}{record["label"]}</button>
         {end}
         <span class="selection" data-view="selection">Selected st&#97;tion {@selected}</span>
         {if @details}
-          <span class="detail" data-view="details">Showing details for station {@selected}</span>
+          <station-details station-id="{StationNumbers.id(@selected)}" station-name="{@station_name}" metadata="{@metadata}" on:confirm="{confirm_station($event)}"></station-details>
+          <span data-confirmation="status">{@confirmation}</span>
         {end}
       </div>
     }
@@ -95,10 +111,6 @@ class RecordInspector
       }
       .selected {
         background-color: #c9e7d9;
-      }
-      .detail {
-        padding: 8px;
-        background-color: #d3e8de;
       }
     }
   end

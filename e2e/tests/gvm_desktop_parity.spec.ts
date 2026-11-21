@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -143,7 +144,7 @@ test("station inspector uses real DOM buttons and preserves keyed state through 
 
     const details = host.getByRole("button", { name: "Details" });
     await details.press("Space");
-    await expect(host.locator(".detail")).toHaveText("Showing details for station 02");
+    await expect(host.locator("[data-view=details]")).toHaveText("Showing details for station 02");
     const fontLoaded = await cafe.evaluate(async element => {
       const style = getComputedStyle(element);
       const faces = await document.fonts.load(`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, "Café");
@@ -160,7 +161,7 @@ test("station inspector uses real DOM buttons and preserves keyed state through 
     await expect(host).toHaveCount(0);
     await page.evaluate(() => document.body.append(document.createElement("record-inspector")));
     await expect(selection).toHaveText("Selected station 01");
-    await expect(host.locator(".detail")).toHaveCount(0);
+    await expect(host.locator("[data-view=details]")).toHaveCount(0);
   });
 });
 
@@ -180,6 +181,23 @@ test("station inspector Ruby scenario reports a wrong assertion at the authored 
     expect(() => runRubyProject(project, browserName, "inspector_test.rb")).toThrow(
       "inspector_test.rb:7: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 6 assert_text [data-view='selection'])",
     );
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("station details replays typed props and events using the Ruby runner", ({ browserName }) => {
+  expect(runRubyProject(fixture, browserName, "details_test.rb"))
+    .toContain(`PASS [${browserName}] updates one typed details panel and routes its confirmation`);
+});
+
+test("station details rejects invalid inputs while leaving siblings interactive", ({ browserName }) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-rejected-details-"));
+  try {
+    fs.cpSync(fixture, project, { recursive: true });
+    execFileSync("ruby", [path.join(fixture, "probes/reject_details.rb"), project]);
+    expect(runRubyProject(project, browserName, "rejected_details_test.rb"))
+      .toContain(`PASS [${browserName}] rejects invalid details inputs and keeps the inspector interactive`);
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }

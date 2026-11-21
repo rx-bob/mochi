@@ -34,6 +34,9 @@ ruby -rjson -e '
   abort "desktop scene contains template source" if scene.to_json.match?(/html_template|<button|@font-face/)
   dom_chi = Dir.glob("components/*.chi", base: dom).map { |file| File.basename(file) }.sort
   abort "different component inventories" unless dom_chi == scene.fetch("packages").sort
+  shared = scene.fetch("packages").select { |file| file.start_with?("ruby-") }
+  abort "missing or duplicated shared station package" unless shared.size == 1 &&
+    scene.fetch("packages").first == shared.first
   dom_chi.each do |name|
     abort "different bytecode for #{name}" unless File.binread(File.join(resources, name)) ==
       File.binread(File.join(dom, "components", name))
@@ -42,9 +45,11 @@ ruby -rjson -e '
   manifest = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))
   resources_by_kind = manifest.fetch("resources").values.group_by { |resource| resource.fetch("kind") }
   abort "unexpected portable resource inventory" unless
-    resources_by_kind.transform_values(&:size) == { "font" => 3, "font-license" => 1, "document-style" => 1, "style" => 1 }
+    resources_by_kind.transform_values(&:size) == { "font" => 3, "font-license" => 1, "document-style" => 2, "style" => 1 }
   expected = %w[index.html mochi-manifest.json mochi-gvm.wasm mochi-gvm.js mochi-loader.js
-    components/record-inspector.json components/record-inspector.chi] +
+    components/record-inspector.json components/record-inspector.chi
+    components/station-details.json components/station-details.chi] +
+    shared.map { |file| "components/#{file}" } +
     resources_by_kind.values.flatten.map { |resource| resource.fetch("file") }
   abort "unexpected DOM inventory: #{files.sort}" unless files.sort == expected.sort
   abort "unexpected DOM loader contents" unless File.binread(File.join(dom, "mochi-loader.js")) ==
@@ -77,6 +82,12 @@ runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/inspector.m "$work/tes
 export MOCHI_E2E_NODE_MODULES="$work/no-playwright"
 test_file=inspector_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file="$test_file"
+compiler/mochi test --target=desktop -i "$project" --test-file=details_test.rb
+
+rejected="$work/Rejected details"
+cp -R "$project" "$rejected"
+ruby e2e/fixtures/clay_inspector/probes/reject_details.rb "$rejected"
+compiler/mochi test --target=desktop -i "$rejected" --test-file=rejected_details_test.rb
 
 ruby -e '
   file = ARGV.fetch(0)

@@ -33,8 +33,10 @@
 - (BOOL)resignFirstResponder { self.needsDisplay = YES; return [super resignFirstResponder]; }
 @end
 
+@class DesktopMount;
 @interface DesktopLabel : NSAccessibilityElement
 @property(nonatomic, copy) NSDictionary *attributes;
+@property(nonatomic, strong) DesktopMount *owner;
 @end
 @implementation DesktopLabel
 @end
@@ -67,6 +69,15 @@
 }
 @end
 
+@interface DesktopMount : NSObject
+@property(nonatomic, strong) DesktopVM *vm;
+@property(nonatomic, weak) DesktopMount *parent;
+@property(nonatomic, copy) NSString *key;
+@property(nonatomic, copy) NSDictionary *connections, *attemptedAttributes;
+@end
+@implementation DesktopMount
+@end
+
 @interface DesktopBox : NSObject
 @property(nonatomic) NSRect frame;
 @property(nonatomic, strong) DesktopTypography *typography;
@@ -74,6 +85,7 @@
 @property(nonatomic, copy) NSString *key, *label;
 @property(nonatomic, copy) NSDictionary *attrs, *definition;
 @property(nonatomic, copy) NSArray *rowArguments;
+@property(nonatomic, strong) DesktopMount *owner;
 #ifdef MOCHI_DESKTOP_CAPTURE
 @property(nonatomic, strong) NSMutableArray<NSString *> *lines;
 @property(nonatomic, strong) NSMutableArray<NSArray<NSNumber *> *> *lineFrames;
@@ -137,7 +149,11 @@ static NSString *displayValue(id value) {
 }
 
 @implementation DesktopView {
-    DesktopVM *_vm;
+    DesktopProgram *_program;
+    DesktopMount *_root;
+    NSMutableDictionary<NSString *, DesktopMount *> *_children;
+    NSMutableArray<NSDictionary *> *_pendingEvents;
+    void (^_diagnostics)(NSString *);
     NSDictionary *_graphicsFonts;
     NSMutableDictionary<NSArray *, DesktopTypography *> *_typography;
     NSMutableDictionary<NSString *, DesktopButton *> *_buttons;
@@ -160,12 +176,20 @@ static NSString *displayValue(id value) {
 }
 
 - (instancetype)initWithProgram:(DesktopProgram *)program {
-    if (!(self = [super initWithFrame:NSMakeRect(0, 0, 560, 400)])) return nil;
-    _vm = [[DesktopVM alloc] initWithProgram:program];
+    return [self initWithProgram:program attributes:@{} diagnostics:nil];
+}
+
+- (instancetype)initWithProgram:(DesktopProgram *)program attributes:(NSDictionary *)attributes
+                    diagnostics:(void (^)(NSString *))diagnostics {
+    if (!(self = [super initWithFrame:NSMakeRect(0, 0, 560, 560)])) return nil;
+    _program = program;
+    _diagnostics = [diagnostics copy];
     _buttons = [NSMutableDictionary dictionary];
+    _children = [NSMutableDictionary dictionary];
+    _pendingEvents = [NSMutableArray array];
     NSMutableDictionary *fonts = [NSMutableDictionary dictionary];
-    for (NSString *face in _vm.scene[@"fonts"]) {
-        NSURL *url = [program.resources URLByAppendingPathComponent:_vm.scene[@"fonts"][face]];
+    for (NSString *face in program.scene[@"fonts"]) {
+        NSURL *url = [program.resources URLByAppendingPathComponent:program.scene[@"fonts"][face]];
         CGDataProviderRef provider = CGDataProviderCreateWithURL((__bridge CFURLRef)url);
         if (!provider) DesktopFailure([@"Cannot read bundled font " stringByAppendingString:face]);
         CGFontRef font = CGFontCreateWithDataProvider(provider);
@@ -177,7 +201,14 @@ static NSString *displayValue(id value) {
     _typography = [NSMutableDictionary dictionary];
     static dispatch_once_t once;
     dispatch_once(&once, ^{ mochi_clay_init(); });
-    [self refresh];
+    _root = [DesktopMount new];
+    _root.vm = [[DesktopVM alloc] initWithScene:program.scene[@"components"][program.scene[@"root"]] attributes:attributes];
+    [self enqueueEvents:_root];
+    @try { [self refresh]; }
+    @catch (NSException *e) {
+        [self close];
+        @throw;
+    }
     return self;
 }
 
@@ -187,24 +218,60 @@ static NSString *displayValue(id value) {
     return nil;
 }
 
-- (NSString *)renderParts:(NSArray *)parts slots:(NSArray *)slots {
-    NSMutableString *result = [NSMutableString string];
-    for (id part in parts) {
-        if ([part isKindOfClass:NSString.class]) [result appendString:part];
-        else if (part[@"binding"]) [result appendString:displayValue(_vm.values[part[@"binding"]])];
-        else [result appendString:displayValue(slots[[part[@"slot"] unsignedIntegerValue]])];
+- (NSArray<NSDictionary *> *)componentAncestorsForAccessibilityElement:(id)element {
+    DesktopMount *owner = [element isKindOfClass:DesktopButton.class] ? ((DesktopButton *)element).item.owner :
+        ((DesktopLabel *)element).owner;
+    NSMutableArray *ancestors = [NSMutableArray array];
+    for (; owner.parent; owner = owner.parent) {
+        [ancestors insertObject:@{@"tag":owner.vm.scene[@"tag"], @"attributes":owner.attemptedAttributes} atIndex:0];
     }
+    return ancestors;
+}
+
+static id partValue(id part, NSArray *slots, DesktopVM *vm) {
+    if ([part isKindOfClass:NSString.class]) return part;
+    if (part[@"binding"]) return vm.values[part[@"binding"]];
+    return slots[[part[@"slot"] unsignedIntegerValue]];
+}
+
+- (NSString *)renderParts:(NSArray *)parts slots:(NSArray *)slots vm:(DesktopVM *)vm {
+    NSMutableString *result = [NSMutableString string];
+    for (id part in parts) [result appendString:displayValue(partValue(part, slots, vm))];
     return result;
 }
 
-- (NSDictionary *)styleFor:(NSDictionary *)node slots:(NSArray *)slots parent:(NSDictionary *)parent {
+- (NSDictionary *)attributesForNode:(NSDictionary *)node slots:(NSArray *)slots vm:(DesktopVM *)vm {
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    for (NSString *name in node[@"attrs"]) {
+        NSArray *parts = node[@"attrs"][name];
+        NSDictionary *operand = nil;
+        for (id part in parts) {
+            if ([part isKindOfClass:NSString.class]) {
+                if (![part stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length) continue;
+            } else if (!operand) {
+                operand = part;
+                continue;
+            }
+            operand = nil;
+            break;
+        }
+        if (operand) {
+            id value = partValue(operand, slots, vm);
+            if (!value || value == NSNull.null || [value isEqual:@"\uE004"]) continue;
+        }
+        attributes[name] = [self renderParts:parts slots:slots vm:vm];
+    }
+    return attributes;
+}
+
+- (NSDictionary *)styleFor:(NSDictionary *)node slots:(NSArray *)slots parent:(NSDictionary *)parent vm:(DesktopVM *)vm {
     NSMutableDictionary *style = [NSMutableDictionary dictionary];
     for (NSString *key in @[@"face", @"size", @"weight", @"leading", @"ink"]) style[key] = parent[key];
-    NSArray *rules = _vm.scene[@"styles"];
+    NSArray *rules = vm.scene[@"styles"];
     if (node[@"style_names"]) {
-        NSString *classes = [self renderParts:node[@"style_names"] slots:slots];
+        NSString *classes = [self renderParts:node[@"style_names"] slots:slots vm:vm];
         NSCharacterSet *separators = [NSCharacterSet characterSetWithCharactersInString:@" \t\n\r\f"];
-        NSDictionary *lookup = _vm.scene[@"style_lookup"];
+        NSDictionary *lookup = vm.scene[@"style_lookup"];
         NSMutableIndexSet *matched = [NSMutableIndexSet indexSet];
         for (NSString *name in [classes componentsSeparatedByCharactersInSet:separators]) {
             for (NSNumber *index in lookup[name]) [matched addIndex:index.unsignedIntegerValue];
@@ -219,16 +286,16 @@ static NSString *displayValue(id value) {
     return style;
 }
 
-- (DesktopTypography *)typographyFor:(NSDictionary *)style {
+- (DesktopTypography *)typographyFor:(NSDictionary *)style scene:(NSDictionary *)scene {
     NSString *family = style[@"face"] ?: @"sans-serif";
     NSNumber *weight = style[@"weight"] ?: @400;
     NSNumber *size = style[@"size"] ?: @16;
-    NSArray *key = @[family, weight, size];
+    NSArray *key = @[scene[@"tag"], family, weight, size];
     DesktopTypography *cached = _typography[key];
     if (cached) return cached;
 
     DesktopTypography *type = [DesktopTypography new];
-    NSDictionary *stack = _vm.scene[@"font_stacks"][family][weight.stringValue];
+    NSDictionary *stack = scene[@"font_stacks"][family][weight.stringValue];
     NSMutableArray *fonts = [NSMutableArray array];
     if (stack) {
         NSMutableArray *coverage = [NSMutableArray array];
@@ -246,7 +313,7 @@ static NSString *displayValue(id value) {
     } else {
         if (![family isEqual:@"monospace"] && ![family isEqual:@"sans-serif"])
             DesktopFailure([NSString stringWithFormat:@"%@: unresolved font stack %@ weight %@",
-                            _vm.scene[@"source"], family, weight]);
+                            scene[@"source"], family, weight]);
         NSFontWeight platformWeight = weight.intValue >= 600 ? NSFontWeightBold : NSFontWeightRegular;
         NSFont *font = [family isEqual:@"monospace"]
             ? [NSFont monospacedSystemFontOfSize:size.doubleValue weight:platformWeight]
@@ -260,20 +327,96 @@ static NSString *displayValue(id value) {
     return type;
 }
 
+- (void)reportComponentFailure:(NSString *)reason {
+    NSLog(@"Mochi desktop: %@", reason);
+    if (_diagnostics) _diagnostics(reason);
+}
+
+- (void)enqueueEvents:(DesktopMount *)owner {
+    for (NSDictionary *event in [owner.vm takeEvents])
+        [_pendingEvents addObject:@{@"owner":owner, @"event":event}];
+}
+
+- (DesktopMount *)reconcileChild:(NSDictionary *)node key:(NSString *)key owner:(DesktopMount *)owner
+                     attributes:(NSDictionary *)attributes {
+    DesktopMount *mount = _children[key];
+    if (!mount) {
+        mount = [DesktopMount new];
+        mount.parent = owner;
+        mount.key = key;
+        mount.connections = node[@"connections"];
+        _children[key] = mount;
+    }
+    if ([mount.attemptedAttributes isEqual:attributes]) return mount;
+    mount.attemptedAttributes = attributes;
+    @try {
+        if (mount.vm) {
+            [mount.vm updateAttributes:attributes];
+        } else {
+            NSDictionary *scene = _program.scene[@"components"][node[@"tag"]];
+            mount.vm = [[DesktopVM alloc] initWithScene:scene attributes:attributes];
+        }
+        [self enqueueEvents:mount];
+    } @catch (NSException *e) { [self reportComponentFailure:e.reason]; }
+    return mount;
+}
+
+- (void)disposeChildrenExcept:(NSSet<NSString *> *)seen {
+    // Drop routing before unmounting, with descendants closed first.
+    NSArray *keys = [_children.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+        if (a.length != b.length) return a.length > b.length ? NSOrderedAscending : NSOrderedDescending;
+        return [a compare:b];
+    }];
+    for (NSString *key in keys) {
+        if ([seen containsObject:key]) continue;
+        DesktopMount *mount = _children[key];
+        [_children removeObjectForKey:key];
+        @try { [mount.vm close]; }
+        @catch (NSException *e) { [self reportComponentFailure:e.reason]; }
+    }
+}
+
+- (BOOL)dispatchNextChildEvent {
+    while (_pendingEvents.count) {
+        NSDictionary *pending = _pendingEvents.firstObject;
+        [_pendingEvents removeObjectAtIndex:0];
+        DesktopMount *owner = pending[@"owner"];
+        if (owner != _root && _children[owner.key] != owner) continue;
+        NSDictionary *event = pending[@"event"];
+        NSString *name = event[@"name"];
+        NSDictionary *payload = event[@"payload"];
+        @try {
+            DesktopValidateChildEvent(owner.vm.scene, event[@"method"], name, payload);
+            NSDictionary *connection = owner.connections[name];
+            if (!connection) continue;
+            DesktopMount *parent = owner.parent;
+            NSArray *args = [connection[@"args"] boolValue] ? @[payload] : nil;
+            [parent.vm activate:connection[@"method"] arguments:args payload:payload];
+            [self enqueueEvents:parent];
+            // The handler may have removed the sender. Reconcile before
+            // delivering another event to a possibly stale connection.
+            return YES;
+        } @catch (NSException *e) { [self reportComponentFailure:e.reason]; }
+    }
+    return NO;
+}
+
 - (void)layoutNodes:(NSArray *)nodes parent:(NSDictionary *)parent stretch:(BOOL)stretch
-              scope:(NSString *)scope slots:(NSArray *)slots arguments:(NSArray *)rowArgs {
+              scope:(NSString *)scope slots:(NSArray *)slots arguments:(NSArray *)rowArgs
+              owner:(DesktopMount *)owner seen:(NSMutableSet<NSString *> *)seen {
+    DesktopVM *vm = owner.vm;
     for (NSDictionary *node in nodes) {
         NSString *type = node[@"type"];
         NSString *key = [scope stringByAppendingFormat:@"/%@", node[@"id"]];
         if ([type isEqual:@"cond"]) {
-            NSString *value = _vm.values[node[@"binding"]];
+            NSString *value = vm.values[node[@"binding"]];
             NSInteger index = [value isEqual:@"true"] ? 0 : value.integerValue;
             if (([value isEqual:@"true"] || [value isEqual:@(index).stringValue]) && index >= 0 && index < (NSInteger)[node[@"branches"] count])
-                [self layoutNodes:node[@"branches"][index] parent:parent stretch:stretch scope:key slots:slots arguments:rowArgs];
+                [self layoutNodes:node[@"branches"][index] parent:parent stretch:stretch scope:key slots:slots arguments:rowArgs owner:owner seen:seen];
             continue;
         }
         if ([type isEqual:@"each"]) {
-            NSString *value = _vm.values[node[@"binding"]];
+            NSString *value = vm.values[node[@"binding"]];
             NSData *json = [value dataUsingEncoding:NSUTF8StringEncoding];
             NSError *error = nil;
             NSArray *rows = json ? [NSJSONSerialization JSONObjectWithData:json options:0 error:&error] : nil;
@@ -285,21 +428,27 @@ static NSString *displayValue(id value) {
                     DesktopFailure(@"Invalid keyed row from GVM");
                 NSData *encoded = [NSJSONSerialization dataWithJSONObject:@[row[3]] options:NSJSONWritingSortedKeys error:&error];
                 NSString *identity = [encoded base64EncodedStringWithOptions:0];
-                if ([keys containsObject:identity]) DesktopFailure([NSString stringWithFormat:@"%@: duplicate row key %@", _vm.scene[@"source"], row[3]]);
+                if ([keys containsObject:identity]) DesktopFailure([NSString stringWithFormat:@"%@: duplicate row key %@", vm.scene[@"source"], row[3]]);
                 [keys addObject:identity];
                 [self layoutNodes:node[@"nodes"] parent:parent stretch:stretch
-                            scope:[key stringByAppendingFormat:@":%@", identity] slots:row[1] arguments:@[row[0], @(index++)]];
+                            scope:[key stringByAppendingFormat:@":%@", identity] slots:row[1] arguments:@[row[0], @(index++)] owner:owner seen:seen];
             }
             continue;
         }
-        NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
-        for (NSString *name in node[@"attrs"]) attrs[name] = [self renderParts:node[@"attrs"][name] slots:slots];
-        NSDictionary *style = [self styleFor:node slots:slots parent:parent];
+        NSDictionary *attrs = [self attributesForNode:node slots:slots vm:vm];
+        BOOL childNode = [type isEqual:@"child"];
+        DesktopMount *child = nil;
+        if (childNode) {
+            [seen addObject:key];
+            child = [self reconcileChild:node key:key owner:owner attributes:attrs];
+        }
+        NSDictionary *style = [self styleFor:node slots:slots parent:parent vm:vm];
         DesktopBox *box = [DesktopBox new];
         box.key = key;
         box.definition = node;
         box.attrs = attrs;
         box.rowArguments = rowArgs;
+        box.owner = owner;
 #ifdef MOCHI_DESKTOP_CAPTURE
         box.lines = [NSMutableArray array];
         box.lineFrames = [NSMutableArray array];
@@ -317,13 +466,16 @@ static NSString *displayValue(id value) {
         if (height >= 0) height = MAX(height, 2 * pad);
         mochi_clay_open_box(font, column, stretch, width, height,
                             pad, pad, pad, pad, [style[@"gap"] intValue]);
-        if ([type isEqual:@"box"]) {
-            [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots arguments:rowArgs];
+        if (childNode) {
+            [self layoutNodes:child.vm.scene[@"nodes"] parent:@{} stretch:column
+                        scope:key slots:@[] arguments:nil owner:child seen:seen];
+        } else if ([type isEqual:@"box"]) {
+            [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots arguments:rowArgs owner:owner seen:seen];
         } else {
-            box.typography = [self typographyFor:style];
+            box.typography = [self typographyFor:style scene:vm.scene];
             NSMutableString *label = [NSMutableString string];
             for (NSDictionary *child in node[@"nodes"])
-                [label appendString:[self renderParts:child[@"parts"] slots:slots]];
+                [label appendString:[self renderParts:child[@"parts"] slots:slots vm:vm]];
             NSArray *words = [label componentsSeparatedByCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" \t\n\r\f"]];
             box.label = [[words filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]] componentsJoinedByString:@" "];
             NSData *text = [box.label dataUsingEncoding:NSUTF8StringEncoding];
@@ -339,23 +491,40 @@ static NSString *displayValue(id value) {
 }
 
 - (void)refresh {
-    if (!_vm || self.failureReason || self.bounds.size.width <= 0) return;
+    if (!_root || self.failureReason || self.bounds.size.width <= 0) return;
+    // A cascade may mount new event sources. Bound synchronous work even
+    // when an application's mounted handler keeps recreating its emitter.
+    for (NSUInteger draws = 0; ; draws++) {
+        [self renderFrame];
+        if (!_pendingEvents.count) return;
+        if (draws == 511) {
+            [_pendingEvents removeAllObjects];
+            [self reportComponentFailure:@"Desktop child event cascade exceeded 512 renders"];
+            return;
+        }
+        if (![self dispatchNextChildEvent]) return;
+    }
+}
+
+- (void)renderFrame {
     frameBoxes = [NSMutableArray arrayWithObject:[DesktopBox new]];
     paintCommands = [NSMutableArray array];
     @try {
         CGFloat width = self.bounds.size.width;
         mochi_clay_begin(width);
-        NSDictionary *window = _vm.scene[@"window"];
+        NSDictionary *window = _program.scene[@"window"];
         int inset = [window[@"inset"] intValue];
         CGFloat available = MAX(0, width - 2 * inset);
         NSNumber *cap = window[@"max_width"];
         CGFloat content = [cap isKindOfClass:NSNumber.class] ? MIN(available, cap.doubleValue) : available;
         mochi_clay_open_box(0, 1, 1, content + 2 * inset, -1, inset, inset, inset, inset, 0);
         _textUsed = 0;
-        [self layoutNodes:_vm.scene[@"nodes"] parent:@{} stretch:YES scope:@"" slots:@[] arguments:nil];
+        NSMutableSet *seen = [NSMutableSet set];
+        [self layoutNodes:_root.vm.scene[@"nodes"] parent:@{} stretch:YES scope:@"" slots:@[] arguments:nil owner:_root seen:seen];
         mochi_clay_close_box();
         mochi_clay_end();
         mochi_clay_paint();
+        [self disposeChildrenExcept:seen];
         _commands = [paintCommands copy];
         [self syncControls:frameBoxes];
 #ifdef MOCHI_DESKTOP_CAPTURE
@@ -448,6 +617,7 @@ static void detachButton(DesktopButton *button) {
             label.accessibilityParent = self;
             label.accessibilityFrameInParentSpace = box.frame;
             label.attributes = box.attrs;
+            label.owner = box.owner;
             [accessible addObject:label];
         }
     }
@@ -460,7 +630,7 @@ static void detachButton(DesktopButton *button) {
 
 - (void)activate:(DesktopButton *)button {
     DesktopBox *box = button.item;
-    if (!_vm || self.failureReason || !box || _buttons[box.key] != button) return;
+    if (!_root || self.failureReason || !box || _buttons[box.key] != button) return;
     NSString *method = box.definition[@"action"];
     if (!method) return;
     NSMutableDictionary *dataset = [NSMutableDictionary dictionary];
@@ -476,11 +646,15 @@ static void detachButton(DesktopButton *button) {
     if ([box.definition[@"row_context"] boolValue] && box.rowArguments) args = [box.rowArguments arrayByAddingObject:payload];
     else if ([box.definition[@"event_args"] intValue]) args = @[payload];
     @try {
-        [_vm activate:method arguments:args payload:payload];
-        [self refresh];
+        [box.owner.vm activate:method arguments:args payload:payload];
+        [self enqueueEvents:box.owner];
     } @catch (NSException *e) {
-        [self showFailure:e.reason];
+        if (box.owner == _root) [self showFailure:e.reason];
+        else [self reportComponentFailure:e.reason];
+        return;
     }
+    @try { [self refresh]; }
+    @catch (NSException *e) { [self showFailure:e.reason]; }
 }
 
 - (void)showFailure:(NSString *)reason {
@@ -511,7 +685,7 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
 }
 
 - (void)drawRect:(NSRect)dirty {
-    [(_vm.scene[@"window"] ? NSColor.whiteColor : NSColor.windowBackgroundColor) setFill];
+    [(_program.scene[@"window"] ? NSColor.whiteColor : NSColor.windowBackgroundColor) setFill];
     NSRectFill(dirty);
     CGContextRef context = NSGraphicsContext.currentContext.CGContext;
     for (NSDictionary *command in _commands) {
@@ -531,8 +705,9 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
     }
 }
 - (void)close {
-    DesktopVM *vm = _vm;
-    _vm = nil;
+    DesktopVM *vm = _root.vm;
+    _root = nil;
+    [_pendingEvents removeAllObjects];
     self.window.initialFirstResponder = nil;
     for (DesktopButton *button in _buttons.allValues) detachButton(button);
     [_buttons removeAllObjects];
@@ -541,6 +716,7 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
 #ifdef MOCHI_DESKTOP_CAPTURE
     _layoutObservations = nil;
 #endif
+    [self disposeChildrenExcept:nil];
     [vm close];
 }
 @end

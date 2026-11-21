@@ -49,7 +49,7 @@ class PortableStyles
     PackageResource.new(id, "style", text: css)
   end
 
-  CSS_RESET = ":host{color:#000000;font-family:sans-serif;font-size:16px;font-weight:400;line-height:20px;font-synthesis:none}" +
+  CSS_RESET = ":host{display:flex;flex-direction:column;min-width:0;color:#000000;font-family:sans-serif;font-size:16px;font-weight:400;line-height:20px;font-synthesis:none}" +
               "div,span,button{box-sizing:border-box;min-width:0;--mochi-flex-default:initial;--mochi-align-default:initial}" +
               "div,button{display:flex;flex-direction:var(--mochi-flex-default,column);align-items:var(--mochi-align-default,stretch)}" +
               "button{appearance:none;font:inherit;color:inherit;background:transparent;border:0;margin:0;padding:0;text-align:left}"

@@ -253,18 +253,12 @@ class MrbcCompiler
     staged_root : String,
     project_dir : String,
   ) : String
-    known_tags = graph.packages.values.compact_map { |node| node.component.try(&.manifest.tag_name) }.to_set
+    components = graph.component_order.to_h { |component| {component.manifest.tag_name, component.manifest} }
     receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject(&.includes?('.')).to_set
     graph.component_order.each do |component|
       manifest = component.manifest
       profile = component.portable_profile.not_nil!
-      profile.validate_template(known_tags, receivers)
-      if prop = manifest.props.first?
-        raise "#{prop.source_file}:#{prop.source_line}: portable component '#{component.name}': declared props require child component support"
-      end
-      if event = manifest.emits.first?
-        raise "#{event.source_file}:#{event.source_line}: portable component '#{component.name}': child events require child component support"
-      end
+      profile.validate_template(components, receivers)
       composition = profile.compose_styles(component.absolute_path, staged_root)
       manifest.css = component.css = composition.css
       manifest.style_resources = composition.resources
@@ -284,7 +278,6 @@ class MrbcCompiler
     font_plans = {} of String => PortableFonts
     graph.component_order.each do |component|
       profile = component.portable_profile.not_nil!
-      profile.reject_child!
       manifest = component.manifest
       PortableTemplate::SourceMap.new(profile.source_marks, manifest.class_name,
         manifest.source_file, manifest.source_line).apply(manifest.portable_nodes.not_nil!)
@@ -302,9 +295,8 @@ class MrbcCompiler
       graph.packages[manifest.package_id].resources.concat(manifest.font_resources.map(&.id))
       font_plans[manifest.tag_name] = fonts
     end
-    root = graph.packages[graph.entry_packages.first].component.not_nil!
     packages = graph.order.map { |id| graph.packages[id].file }
-    DesktopScene.new(root.manifest, root.portable_profile.not_nil!.styles, project.window).write(packages, @capacity_config.fingerprint, font_plans[root.manifest.tag_name])
+    DesktopScene.write(project, graph.component_order, packages, @capacity_config.fingerprint, font_plans)
   end
 
   private def collect_resources(
@@ -872,65 +864,9 @@ class MrbcCompiler
       end
     end
 
-    unless manifest.props.empty?
-      json.field "props" do
-        json.array do
-          manifest.props.each { |prop| write_prop(json, prop, manifest.source_file) }
-        end
-      end
-    end
-
-    unless manifest.emits.empty?
-      json.field "emits" do
-        json.array do
-          manifest.emits.each { |event| write_emit(json, event, manifest.source_file) }
-        end
-      end
-    end
-
+    manifest.write_contracts(json)
     write_bindings(json, manifest.bindings)
     write_events(json, manifest.events)
-  end
-
-  private def write_prop(json : JSON::Builder, prop : PropDescriptor, fallback_file : String?) : Nil
-    json.object do
-      json.field "name", prop.name
-      json.field "type", prop.type
-      json.field "required", true if prop.required
-      json.field "default", true if prop.default
-      if file = prop.source_file || fallback_file
-        json.field "source" do
-          json.object do
-            json.field "file", file
-            json.field "line", prop.source_line
-          end
-        end
-      end
-    end
-  end
-
-  private def write_emit(json : JSON::Builder, event : ComponentEventDescriptor, fallback_file : String?) : Nil
-    json.object do
-      json.field "name", event.name
-      json.field "payload" do
-        json.array do
-          event.payload.each do |field|
-            json.object do
-              json.field "name", field.name
-              json.field "type", field.type
-            end
-          end
-        end
-      end
-      if file = event.source_file || fallback_file
-        json.field "source" do
-          json.object do
-            json.field "file", file
-            json.field "line", event.source_line
-          end
-        end
-      end
-    end
   end
 
   private def write_bindings(json : JSON::Builder, bindings : Array(BindingDescriptor)) : Nil

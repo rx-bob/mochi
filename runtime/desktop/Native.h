@@ -2,9 +2,9 @@
 
 #include <mochi_native.h>
 
-#define MOCHI_DESKTOP_NATIVE_ABI 1
+#define MOCHI_DESKTOP_NATIVE_ABI 2
 #if MOCHI_NATIVE_ABI_VERSION != MOCHI_DESKTOP_NATIVE_ABI
-#error "Mochi desktop requires native GVM ABI version 1"
+#error "Mochi desktop requires native GVM ABI version 2"
 #endif
 
 void mochi_clay_init(void);
@@ -23,6 +23,9 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     NSDictionary *scene, NSString *method, NSDictionary<NSNumber *, NSString *> *current,
     MochiNativePatches patches);
 
+NSDictionary *DesktopProps(NSDictionary *scene, NSDictionary *previous, NSDictionary *attributes);
+void DesktopValidateChildEvent(NSDictionary *scene, NSString *method, NSString *name, NSDictionary *payload);
+
 @interface DesktopProgram : NSObject
 @property(nonatomic, readonly) NSURL *resources;
 @property(nonatomic, readonly) NSDictionary *scene;
@@ -33,6 +36,9 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
 @property(nonatomic, readonly) NSDictionary *scene;
 @property(nonatomic, readonly) NSDictionary<NSNumber *, NSString *> *values;
 - (instancetype)initWithProgram:(DesktopProgram *)program;
+- (instancetype)initWithScene:(NSDictionary *)scene attributes:(NSDictionary *)attributes;
+- (void)updateAttributes:(NSDictionary *)attributes;
+- (NSArray<NSDictionary *> *)takeEvents;
 - (void)activate:(NSString *)method arguments:(NSArray *)args payload:(NSDictionary *)payload;
 - (void)close;
 @end
@@ -44,6 +50,9 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
 @property(nonatomic, readonly) NSString *failureReason;
 - (instancetype)initWithResources:(NSURL *)resources;
 - (instancetype)initWithProgram:(DesktopProgram *)program;
+- (instancetype)initWithProgram:(DesktopProgram *)program attributes:(NSDictionary *)attributes
+                    diagnostics:(void (^)(NSString *))diagnostics;
 - (NSDictionary *)attributesForAccessibilityElement:(id)element;
+- (NSArray<NSDictionary *> *)componentAncestorsForAccessibilityElement:(id)element;
 - (void)close;
 @end

@@ -248,12 +248,16 @@ class ComponentGenerator
       fields = local.select { |binding| binding.attr_name == name && binding.template_start }
       {name, portable_parts(text, fields)}
     end
-    click = node_events.find { |event| event.event == "click" }
+    click = node_events.find { |event| !event.component && event.event == "click" }
     action = if click
                PortableTemplate::Action.new(click.method_sym, click.args.size, false,
                  click.actions.size <= 1 && click.args.size <= 1 && click.args.all? { |arg| arg.kind == "event" })
              end
-    compiled = PortableTemplate::Element.new(tag, operands, children.not_nil!, action)
+    child_events = node_events.select(&.component).to_h do |event|
+      {event.event, PortableTemplate::Action.new(event.method_sym, event.args.size, false,
+        event.args.size <= 1 && event.args.all? { |arg| arg.kind == "event" })}
+    end
+    compiled = PortableTemplate::Element.new(tag, operands, children.not_nil!, action, child_events)
     fragment.attach(compiled, local, node_events)
     compiled
   end

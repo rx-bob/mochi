@@ -17,7 +17,6 @@ end
 class ClayProfile
   getter styles = PortableStyles.new
   getter source_marks = [] of PortableTemplate::SourceMark
-  @child_use : Tuple(Int32, String)?
 
   # VM-only operations shared by the two hosts. Add host-backed operations
   # when both hosts implement them.
@@ -41,9 +40,9 @@ class ClayProfile
     {@source.byte_slice(start, finish - start), line_at(@source, start)}
   end
 
-  def validate_template(known_tags : Set(String), capability_receivers : Set(String)) : Nil
+  def validate_template(components : Hash(String, ComponentManifest), capability_receivers : Set(String)) : Nil
     html, line = literal(@html_method)
-    validate_html(html, line, known_tags, capability_receivers)
+    validate_html(html, line, components, capability_receivers)
   end
 
   def compose_styles(absolute_path : String, staged_root : String) : CssComposition
@@ -130,7 +129,7 @@ class ClayProfile
     end
   end
 
-  private def validate_html(html : String, line : Int32, known_tags : Set(String), capability_receivers : Set(String)) : Nil
+  private def validate_html(html : String, line : Int32, components : Hash(String, ComponentManifest), capability_receivers : Set(String)) : Nil
     scan = StringScanner.new(html)
     parents = [] of String
     @source_marks.clear
@@ -151,15 +150,13 @@ class ClayProfile
         finish_text(html, text_start, at)
         text_start = nil
         name = scan.scan(/[\w:-]+/)
-        unless name && name.in?("div", "span", "button")
-          unless name && known_tags.includes?(name)
-            reject(@path, line_at(html, at, line), "unsupported element <#{name}>")
-          end
-          @child_use ||= {line_at(html, at, line), name}
+        child = name.try { |tag| components[tag]? }
+        unless name && (name.in?("div", "span", "button") || child)
+          reject(@path, line_at(html, at, line), "unsupported element <#{name}>")
         end
         reject(@path, line_at(html, at, line), "span and button accept text only") if parents.last?.in?("span", "button")
         parents << name
-        validate_attributes(scan, html, line, name, capability_receivers)
+        validate_attributes(scan, html, line, name, child, capability_receivers)
         mark(name, at, scan.byte_offset)
       elsif scan.check('{')
         if scan.skip("{{")
@@ -198,13 +195,14 @@ class ClayProfile
       TemplateSourceSpan.from_offsets(@source, @path, start + from, start + to))
   end
 
-  private def validate_attributes(scan, html, line, tag, capability_receivers)
+  private def validate_attributes(scan, html, line, tag, child : ComponentManifest?, capability_receivers)
     loop do
       scan.skip(/\s+/)
       break if scan.skip('>')
       at = scan.byte_offset
       name = scan.scan(/[\w:.-]+/)
-      unless name && (name == "class" || name.matches?(/\A(?:aria-|data-(?!mochi-))[a-z][a-z0-9-]*\z/) || (name == "onclick" && tag == "button"))
+      unless name && (name == "class" || name.matches?(/\A(?:aria-|data-(?!mochi-))[a-z][a-z0-9-]*\z/) ||
+             (name == "onclick" && tag == "button") || child_attribute?(name, child))
         reject(@path, line_at(html, at, line), "unsupported attribute '#{name}' on <#{tag}>")
       end
       unless scan.skip(/\s*=\s*/) && (quote = scan.scan(/["']/))
@@ -237,9 +235,12 @@ class ClayProfile
     raise "#{location}: portable component '#{@component}': #{reason}"
   end
 
-  def reject_child! : Nil
-    if use = @child_use
-      reject(@path, use[0], "child component <#{use[1]}> is outside the current portable profile")
+  private def child_attribute?(name : String, child : ComponentManifest?) : Bool
+    return false unless child
+    if name.starts_with?("on:")
+      child.emits.any? { |event| event.name == name[3..] }
+    else
+      child.props.any? { |prop| prop.name.gsub('_', '-') == name }
     end
   end
 

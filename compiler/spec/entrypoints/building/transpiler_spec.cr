@@ -1140,8 +1140,8 @@ describe "Portable build validation" do
       manifest["packages"].as_h.keys.should eq(["component:portable-screen"])
       manifest["resources"].as_h.size.should eq(2)
       scene = JSON.parse(File.read(File.join(desktop, "scene.json")))
-      scene["tag"].as_s.should eq("portable-screen")
-      scene["styles"].as_a.map { |rule| rule.as_h.keys }.should eq([["padding"], ["flex"], ["gap"]])
+      scene["root"].as_s.should eq("portable-screen")
+      scene["components"]["portable-screen"]["styles"].as_a.map { |rule| rule.as_h.keys }.should eq([["padding"], ["flex"], ["gap"]])
       File.read(File.join(dom, "components/portable-screen.chi")).should eq(File.read(File.join(desktop, "components/portable-screen.chi")))
     end
   end
@@ -1174,6 +1174,7 @@ describe "Portable build validation" do
 
       scene = JSON.parse(File.read(File.join(native, "scene.json")))
       scene["window"].should eq(declaration["window"])
+      scene = scene["components"]["portable-screen"]
       scene["style_lookup"]["screen"].as_a.map(&.as_i).should eq([0, 2, 3])
       scene["nodes"][0]["styles"].should eq(scene["nodes"][0]["nodes"][0]["styles"])
       scene["nodes"][0]["styles"].as_a.map(&.as_i).should eq([0, 1, 2, 3])
@@ -1276,6 +1277,39 @@ describe "Portable build validation" do
 end
 
 describe "Portable template records" do
+  it "preserves one typed child contract and its branch connection in both outputs" do
+    with_portable_spec_project do |project|
+      File.write(File.join(project, "lib/DetailCard.rb"), <<-RUBY)
+        class DetailCard
+          @tag_name = "detail-card"
+          prop :station_id, Integer, required: true
+          event :confirm, id: Integer
+          def confirm; emit :confirm, id: @station_id; end
+          def html; %q{<button onclick="{confirm}">{@station_id}</button>}; end
+        end
+        RUBY
+      write_portable_spec_screen(project,
+        %q(<div>{if true}<detail-card station-id="{selected}" on:confirm="{accept($event)}"></detail-card>{end}</div>),
+        "def selected; 3; end\n  def accept(event); event; end")
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      native = compile_portable_spec(project, RenderTarget::Desktop)
+      scene = JSON.parse(File.read(File.join(native, "scene.json")))
+      contracts = JSON.parse(File.read(File.join(dom, "components/detail-card.json")))
+      descriptor = scene["components"]["detail-card"]
+      descriptor["props"].should eq(contracts["props"])
+      descriptor["emits"].should eq(contracts["emits"])
+      node = scene["components"]["portable-screen"]["nodes"][0]["nodes"][0]["branches"][0][0]
+      node["tag"].as_s.should eq("detail-card")
+      node["connections"]["confirm"].should eq(JSON.parse(%q({"method":"accept","args":1})))
+      node["attrs"]["station-id"][0]["binding"].as_i.should be >= 0
+      scene["packages"].as_a.map(&.as_s).should eq(["detail-card.chi", "portable-screen.chi"])
+
+      root = File.join(project, "lib/PortableScreen.rb")
+      File.write(root, File.read(root).sub("on:confirm", "on:missing"))
+      portable_diagnostic(project, "unsupported attribute 'on:missing' on <detail-card>")
+    end
+  end
+
   it "projects DOM paths and native operands for Unicode text in nested scopes" do
     with_portable_spec_project do |project|
       template = <<-HTML
@@ -1315,6 +1349,7 @@ describe "Portable template records" do
       scene.to_json.should_not contain("\u{E002}")
       scene.to_json.should_not contain("\"path\":")
 
+      scene = scene["components"]["portable-screen"]
       labels = scene["nodes"][0]["nodes"].as_a.first(2)
       first, second = labels.map { |label| label["nodes"][0] }
       first["parts"].as_a.should eq(JSON.parse(%q(["É & ",{"binding":0}," · ",{"binding":1}])).as_a)
@@ -1386,7 +1421,7 @@ describe "Portable font resolution" do
       dom = compile_portable_spec(project, RenderTarget::Dom)
       desktop = compile_portable_spec(project, RenderTarget::Desktop)
       scene = JSON.parse(File.read(File.join(desktop, "scene.json")))
-      stack = scene["font_stacks"]["Primary, Fallback, Symbols, sans-serif"]
+      stack = scene["components"]["portable-screen"]["font_stacks"]["Primary, Fallback, Symbols, sans-serif"]
       stack["400"]["faces"].as_a.size.should eq(1)
       stack["700"]["faces"].as_a.size.should eq(2)
       resources = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))["resources"].as_h

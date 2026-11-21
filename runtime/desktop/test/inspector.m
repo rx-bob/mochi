@@ -22,14 +22,6 @@ static BOOL label(DesktopView *view, NSString *text) {
     return NO;
 }
 
-@interface InspectorFaultProgram : DesktopProgram
-@property(nonatomic, copy) NSDictionary *faultScene;
-@end
-
-@implementation InspectorFaultProgram
-- (NSDictionary *)scene { return self.faultScene; }
-@end
-
 static void expectComponentFailure(NSString *message, void (^operation)(void)) {
     @try {
         operation();
@@ -71,12 +63,10 @@ static void checkSceneCompatibility(NSURL *resources) {
 }
 
 static void checkFailedMount(DesktopProgram *program) {
-    InspectorFaultProgram *fault = [InspectorFaultProgram new];
-    NSMutableDictionary *scene = [program.scene mutableCopy];
+    NSMutableDictionary *scene = [program.scene[@"components"][program.scene[@"root"]] mutableCopy];
     scene[@"getters"] = @{@"0": @"__missing_probe_getter"};
-    fault.faultScene = scene;
     expectComponentFailure(@"__missing_probe_getter", ^{
-        __unused DesktopVM *vm = [[DesktopVM alloc] initWithProgram:fault];
+        __unused DesktopVM *vm = [[DesktopVM alloc] initWithScene:scene attributes:@{}];
     });
     check(mochi_component_count() == 0, @"first flush failure disposes the mounted instance");
 }
@@ -104,7 +94,7 @@ static void inspect(NSURL *resources, NSString *capture) {
     DesktopProgram *program = [[DesktopProgram alloc] initWithResources:resources];
     check(mochi_component_count() == 0, @"program validation leaves no mounted instances");
     checkFailedMount(program);
-    checkPatchBatches(program.scene);
+    checkPatchBatches(program.scene[@"components"][program.scene[@"root"]]);
     DesktopView *view = [[DesktopView alloc] initWithProgram:program];
     DesktopView *other = [[DesktopView alloc] initWithProgram:program];
     check(mochi_component_count() == 2 && label(other, @"Selected station 01"), @"two independent mounted views");
@@ -135,10 +125,16 @@ static void inspect(NSURL *resources, NSString *capture) {
     check(label(view, @"Selected station 02"), @"selection survives reorder");
     [window makeFirstResponder:button(view, @"Details")];
     press(window, @" ", 49);
-    check(label(view, @"Showing details for station 02"), @"Space toggles Ruby details");
+    check(label(view, @"Showing details for station 02") && mochi_component_count() == 3, @"Space mounts one details VM");
+    NSButton *confirm = button(view, @"Confirm station");
+    check([confirm accessibilityPerformPress] && label(view, @"102: Café / 1 / parent"),
+          @"child routes exactly one typed event to its owning parent");
+    check(label(other, @"Selected station 01"), @"child event stays scoped to the first view");
     press(window, @"\r", 36);
-    check(!label(view, @"Showing details for station 02"), @"Return closes details");
+    check(!label(view, @"Showing details for station 02") && mochi_component_count() == 2, @"Return disposes details");
+    check(![confirm accessibilityPerformPress], @"disconnected child control cannot dispatch");
     press(window, @" ", 49);
+    NSButton *retainedConfirm = button(view, @"Confirm station");
     CGFloat wide = cafe.frame.size.height;
     [window setContentSize:NSMakeSize(285, 540)];
     [window display];
@@ -148,6 +144,8 @@ static void inspect(NSURL *resources, NSString *capture) {
     check(window.firstResponder == button(view, @"West"), @"tab order follows reversed rows");
     press(window, @" ", 49);
     check(label(view, @"Showing details for station 03"), @"keyboard event resolves the moved row");
+    check(retainedConfirm != confirm && mochi_component_count() == 3, @"reopening creates exactly one new child");
+    check(button(view, @"Confirm station") == retainedConfirm, @"prop updates keep the mounted child control");
     if (capture) {
         NSBitmapImageRep *rep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
         [view cacheDisplayInRect:view.bounds toBitmapImageRep:rep];

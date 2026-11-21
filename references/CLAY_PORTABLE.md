@@ -91,8 +91,23 @@ Projects without the declaration use the ordinary DOM build.
 
 Version 1 covers the station inspector's `div`, `span` and `button` templates,
 local Ruby state, conditionals, explicitly keyed flat rows, click handlers
-and single-class flex styles. Child composition and host-backed Ruby
-operations require support on both hosts before they enter the profile.
+and single-class flex styles.
+
+## Child components
+
+Mount an empty child tag in a component or conditional branch. Declare its
+inputs with `prop` and connect its declared events with
+`on:confirm="{confirm_station($event)}"`. Use dashed attribute names for
+declared props with underscores. Each mounted child owns its own Ruby
+instance and styles. Constructor inputs are independent snapshots, and a
+parent patch installs all changed inputs before the child's bindings run.
+The child can emit the same typed payload to its owning parent on either host.
+
+A bad mount leaves the other controls active. A rejected input update keeps
+the previous child inputs. An invalid event reports its declaration and
+skips the parent handler. Closing a branch disposes its child. Reopening
+creates a fresh instance with the current parent inputs. The portable
+profile currently supports child tags outside keyed rows.
 See the [station inspector](../e2e/fixtures/clay_inspector) for a working
 project and its shared Ruby scenario.
 
@@ -101,11 +116,12 @@ project and its shared Ruby scenario.
 The AppKit host links a matching `mochi-gvm` source checkout. Build its
 standalone Goose artifacts first and point `MOCHI_GVM_DIR` to that checkout
 when it is outside the default sibling directory. The host requires native
-ABI v1 and validates the scene's capacity fingerprint before loading Ruby.
+ABI v2 and validates the scene's capacity fingerprint before loading Ruby.
 Hosted macOS CI uses the full upstream commit SHA in
 `MOCHI_NATIVE_GVM_REVISION`.
 
-The ABI uses a single VM with serialized calls. Each successful mount owns
+The ABI uses a single VM with serialized calls and loads identical Ruby
+packages once per process. Each successful mount owns
 its own instance handle until unmount. Dispatch and patch reads run on the
 AppKit thread. Native patch and error buffers are borrowed, and AppKit
 decodes and copies a complete patch batch before publishing any values.

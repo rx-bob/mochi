@@ -5,52 +5,76 @@ require "../tooling/portable_project"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 4
+  VERSION = 5
 
-  def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @window : PortableWindow?)
+  def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @fonts : PortableFonts)
   end
 
-  def write(packages : Array(String), fingerprint : String, fonts : PortableFonts) : String
+  def self.write(project : PortableProject, components : Array(MochiComponent), packages : Array(String),
+                 fingerprint : String, font_plans : Hash(String, PortableFonts)) : String
+    faces = {} of String => PortableFace
+    licenses = Set(String).new
+    font_plans.each_value do |fonts|
+      faces.merge!(fonts.faces)
+      licenses.concat(fonts.licenses)
+    end
     JSON.build do |j|
       j.object do
         j.field "version", VERSION
         j.field "capacity", fingerprint
-        j.field "class", @manifest.class_name
-        j.field "tag", @manifest.tag_name
-        j.field "source", @manifest.source_file
-        j.field "methods", @manifest.method_lines
+        j.field "root", project.root
         j.field "packages", packages
-        j.field "font_assets", fonts.faces
-        j.field "font_licenses", fonts.licenses.to_a.sort
-        j.field "font_stacks", fonts.native_stacks
-        j.field "getters", @manifest.all_bindings.to_h { |b| {b.id.to_s, b.getter_sym} }
-        j.field "window", @window if @window
-        j.field "style_lookup", @styles.lookup
-        j.field "styles" do
-          j.array do
-            @styles.rules.each do |rule|
-              j.object do
-                rule.declarations.each do |key, value|
-                  case key
-                  when "color"            then j.field "ink", value[1..].to_i(16)
-                  when "background-color" then j.field "fill", value[1..].to_i(16)
-                  when "width", "height"
-                    j.field key, value == "auto" ? -1 : value.to_i(strict: false)
-                  when "gap", "padding" then j.field key, value.to_i(strict: false)
-                  when "font-size"      then j.field "size", value.to_i(strict: false)
-                  when "line-height"    then j.field "leading", value.to_i(strict: false)
-                  when "font-weight"    then j.field "weight", value.to_i
-                  when "font-family"    then j.field "face", value
-                  when "display"        then j.field "flex", true
-                  when "flex-direction" then j.field "vertical", value == "column"
-                  end
+        j.field "font_assets", faces
+        j.field "font_licenses", licenses.to_a.sort
+        j.field "window", project.window if project.window
+        j.field "components" do
+          j.object do
+            components.each do |component|
+              manifest = component.manifest
+              j.field(manifest.tag_name) do
+                new(manifest, component.portable_profile.not_nil!.styles, font_plans[manifest.tag_name]).write_component(j)
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def write_component(j : JSON::Builder) : Nil
+    j.object do
+      j.field "class", @manifest.class_name
+      j.field "tag", @manifest.tag_name
+      j.field "source", @manifest.source_file
+      j.field "methods", @manifest.method_lines
+      @manifest.write_contracts(j)
+      j.field "font_stacks", @fonts.native_stacks
+      j.field "getters", @manifest.all_bindings.to_h { |b| {b.id.to_s, b.getter_sym} }
+      j.field "style_lookup", @styles.lookup
+      j.field "styles" do
+        j.array do
+          @styles.rules.each do |rule|
+            j.object do
+              rule.declarations.each do |key, value|
+                case key
+                when "color"            then j.field "ink", value[1..].to_i(16)
+                when "background-color" then j.field "fill", value[1..].to_i(16)
+                when "width", "height"
+                  j.field key, value == "auto" ? -1 : value.to_i(strict: false)
+                when "gap", "padding" then j.field key, value.to_i(strict: false)
+                when "font-size"      then j.field "size", value.to_i(strict: false)
+                when "line-height"    then j.field "leading", value.to_i(strict: false)
+                when "font-weight"    then j.field "weight", value.to_i
+                when "font-family"    then j.field "face", value
+                when "display"        then j.field "flex", true
+                when "flex-direction" then j.field "vertical", value == "column"
                 end
               end
             end
           end
         end
-        j.field("nodes") { nodes(j, @manifest.portable_nodes.not_nil!) }
       end
+      j.field("nodes") { nodes(j, @manifest.portable_nodes.not_nil!) }
     end
   end
 
@@ -91,7 +115,12 @@ class DesktopScene
   end
 
   private def element(json, node : PortableTemplate::Element) : Nil
-    json.field "type", {"div" => "box", "span" => "label", "button" => "button"}[node.tag]
+    type = {"div" => "box", "span" => "label", "button" => "button"}[node.tag]?
+    json.field "type", type || "child"
+    unless type
+      json.field "tag", node.tag
+      json.field "connections", node.child_events.transform_values { |event| {method: event.method, args: event.event_args} }
+    end
     if action = node.action
       json.field "action", action.method
       json.field "event_args", action.event_args

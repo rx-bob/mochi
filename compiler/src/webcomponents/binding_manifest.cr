@@ -154,6 +154,65 @@ struct PropDescriptor
 end
 
 class ComponentManifest
+  def write_contracts(json : JSON::Builder) : Nil
+    unless props.empty?
+      json.field "props" do
+        json.array do
+          props.each { |prop| write_prop(json, prop, source_file) }
+        end
+      end
+    end
+
+    unless emits.empty?
+      json.field "emits" do
+        json.array do
+          emits.each { |event| write_emit(json, event, source_file) }
+        end
+      end
+    end
+  end
+
+  private def write_prop(json : JSON::Builder, prop : PropDescriptor, fallback_file : String?) : Nil
+    json.object do
+      json.field "name", prop.name
+      json.field "type", prop.type
+      json.field "required", true if prop.required
+      json.field "default", true if prop.default
+      if file = prop.source_file || fallback_file
+        json.field "source" do
+          json.object do
+            json.field "file", file
+            json.field "line", prop.source_line
+          end
+        end
+      end
+    end
+  end
+
+  private def write_emit(json : JSON::Builder, event : ComponentEventDescriptor, fallback_file : String?) : Nil
+    json.object do
+      json.field "name", event.name
+      json.field "payload" do
+        json.array do
+          event.payload.each do |field|
+            json.object do
+              json.field "name", field.name
+              json.field "type", field.type
+            end
+          end
+        end
+      end
+      if file = event.source_file || fallback_file
+        json.field "source" do
+          json.object do
+            json.field "file", file
+            json.field "line", event.source_line
+          end
+        end
+      end
+    end
+  end
+
   property portable_nodes : Array(PortableTemplate::Node)?
   property document_style : String?
   property font_resources = [] of PackageResource

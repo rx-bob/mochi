@@ -15,7 +15,8 @@ Mochi::Test.test("select a station, reorder the rows, and inspect its details") 
   focus "[data-action='details']"
   press "Space"
   assert_focused "[data-action='details']"
-  assert_text "[data-view='details']", "Showing details for station 02"
+  wait_for "station-details >>> [data-view='details']"
+  assert_text "station-details >>> [data-view='details']", "Showing details for station 02"
   checkpoint "reversed"
   remount
   assert_text "[data-view='selection']", "Selected station 01"
