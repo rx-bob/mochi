@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "root": "station-storage",
+  "app_id": "org.mochi.station-storage",
+  "display_name": "Station storage",
+  "fonts": {}
+}

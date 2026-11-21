@@ -2,9 +2,9 @@
 
 #include <mochi_native.h>
 
-#define MOCHI_DESKTOP_NATIVE_ABI 2
+#define MOCHI_DESKTOP_NATIVE_ABI 3
 #if MOCHI_NATIVE_ABI_VERSION != MOCHI_DESKTOP_NATIVE_ABI
-#error "Mochi desktop requires native GVM ABI version 2"
+#error "Mochi desktop requires native GVM ABI version 3"
 #endif
 
 void mochi_clay_init(void);
@@ -27,8 +27,19 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
 NSDictionary *DesktopProps(NSDictionary *scene, NSDictionary *previous, NSDictionary *attributes);
 void DesktopValidateChildEvent(NSDictionary *scene, NSString *method, NSString *name, NSDictionary *payload);
 
+@class DesktopVM, DesktopView;
+
+@interface DesktopStorage : NSObject
+- (instancetype)initWithIdentity:(NSString *)identity directory:(NSURL *)directory;
+- (void)restoreMirror;
+- (NSString *)applyEffect:(NSDictionary *)effect from:(DesktopVM *)vm;
+- (void)removeSubscriptions:(DesktopVM *)vm;
+- (void)drain;
+@end
+
 @interface DesktopProgram : NSObject
 @property(nonatomic, readonly) NSURL *resources;
+@property(nonatomic, readonly) DesktopStorage *storage;
 @property(nonatomic, readonly) NSDictionary *scene;
 - (instancetype)initWithResources:(NSURL *)resources;
 @end
@@ -36,8 +47,13 @@ void DesktopValidateChildEvent(NSDictionary *scene, NSString *method, NSString *
 @interface DesktopVM : NSObject
 @property(nonatomic, readonly) NSDictionary *scene;
 @property(nonatomic, readonly) NSDictionary<NSNumber *, NSString *> *values;
+@property(nonatomic, weak) DesktopView *hostView;
 - (instancetype)initWithProgram:(DesktopProgram *)program;
 - (instancetype)initWithScene:(NSDictionary *)scene attributes:(NSDictionary *)attributes;
+- (instancetype)initWithScene:(NSDictionary *)scene attributes:(NSDictionary *)attributes storage:(DesktopStorage *)storage;
+- (NSArray<NSString *> *)takeHostErrors;
+- (void)deliverStorage:(NSString *)callback payload:(NSDictionary *)payload;
+- (void)reportHostError:(NSString *)reason;
 - (void)updateAttributes:(NSDictionary *)attributes;
 - (NSArray<NSDictionary *> *)takeEvents;
 - (void)activate:(NSString *)method arguments:(NSArray *)args payload:(NSDictionary *)payload;
@@ -53,6 +69,8 @@ void DesktopValidateChildEvent(NSDictionary *scene, NSString *method, NSString *
 - (instancetype)initWithProgram:(DesktopProgram *)program;
 - (instancetype)initWithProgram:(DesktopProgram *)program attributes:(NSDictionary *)attributes
                     diagnostics:(void (^)(NSString *))diagnostics;
+- (void)storageUpdated:(DesktopVM *)vm;
+- (void)reportComponentFailure:(NSString *)reason;
 - (NSDictionary *)attributesForAccessibilityElement:(id)element;
 - (NSArray<NSDictionary *> *)componentAncestorsForAccessibilityElement:(id)element;
 - (void)close;

@@ -130,12 +130,40 @@ loads with the first portable component that uses these bindings.
 The [standalone station editor](../e2e/fixtures/clay_editor) runs the same
 Ruby edit scenario on both targets.
 
+## App storage
+
+The portable profile supports `Mochi.storage_get`, `storage_set`,
+`storage_remove`, their existing aliases, and `storage_subscribe`.
+`MochiStore` uses the same operations. The desktop target loads confirmed
+values before Ruby initialization. Empty strings stay present, and removing
+a key restores the caller's default.
+
+macOS stores data under `~/Library/Application Support/Mochi/Storage/`.
+The SQLite filename is a SHA-256 hash of the declared `app_id`. App code
+uses its storage receipt to confirm the local transaction. A failed write
+reports `quota` or `unavailable` and restores the last confirmed value
+in the VM. The native quota keeps a key and two copies of any stored value
+within the VM's callback argument limit, including JSON escaping. SQLite
+full and size-limit errors also report `quota`. [SQLite synchronous settings](https://www.sqlite.org/pragma.html#pragma_synchronous)
+
+Same-app mounts receive the existing `same_tab` source for effective local
+changes. Equal writes produce no receipt. Unmounting releases the subscription.
+Desktop reads observe external changes at relaunch. A write compares the
+current durable value for its key so concurrent launches can update different
+keys independently. Browser storage continues to report external tab changes
+under the existing web contract.
+
+Each `mochi test --target=desktop` invocation uses a temporary store. Use
+`MOCHI_DESKTOP_STORAGE_DIR` with an isolated directory for tests that
+intentionally share storage across processes. See the
+[station storage fixture](../e2e/fixtures/clay_storage).
+
 ## Native development build
 
 The AppKit host links a matching `mochi-gvm` source checkout. Build its
 standalone Goose artifacts first and point `MOCHI_GVM_DIR` to that checkout
 when it is outside the default sibling directory. The host requires native
-ABI v2 and validates the scene's capacity fingerprint before loading Ruby.
+ABI v3 and validates the scene's capacity fingerprint before loading Ruby.
 Hosted macOS CI uses the full upstream commit SHA in
 `MOCHI_NATIVE_GVM_REVISION`.
 

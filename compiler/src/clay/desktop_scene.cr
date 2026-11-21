@@ -5,13 +5,13 @@ require "../tooling/portable_project"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 6
+  VERSION = 7
 
   def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @fonts : PortableFonts)
   end
 
   def self.write(project : PortableProject, components : Array(MochiComponent), packages : Array(String),
-                 fingerprint : String, font_plans : Hash(String, PortableFonts)) : String
+                 fingerprint : String, font_plans : Hash(String, PortableFonts), uses_storage : Bool) : String
     faces = {} of String => PortableFace
     licenses = Set(String).new
     font_plans.each_value do |fonts|
@@ -23,6 +23,8 @@ class DesktopScene
         j.field "version", VERSION
         j.field "capacity", fingerprint
         j.field "root", project.root
+        j.field "app_id", project.app_id
+        j.field "storage", true if uses_storage
         j.field "packages", packages
         j.field "font_assets", faces
         j.field "font_licenses", licenses.to_a.sort

@@ -16,12 +16,15 @@ end
 # authored CSS sources, including markup that mounts only in a later state.
 class ClayProfile
   getter editing = false
+  getter uses_storage = false
   getter styles = PortableStyles.new
   getter source_marks = [] of PortableTemplate::SourceMark
 
   # VM-only operations shared by the two hosts. Add host-backed operations
   # when both hosts implement them.
-  SHARED_MOCHI_OPERATIONS = Set{"json_parse", "json_generate", "time_at"}
+  STORAGE_OPERATIONS = Set{"storage_get", "get_storage", "storage_set", "set_storage",
+                           "storage_remove", "remove_storage", "storage_subscribe"}
+  SHARED_MOCHI_OPERATIONS = Set{"json_parse", "json_generate", "time_at"} | STORAGE_OPERATIONS
 
   def initialize(
     @source : String,
@@ -264,7 +267,7 @@ class ClayProfile
     scan.skip(token)
     reject(@path, line_at(html, at, line), "trusted markup is outside the Clay profile") if token.matches?(/Mochi\s*\.\s*raw\b/)
     expression = token.byte_slice(1, token.bytesize - 2)
-    self.class.validate_ruby(expression, @path, line_at(html, at, line), @component, capability_receivers)
+    @uses_storage = self.class.validate_ruby(expression, @path, line_at(html, at, line), @component, capability_receivers) || @uses_storage
     token
   end
 
@@ -281,17 +284,19 @@ class ClayProfile
     end
   end
 
-  def self.validate_ruby(source : String, path : String, line : Int32, component : String, capability_receivers : Set(String)) : Nil
-    return unless source.includes?("Mochi") || capability_receivers.any? { |receiver| source.includes?(receiver) }
+  def self.validate_ruby(source : String, path : String, line : Int32, component : String, capability_receivers : Set(String)) : Bool
+    return false unless source.includes?("Mochi") || capability_receivers.any? { |receiver| source.includes?(receiver) }
 
     tree = TreeSitter::RubyParser.new.parse(source)
     check_calls(tree.root_node, path, line, component, capability_receivers)
   end
 
-  private def self.check_calls(node, path, line, component, capability_receivers) : Nil
+  private def self.check_calls(node, path, line, component, capability_receivers) : Bool
+    uses_storage = false
     if node.type == "call"
       receiver = node.child_by_field_name("receiver").try(&.text.lchop("::"))
       method = node.child_by_field_name("method").try(&.text)
+      uses_storage = receiver == "Mochi" && !!method.try { |name| STORAGE_OPERATIONS.includes?(name) }
       if receiver && method &&
          ((receiver == "Mochi" && !SHARED_MOCHI_OPERATIONS.includes?(method)) || capability_receivers.includes?(receiver))
         operation = "#{receiver}.#{method}"
@@ -303,7 +308,10 @@ class ClayProfile
         raise "#{path}:#{line + node.start_point.row.to_i}: portable component '#{component}': unsupported host operation #{operation}"
       end
     end
-    node.each_named_child { |child| check_calls(child, path, line, component, capability_receivers) }
+    node.each_named_child do |child|
+      uses_storage = check_calls(child, path, line, component, capability_receivers) || uses_storage
+    end
+    uses_storage
   end
 
   private def line_at(text : String, offset : Int32, line : Int32 = 1) : Int32

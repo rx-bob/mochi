@@ -39,6 +39,35 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     return [pending copy];
 }
 
+static NSArray<NSDictionary *> *takeEffects(NSDictionary *scene, NSString *method) {
+    MochiNativeBytes pending = mochi_native_take_effects();
+    if (!pending.length) return @[];
+    NSString *wire = [[NSString alloc] initWithBytes:pending.data length:pending.length encoding:NSUTF8StringEncoding];
+    if (!wire) failIn(scene, method, @"invalid UTF-8 in native effect batch");
+    NSMutableArray *effects = [NSMutableArray array];
+    for (NSString *line in [wire componentsSeparatedByString:@"\n"]) {
+        if (!line.length) continue;
+        // Storage's shared wire already escapes LF, CR and TAB. Escape its
+        // remaining raw control bytes for native JSON without changing WASM.
+        NSMutableString *json = [line mutableCopy];
+        for (NSUInteger i = line.length; i > 0; i--) {
+            unichar c = [line characterAtIndex:i - 1];
+            if (c < 32) [json replaceCharactersInRange:NSMakeRange(i - 1, 1) withString:[NSString stringWithFormat:@"\\u%04x", c]];
+        }
+        id entry = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:NULL];
+        if (![entry isKindOfClass:NSDictionary.class]) failIn(scene, method, @"invalid native effect record");
+        [effects addObject:entry];
+    }
+    return effects;
+}
+
+static NSURL *storageDirectory(void) {
+    NSString *override = NSProcessInfo.processInfo.environment[@"MOCHI_DESKTOP_STORAGE_DIR"];
+    if (override.length) return [NSURL fileURLWithPath:override isDirectory:YES];
+    NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+    return [support URLByAppendingPathComponent:@"Mochi/Storage" isDirectory:YES];
+}
+
 @implementation DesktopProgram
 
 - (instancetype)initWithResources:(NSURL *)resources {
@@ -52,7 +81,7 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     if (![scene isKindOfClass:NSDictionary.class]) DesktopFailure(@"Invalid desktop scene");
     _scene = scene;
     NSDictionary *root = _scene[@"components"][_scene[@"root"] ?: @""] ?: _scene;
-    if (![_scene[@"version"] isEqual:@6]) failIn(root, @"initialize", @"unsupported desktop scene version");
+    if (![_scene[@"version"] isEqual:@7]) failIn(root, @"initialize", @"unsupported desktop scene version");
     if (mochi_native_abi_version() != MOCHI_DESKTOP_NATIVE_ABI)
         failIn(root, @"initialize", @"incompatible native GVM ABI version");
     id fingerprint = _scene[@"capacity"];
@@ -61,6 +90,23 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
         failIn(root, @"initialize", [NSString stringWithFormat:@"capacity profile mismatch (scene %@, VM %@)",
                                        fingerprint ?: @"missing", runtimeFingerprint]);
     if (mochi_native_open() != 0) vmFailure(root, @"initialize");
+    if ([_scene[@"storage"] boolValue]) {
+        NSString *identity = _scene[@"app_id"];
+        if (![identity isKindOfClass:NSString.class] || !identity.length) failIn(root, @"initialize", @"missing storage app identity");
+        static NSString *activeIdentity;
+        static NSURL *activeDirectory;
+        static DesktopStorage *activeStorage;
+        NSURL *directory = storageDirectory();
+        if (activeStorage && (![identity isEqual:activeIdentity] ||
+            (directory != activeDirectory && ![directory isEqual:activeDirectory])))
+            failIn(root, @"initialize", @"the native VM already owns a different app storage");
+        if (!activeStorage) {
+            activeStorage = [[DesktopStorage alloc] initWithIdentity:identity directory:directory];
+            activeIdentity = [identity copy];
+            activeDirectory = directory;
+        }
+        _storage = activeStorage;
+    }
     // The bridge owns a process-wide VM. Content-identical packages are
     // already loaded when another view or bundle uses the same Ruby package.
     static NSMutableSet<NSData *> *loaded;
@@ -76,7 +122,16 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
         NSMutableData *irep __attribute__((objc_precise_lifetime)) =
             [NSMutableData dataWithBytes:"RITE0400\0\0" length:10];
         [irep appendData:body];
-        if (mochi_native_load(bytes(irep)) != 0) vmFailure(root, file);
+        if (mochi_native_load(bytes(irep)) != 0) {
+            [_storage restoreMirror];
+            vmFailure(root, file);
+        }
+        NSArray *effects = takeEffects(root, file);
+        for (NSDictionary *entry in effects) {
+            NSString *error = [_storage applyEffect:entry from:nil];
+            if (error) NSLog(@"Mochi desktop: %@ storage: %@", file, error);
+        }
+        if (effects.count) [_storage restoreMirror];
         [loaded addObject:identity];
     }
     return self;
@@ -88,12 +143,15 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     NSDictionary<NSNumber *, NSString *> *_patches;
     NSDictionary *_attributes;
     NSMutableArray<NSDictionary *> *_events;
+    NSMutableArray<NSString *> *_hostErrors;
+    DesktopStorage *_storage;
+    BOOL _closing;
 }
 
 - (NSDictionary *)values { return _patches; }
 
 - (instancetype)initWithProgram:(DesktopProgram *)program {
-    return [self initWithScene:program.scene[@"components"][program.scene[@"root"]] attributes:@{}];
+    return [self initWithScene:program.scene[@"components"][program.scene[@"root"]] attributes:@{} storage:program.storage];
 }
 
 static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
@@ -104,7 +162,13 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
 }
 
 - (instancetype)initWithScene:(NSDictionary *)scene attributes:(NSDictionary *)attributes {
+    return [self initWithScene:scene attributes:attributes storage:nil];
+}
+
+- (instancetype)initWithScene:(NSDictionary *)scene attributes:(NSDictionary *)attributes storage:(DesktopStorage *)storage {
     if (!(self = [super init])) return nil;
+    _storage = storage;
+    _hostErrors = [NSMutableArray array];
     _scene = scene;
     if (!_scene) DesktopFailure(@"Missing desktop component descriptor");
     _events = [NSMutableArray array];
@@ -118,7 +182,7 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     } else {
         result = mochi_native_mount(bytes(className), &_instance);
     }
-    if (result != 0) vmFailure(_scene, @"initialize");
+    if (result != 0) [self failedEntry:@"initialize"];
     BOOL ranMounted = NO;
     @try {
         NSDictionary *getters = _scene[@"getters"];
@@ -130,7 +194,7 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
             NSString *getter = getters[key];
             NSData *getterName __attribute__((objc_precise_lifetime)) = [getter dataUsingEncoding:NSUTF8StringEncoding];
             if (mochi_native_bind(_instance, (uint16_t)idValue, bytes(getterName)) != 0)
-                vmFailure(_scene, getter);
+                [self failedEntry:getter];
         }
         ranMounted = YES;
         [self lifecycle:@"mounted"];
@@ -138,9 +202,11 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
         [self flush:@"initialize"];
         _attributes = [attributes copy];
     } @catch (NSException *e) {
-        mochi_native_take_child_events();
+        mochi_native_take_effects();
+        [_storage restoreMirror];
+        _closing = YES;
         if (ranMounted) {
-            @try { [self lifecycle:@"unmounted"]; }
+            @try { [self lifecycle:@"unmounted"]; [self consumeEffects:@"unmounted"]; }
             @catch (NSException *cleanupError) { NSLog(@"Mochi desktop: %@", cleanupError.reason); }
         }
         [self releaseInstance];
@@ -153,8 +219,9 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     MochiNativeInstance instance = _instance;
     _instance = 0;
     if (instance) {
+        [_storage removeSubscriptions:self];
         mochi_native_unmount(instance);
-        mochi_native_take_child_events();
+        mochi_native_take_effects();
     }
 }
 
@@ -162,29 +229,80 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     [self releaseInstance];
 }
 
-- (void)flush:(NSString *)method {
-    MochiNativePatches patches;
-    if (mochi_native_flush(_instance, &patches) != 0) vmFailure(_scene, method);
-    @try {
-        _patches = DesktopApplyPatches(_scene, method, _patches, patches);
-    } @finally {
-        MochiNativeBytes pending = mochi_native_take_child_events();
-        if (pending.length) [self captureEvents:pending method:method];
-    }
+- (void)failedEntry:(NSString *)method {
+    // The shared Ruby API updates an optimistic mirror within a running entry.
+    // A rejected entry has discarded its outbox, so restore the durable view.
+    [_storage restoreMirror];
+    vmFailure(_scene, method);
 }
 
-- (void)captureEvents:(MochiNativeBytes)pending method:(NSString *)method {
-    NSString *wire = [[NSString alloc] initWithBytes:pending.data length:pending.length encoding:NSUTF8StringEncoding];
-    if (!wire) failIn(_scene, method, @"invalid UTF-8 in child event batch");
-    NSString *ownHandle = [NSString stringWithFormat:@"%llu", (unsigned long long)_instance];
-    for (NSString *line in [wire componentsSeparatedByString:@"\n"]) {
-        if (!line.length) continue;
-        id entry = [NSJSONSerialization JSONObjectWithData:[line dataUsingEncoding:NSUTF8StringEncoding] options:0 error:NULL];
-        if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"__child_event"] isKindOfClass:NSString.class] ||
-            ![entry[@"instance"] isEqual:ownHandle] || !entry[@"payload"])
-            failIn(_scene, method, @"invalid native child event record");
-        [_events addObject:@{@"name":entry[@"__child_event"], @"payload":entry[@"payload"], @"method":method}];
+- (void)flush:(NSString *)method {
+    // Commit completed Ruby effects before evaluating binding getters.
+    [self consumeEffects:method];
+    MochiNativePatches patches;
+    if (mochi_native_flush(_instance, &patches) != 0) [self failedEntry:method];
+    @try {
+        _patches = DesktopApplyPatches(_scene, method, _patches, patches);
+    } @catch (NSException *error) {
+        mochi_native_take_effects();
+        [_storage restoreMirror];
+        @throw;
     }
+    [self consumeEffects:method];
+}
+
+- (void)consumeEffects:(NSString *)method {
+    NSArray *effects;
+    @try { effects = takeEffects(_scene, method); }
+    @catch (NSException *error) { [_storage restoreMirror]; @throw; }
+    NSString *ownHandle = [NSString stringWithFormat:@"%llu", (unsigned long long)_instance];
+    BOOL mutatedStorage = NO;
+    for (NSDictionary *entry in effects) {
+        NSString *kind = entry[@"__host"];
+        if (kind) {
+            if (!_storage || ![entry[@"key"] isKindOfClass:NSString.class])
+                failIn(_scene, method, @"invalid native storage record");
+            BOOL subscribing = [kind isEqual:@"storage_subscribe"];
+            if (subscribing && (![entry[@"instance"] isEqual:ownHandle] ||
+                                ![entry[@"callback"] isKindOfClass:NSString.class]))
+                failIn(_scene, method, @"invalid native storage subscriber");
+            if ([kind isEqual:@"storage_set"] && ![entry[@"value"] isKindOfClass:NSString.class])
+                failIn(_scene, method, @"invalid native storage value");
+            mutatedStorage |= !subscribing;
+            NSString *error = [_storage applyEffect:entry from:_closing ? nil : self];
+            if (error) {
+                NSNumber *line = _scene[@"methods"][method] ?: @1;
+                [self reportHostError:[NSString stringWithFormat:@"%@:%@ (%@, %@) storage %@: %@",
+                    _scene[@"source"], line, _scene[@"class"], method, kind, error]];
+            }
+        } else {
+            if (![entry[@"__child_event"] isKindOfClass:NSString.class] ||
+                ![entry[@"instance"] isEqual:ownHandle] || !entry[@"payload"])
+                failIn(_scene, method, @"invalid native child event record");
+            if (!_closing)
+                [_events addObject:@{@"name":entry[@"__child_event"], @"payload":entry[@"payload"], @"method":method}];
+        }
+    }
+    if (mutatedStorage) [_storage restoreMirror];
+}
+
+- (void)reportHostError:(NSString *)reason {
+    if (self.hostView) [self.hostView reportComponentFailure:reason];
+    else [_hostErrors addObject:reason];
+}
+
+- (NSArray<NSString *> *)takeHostErrors {
+    NSArray *errors = [_hostErrors copy];
+    [_hostErrors removeAllObjects];
+    return errors;
+}
+
+- (void)deliverStorage:(NSString *)callback payload:(NSDictionary *)payload {
+    if (!_instance || _closing) return;
+    int64_t arity = [self arity:callback];
+    if (arity < 0) return;
+    [self activate:callback arguments:(arity == 1 ? @[payload] : @[]) payload:payload];
+    [self.hostView storageUpdated:self];
 }
 
 - (NSArray<NSDictionary *> *)takeEvents {
@@ -198,7 +316,7 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     NSDictionary *props = DesktopProps(_scene, _attributes, attributes);
     if (props.count) {
         NSData *json __attribute__((objc_precise_lifetime)) = jsonData(_scene, @"props", props);
-        if (mochi_native_set_props(_instance, bytes(json)) != 0) vmFailure(_scene, @"props");
+        if (mochi_native_set_props(_instance, bytes(json)) != 0) [self failedEntry:@"props"];
     }
     _attributes = [attributes copy];
     if (props.count) [self flush:@"props"];
@@ -207,14 +325,14 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
 - (int64_t)arity:(NSString *)method {
     NSData *name __attribute__((objc_precise_lifetime)) = [method dataUsingEncoding:NSUTF8StringEncoding];
     int64_t arity;
-    if (mochi_native_method_arity(_instance, bytes(name), &arity) != 0) vmFailure(_scene, method);
+    if (mochi_native_method_arity(_instance, bytes(name), &arity) != 0) [self failedEntry:method];
     return arity;
 }
 
 - (void)call:(NSString *)method arguments:(NSArray *)args {
     NSData *json __attribute__((objc_precise_lifetime)) = jsonData(_scene, method, args);
     NSData *name __attribute__((objc_precise_lifetime)) = [method dataUsingEncoding:NSUTF8StringEncoding];
-    if (mochi_native_dispatch(_instance, bytes(name), bytes(json)) != 0) vmFailure(_scene, method);
+    if (mochi_native_dispatch(_instance, bytes(name), bytes(json)) != 0) [self failedEntry:method];
 }
 
 - (void)lifecycle:(NSString *)method {
@@ -230,7 +348,11 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
 
 - (void)close {
     if (!_instance) return;
-    @try { [self lifecycle:@"unmounted"]; }
-    @finally { [self releaseInstance]; }
+    _closing = YES;
+    [_storage removeSubscriptions:self];
+    @try {
+        [self lifecycle:@"unmounted"];
+        [self consumeEffects:@"unmounted"];
+    } @finally { [self releaseInstance]; }
 }
 @end

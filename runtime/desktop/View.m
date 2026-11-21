@@ -266,7 +266,9 @@ static NSString *displayValue(id value) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{ mochi_clay_init(); });
     _root = [DesktopMount new];
-    _root.vm = [[DesktopVM alloc] initWithScene:program.scene[@"components"][program.scene[@"root"]] attributes:attributes];
+    _root.vm = [[DesktopVM alloc] initWithScene:program.scene[@"components"][program.scene[@"root"]]
+                                         attributes:attributes storage:program.storage];
+    _root.vm.hostView = self;
     [self enqueueEvents:_root];
     @try { [self refresh]; }
     @catch (NSException *e) {
@@ -405,6 +407,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
 }
 
 - (void)enqueueEvents:(DesktopMount *)owner {
+    for (NSString *reason in [owner.vm takeHostErrors]) [self reportComponentFailure:reason];
     for (NSDictionary *event in [owner.vm takeEvents])
         [_pendingEvents addObject:@{@"owner":owner, @"event":event}];
 }
@@ -426,7 +429,8 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             [mount.vm updateAttributes:attributes];
         } else {
             NSDictionary *scene = _program.scene[@"components"][node[@"tag"]];
-            mount.vm = [[DesktopVM alloc] initWithScene:scene attributes:attributes];
+            mount.vm = [[DesktopVM alloc] initWithScene:scene attributes:attributes storage:_program.storage];
+            mount.vm.hostView = self;
         }
         [self enqueueEvents:mount];
     } @catch (NSException *e) { [self reportComponentFailure:e.reason]; }
@@ -570,20 +574,35 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
     }
 }
 
+- (void)storageUpdated:(DesktopVM *)vm {
+    DesktopMount *owner = _root.vm == vm ? _root : nil;
+    if (!owner) {
+        for (DesktopMount *child in _children.allValues) {
+            if (child.vm == vm) { owner = child; break; }
+        }
+    }
+    if (!owner) return;
+    [self enqueueEvents:owner];
+    [self refresh];
+}
+
 - (void)refresh {
     if (!_root || self.failureReason || self.bounds.size.width <= 0) return;
     // A cascade may mount new event sources. Bound synchronous work even
     // when an application's mounted handler keeps recreating its emitter.
     for (NSUInteger draws = 0; ; draws++) {
         [self renderFrame];
-        if (!_pendingEvents.count) return;
+        if (!_pendingEvents.count) break;
         if (draws == 511) {
             [_pendingEvents removeAllObjects];
             [self reportComponentFailure:@"Desktop child event cascade exceeded 512 renders"];
-            return;
+            break;
         }
-        if (![self dispatchNextChildEvent]) return;
+        if (![self dispatchNextChildEvent]) break;
     }
+    // Storage callbacks can add/remove components or redraw a different
+    // window. Drain only after Clay releases its global frame scratch.
+    [_program.storage drain];
 }
 
 - (void)renderFrame {
@@ -915,6 +934,7 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
     _layoutObservations = nil;
 #endif
     [self disposeChildrenExcept:nil];
-    [vm close];
+    @try { [vm close]; }
+    @finally { [_program.storage drain]; }
 }
 @end

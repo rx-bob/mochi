@@ -112,7 +112,9 @@ class RubyTestRunner
     return status.exit_code unless status.success?
 
     resources = File.join(bundle_dir, "Mochi.app/Contents/Resources")
-    Process.run(runner, [resources, plan_path], chdir: workspace, output: STDOUT, error: STDERR).exit_code
+    storage_dir = ENV["MOCHI_DESKTOP_STORAGE_DIR"]? || File.join(workspace, "storage")
+    Process.run(runner, [resources, plan_path], chdir: workspace,
+      env: {"MOCHI_DESKTOP_STORAGE_DIR" => File.expand_path(storage_dir)}, output: STDOUT, error: STDERR).exit_code
   end
 
   private def stage_project(project_root : String, stage_dir : String) : Nil

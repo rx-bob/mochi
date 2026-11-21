@@ -255,10 +255,12 @@ class MrbcCompiler
   ) : String
     components = graph.component_order.to_h { |component| {component.manifest.tag_name, component.manifest} }
     receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject { |name| name.empty? || name.includes?('.') }.to_set
+    uses_storage = false
     graph.component_order.each do |component|
       manifest = component.manifest
       profile = component.portable_profile.not_nil!
       profile.validate_template(components, receivers)
+      uses_storage ||= profile.uses_storage
       if profile.editing && @render_target.dom?
         graph.ensure_capability("editing")
         graph.capabilities["editing"].packages << manifest.package_id.not_nil!
@@ -276,7 +278,7 @@ class MrbcCompiler
         next unless dependencies.includes?(id)
         node = graph.packages[id]
         next if node.component? && node.id != package.id
-        ClayProfile.validate_ruby(node.source, node.source_path, node.line_offset, component.name, receivers)
+        uses_storage = ClayProfile.validate_ruby(node.source, node.source_path, node.line_offset, component.name, receivers) || uses_storage
       end
     end
 
@@ -302,7 +304,7 @@ class MrbcCompiler
       font_plans[manifest.tag_name] = fonts
     end
     packages = graph.order.map { |id| graph.packages[id].file }
-    DesktopScene.write(project, graph.component_order, packages, @capacity_config.fingerprint, font_plans)
+    DesktopScene.write(project, graph.component_order, packages, @capacity_config.fingerprint, font_plans, uses_storage)
   end
 
   private def collect_resources(

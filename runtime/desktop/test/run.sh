@@ -127,3 +127,31 @@ compiler/mochi --target=desktop -i "$editor" -o "$work/Editor bundle"
 runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/editor.m "$work/editor"
 "$work/editor" "$work/Editor bundle/Mochi.app/Contents/Resources"
 compiler/mochi test --target=desktop -i "$editor" --test-file=editor_test.rb
+
+storage="$PWD/e2e/fixtures/clay_storage"
+compiler/mochi test --target=desktop -i "$storage" --test-file=storage_test.rb
+quota="$work/Quota project"
+cp -R "$storage" "$quota"
+cp "$storage/probes/storage_quota_test.rb" "$quota/test/"
+compiler/mochi test --target=desktop -i "$quota" --test-file=storage_quota_test.rb
+
+compiler/mochi --target=desktop -i "$storage" -o "$work/Storage bundle"
+runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/storage.m "$work/test-storage"
+storage_resources="$work/Storage bundle/Mochi.app/Contents/Resources"
+isolated_store="$work/Isolated storage"
+MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$storage_resources" seed
+
+other="$work/Other app"
+cp -R "$storage" "$other"
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  project = JSON.parse(File.read(path))
+  project["app_id"] = "org.mochi.Station-storage"
+  File.write(path, project.to_json)
+' "$other/mochi-portable.json"
+compiler/mochi --target=desktop -i "$other" -o "$work/Other bundle"
+MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$work/Other bundle/Mochi.app/Contents/Resources" absent
+MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$storage_resources" reopen
+MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$storage_resources" absent
+touch "$work/Blocked storage"
+MOCHI_DESKTOP_STORAGE_DIR="$work/Blocked storage" "$work/test-storage" "$storage_resources" cold-unavailable

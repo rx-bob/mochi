@@ -1223,8 +1223,8 @@ describe "Portable build validation" do
 
   it "checks host operations inside inactive template expressions" do
     with_portable_spec_project do |project|
-      write_portable_spec_screen(project, %q(<div>{if false}<span>{Mochi.storage_get("station")}</span>{end}</div>))
-      portable_diagnostic(project, "lib/PortableScreen.rb:7: portable component 'PortableScreen': unsupported host operation Mochi.storage_get")
+      write_portable_spec_screen(project, %q(<div>{if false}<span>{Mochi.storage_unsubscribe("station")}</span>{end}</div>))
+      portable_diagnostic(project, "lib/PortableScreen.rb:7: portable component 'PortableScreen': unsupported host operation Mochi.storage_unsubscribe")
     end
   end
 
@@ -1239,6 +1239,30 @@ describe "Portable build validation" do
       declaration["fonts"] = JSON.parse(%q({"LocalFace":"public/type/primary.woff2"}))
       File.write(path, declaration.to_json)
       portable_diagnostic(project, %q(mochi-portable.json: font "LocalFace" must be a local file at public/type/primary.woff2))
+    end
+  end
+
+  it "enables desktop storage only for the portable package closure" do
+    with_portable_spec_project do |project|
+      native = compile_portable_spec(project, RenderTarget::Desktop)
+      scene = JSON.parse(File.read(File.join(native, "scene.json")))
+      scene.as_h.has_key?("storage").should be_false
+      File.write(File.join(project, "lib/label_source.rb"), <<-RUBY)
+        module LabelSource
+          def self.current
+            Mochi.get_storage("station-label", "default")
+          end
+        end
+        RUBY
+      write_portable_spec_screen(project, %q(<div><span>{label}</span></div>),
+        "def label; LabelSource.current; end")
+      native = compile_portable_spec(project, RenderTarget::Desktop)
+      scene = JSON.parse(File.read(File.join(native, "scene.json")))
+      scene["storage"].as_bool.should be_true
+      scene["app_id"].as_s.should eq("org.mochi.spec")
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      descriptor = JSON.parse(File.read(File.join(dom, "components/portable-screen.json")))
+      descriptor.as_h.has_key?("storage").should be_false
     end
   end
 
