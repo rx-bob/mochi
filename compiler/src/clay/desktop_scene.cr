@@ -5,7 +5,7 @@ require "../tooling/portable_project"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 5
+  VERSION = 6
 
   def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @fonts : PortableFonts)
   end
@@ -115,11 +115,21 @@ class DesktopScene
   end
 
   private def element(json, node : PortableTemplate::Element) : Nil
-    type = {"div" => "box", "span" => "label", "button" => "button"}[node.tag]?
+    type = {"div" => "box", "span" => "label", "label" => "label", "button" => "button", "input" => "input"}[node.tag]?
     json.field "type", type || "child"
     unless type
       json.field "tag", node.tag
       json.field "connections", node.child_events.transform_values { |event| {method: event.method, args: event.event_args} }
+    end
+    if edit = node.edit
+      json.field "edit" do
+        json.object do
+          json.field "property", edit.property
+          json.field "method", edit.method
+          json.field "row_context", true if edit.row_context
+          json.field("value") { parts(json, edit.value) }
+        end
+      end
     end
     if action = node.action
       json.field "action", action.method

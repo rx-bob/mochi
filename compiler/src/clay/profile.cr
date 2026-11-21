@@ -15,6 +15,7 @@ end
 # Validate the inspector subset against the original Ruby literals and the
 # authored CSS sources, including markup that mounts only in a later state.
 class ClayProfile
+  getter editing = false
   getter styles = PortableStyles.new
   getter source_marks = [] of PortableTemplate::SourceMark
 
@@ -151,16 +152,17 @@ class ClayProfile
         text_start = nil
         name = scan.scan(/[\w:-]+/)
         child = name.try { |tag| components[tag]? }
-        unless name && (name.in?("div", "span", "button") || child)
+        unless name && (name.in?("div", "span", "button", "label", "input") || child)
           reject(@path, line_at(html, at, line), "unsupported element <#{name}>")
         end
-        reject(@path, line_at(html, at, line), "span and button accept text only") if parents.last?.in?("span", "button")
-        parents << name
-        validate_attributes(scan, html, line, name, child, capability_receivers)
+        reject(@path, line_at(html, at, line), "span, label and button accept text only") if parents.last?.in?("span", "button", "label")
+        parents << name unless name == "input"
+        attrs = validate_attributes(scan, html, line, name, child, capability_receivers)
+        validate_editor(name, attrs, line_at(html, at, line)) if name.in?("input", "label")
         mark(name, at, scan.byte_offset)
       elsif scan.check('{')
         if scan.skip("{{")
-          reject(@path, line_at(html, at, line), "put text in a span or button") unless parents.last?.in?("span", "button")
+          reject(@path, line_at(html, at, line), "put text in a span, label or button") unless parents.last?.in?("span", "button", "label")
           text_start ||= at
           next
         end
@@ -171,11 +173,11 @@ class ClayProfile
           mark("cond", at, scan.byte_offset) if token.starts_with?("{if")
           mark("each", at, scan.byte_offset) if token.starts_with?("{each")
         else
-          reject(@path, line_at(html, at, line), "put text in a span or button") unless parents.last?.in?("span", "button")
+          reject(@path, line_at(html, at, line), "put text in a span, label or button") unless parents.last?.in?("span", "button", "label")
           text_start ||= at
         end
       else
-        reject(@path, line_at(html, at, line), "put text in a span or button") unless parents.last?.in?("span", "button")
+        reject(@path, line_at(html, at, line), "put text in a span, label or button") unless parents.last?.in?("span", "button", "label")
         text_start ||= at
         scan.skip(/[^<{]+/)
       end
@@ -196,18 +198,29 @@ class ClayProfile
   end
 
   private def validate_attributes(scan, html, line, tag, child : ComponentManifest?, capability_receivers)
+    attrs = {} of String => String
     loop do
       scan.skip(/\s+/)
-      break if scan.skip('>')
+      break if scan.skip('>') || (tag == "input" && scan.skip("/>"))
       at = scan.byte_offset
       name = scan.scan(/[\w:.-]+/)
       unless name && (name == "class" || name.matches?(/\A(?:aria-|data-(?!mochi-))[a-z][a-z0-9-]*\z/) ||
-             (name == "onclick" && tag == "button") || child_attribute?(name, child))
+             (name == "onclick" && tag == "button") || child_attribute?(name, child) ||
+             (tag == "label" && name == "for") ||
+             (tag == "input" && name.in?("id", "type", "disabled", "bind:value", "bind:checked", "oninput", "onchange")))
         reject(@path, line_at(html, at, line), "unsupported attribute '#{name}' on <#{tag}>")
+      end
+      if tag.in?("input", "label") && attrs.has_key?(name)
+        reject(@path, line_at(html, at, line), "duplicate #{name} attribute on <#{tag}>")
+      end
+      if tag == "input" && name == "disabled" && !scan.check(/\s*=/)
+        attrs[name] = ""
+        next
       end
       unless scan.skip(/\s*=\s*/) && (quote = scan.scan(/["']/))
         reject(@path, line_at(html, at, line), "expected a quoted attribute value")
       end
+      start = scan.byte_offset
       until scan.skip(quote)
         reject(@path, line_at(html, at, line), "unterminated attribute") if scan.eos?
         if scan.check('{')
@@ -216,6 +229,30 @@ class ClayProfile
           scan.scan(/[^{"']+/) || scan.scan(1)
         end
       end
+      attrs[name] = html.byte_slice(start, scan.byte_offset - start - 1)
+    end
+    attrs
+  end
+
+  private def validate_editor(tag : String, attrs : Hash(String, String), line : Int32) : Nil
+    if tag == "label"
+      unless attrs["for"]?.try { |value| !value.strip.empty? }
+        reject(@path, line, "portable labels require a for attribute")
+      end
+      return
+    end
+    @editing = true
+    case attrs["type"]? || "text"
+    when "text"
+      unless attrs.has_key?("bind:value") && !attrs.has_key?("bind:checked") && !attrs.has_key?("onchange")
+        reject(@path, line, "portable text inputs require bind:value and accept an optional oninput handler")
+      end
+    when "checkbox"
+      unless attrs.has_key?("bind:checked") && !attrs.has_key?("bind:value") && !attrs.has_key?("oninput")
+        reject(@path, line, "portable checkboxes require bind:checked and accept an optional onchange handler")
+      end
+    else
+      reject(@path, line, "portable inputs support text and checkbox types")
     end
   end
 

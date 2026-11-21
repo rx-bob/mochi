@@ -118,7 +118,7 @@ class EachRowCompiler
       )
     end
     template, preprocessed_args = extract_event_arguments(template, parser)
-    template, bound_actions = extract_bound_actions(template, parser)
+    template, bound_actions = extract_bound_actions(template, parser, portable)
     event_index = 0
     row_events = [] of EachRowEventDescriptor
 
@@ -313,7 +313,13 @@ class EachRowCompiler
       end
       children = [] of PortableTemplate::Node
       node.children.each { |child| children << capture_row_node(child, token, classification, events) }
-      PortableTemplate::Element.new(tag, operands, children, action)
+      edit = nil
+      if tag == "input" && (property = attrs["data-mochi-portable-edit"]?)
+        if (value = operands.delete(property)) && (method = attrs["data-mochi-#{BoundProperty.event(property, tag)}"]?)
+          edit = PortableTemplate::Edit.new(property, value, method, true)
+        end
+      end
+      PortableTemplate::Element.new(tag, operands, children, action, edit: edit)
     end
   end
 
@@ -429,7 +435,7 @@ class EachRowCompiler
   # Group by element before lowering attributes, so authored order cannot
   # choose whether a setter or callback survives. Mark property slots for the
   # row classifier; these temporary markers never reach the browser.
-  private def self.extract_bound_actions(template : String, parser : TemplateExpressionParser)
+  private def self.extract_bound_actions(template : String, parser : TemplateExpressionParser, portable : Bool)
     actions = {} of Int32 => Array(EventAction)
     replacements = {} of Int32 => String
     TemplateAttributes.scan(template, parser).group_by(&.element_start).each_value do |attributes|
@@ -439,7 +445,9 @@ class EachRowCompiler
         actions[marker] = group.map do |attribute|
           property = attribute.name[5..]
           expression = BoundProperty.expression(attribute.value(template), property, parser)
-          replacements[attribute.start] = %(#{property}="{#{expression.source}}" data-mochi-bind-#{property}="")
+          replacement = %(#{property}="{#{expression.source}}" data-mochi-bind-#{property}="")
+          replacement += %( data-mochi-portable-edit="#{property}") if portable && attribute.tag == "input"
+          replacements[attribute.start] = replacement
           EventAction.new("set", expression.source, property, span: expression.span)
         end
         explicit = attributes.find do |attribute|

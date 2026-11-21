@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "root": "station-editor",
+  "app_id": "org.mochi.station-editor",
+  "display_name": "Station editor",
+  "window": { "inset": 24, "max_width": 480 },
+  "fonts": {}
+}

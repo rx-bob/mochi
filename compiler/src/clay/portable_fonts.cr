@@ -85,7 +85,7 @@ class PortableFonts
       case node
       when PortableTemplate::Element
         states = styles(node, inherited)
-        if node.tag.in?("button", "span")
+        if node.tag.in?("button", "span", "label", "input")
           states.each { |state| resolve(state) }
         else
           visit(node.children, states)

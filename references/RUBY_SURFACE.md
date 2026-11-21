@@ -456,6 +456,10 @@ entry flush; failed host effects are discarded, and later valid events can
 recover. This does not add transaction rollback for earlier successful writes
 within a failing handler.
 
+Portable text fields deliver committed IME text on the same `input` entry.
+Intermediate marked text stays in the host editor. See the
+[portable editing contract](CLAY_PORTABLE.md#text-fields-and-checkboxes).
+
 ## Ruby expressions inside attributes
 
 HTML attribute quotes do not end an embedded Ruby expression. Both forms

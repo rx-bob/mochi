@@ -49,6 +49,9 @@ class PortableStyles
     PackageResource.new(id, "style", text: css)
   end
 
+  EDITOR_CSS = "label{display:block;box-sizing:border-box}input{box-sizing:border-box;min-width:0;margin:0;font:inherit;color:inherit;height:30px}" +
+               "input:where([type=checkbox]){width:18px;height:18px;align-self:flex-start}"
+
   CSS_RESET = ":host{display:flex;flex-direction:column;min-width:0;color:#000000;font-family:sans-serif;font-size:16px;font-weight:400;line-height:20px;font-synthesis:none}" +
               "div,span,button{box-sizing:border-box;min-width:0;--mochi-flex-default:initial;--mochi-align-default:initial}" +
               "div,button{display:flex;flex-direction:var(--mochi-flex-default,column);align-items:var(--mochi-align-default,stretch)}" +

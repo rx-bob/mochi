@@ -2568,6 +2568,10 @@
       }
     });
 
+    if (name === "editing" && !["attachEditor", "dispatchEdit", "deferEditValue"].every(function (hook) {
+      return typeof spec[hook] === "function";
+    })) throw new Error("adapter " + url + " has an invalid editing hook");
+
     var operations = capabilityOperations(capability);
     var declared = Object.keys(operations).sort();
     ["sync", "async"].forEach(function (mode) {
@@ -2646,6 +2650,9 @@
       release: spec.release,
       releaseOwner: spec.releaseOwner,
       discardBatch: spec.discardBatch,
+      attachEditor: spec.attachEditor,
+      dispatchEdit: spec.dispatchEdit,
+      deferEditValue: spec.deferEditValue,
       limits: limits
     });
     hosts[name] = installedSpec;
@@ -4177,6 +4184,8 @@
       next = displayBindingValue(value);
     }
 
+    var editing = property === "value" && state.hostAdapters.get("editing");
+    if (editing && editing.deferEditValue(target, next)) return;
     if (target[property] === next) return;
     target[property] = next;
   }
@@ -5440,15 +5449,20 @@
 
       _attachEvents(root) {
         var element = this;
+        var component = this._mochiComponent || {};
         var eventNames = this._mochiRuntime ? this._mochiRuntime.eventNames : [];
+        var editing = componentCapabilities(component).indexOf("editing") !== -1 && state.hostAdapters.get("editing");
+        function dispatch(target, event) { element._dispatch(target, event); }
+        if (editing) editing.attachEditor(root, dispatch);
         eventNames.forEach(function (eventName) {
           if (eventName === "wheel") return;
           root.addEventListener(eventName, function (event) {
             var target = eventTarget(event, root, eventName);
-            if (target) element._dispatch(target, event);
+            if (!target) return;
+            if (editing && target.hasAttribute("data-mochi-portable-edit")) editing.dispatchEdit(target, event, dispatch);
+            else dispatch(target, event);
           });
         });
-        var component = this._mochiComponent || {};
         if (componentCapabilities(component).indexOf("files") !== -1) {
           root.addEventListener("dragover", function (event) {
             var filesAdapter = state.hostAdapters.get("files");

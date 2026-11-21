@@ -18,6 +18,7 @@ void mochi_clay_text_leaf(int offset, int length, int font, int line_height);
 float mochi_clay_end(void);
 void mochi_clay_paint(void);
 
+void DesktopInstallEditMenu(NSMenu *mainMenu);
 void DesktopFailure(NSString *reason) __attribute__((noreturn));
 NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     NSDictionary *scene, NSString *method, NSDictionary<NSNumber *, NSString *> *current,

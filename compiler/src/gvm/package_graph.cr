@@ -25,9 +25,8 @@ module MochiPackaging
     mode : String
 
   # Build-time registry for optional capabilities backed by a local browser
-  # adapter. A definition only enters the manifest when a reachable package
-  # exports its Ruby API; the compiler never bundles an adapter just because it
-  # exists in the repository.
+  # adapter. A reachable Ruby package must export its API, or a supported
+  # template feature must request it, before the compiler emits the adapter.
   record CapabilityDefinition,
     name : String,
     version : Int32,
@@ -37,6 +36,10 @@ module MochiPackaging
     limit_keys : Array(Tuple(String, String))
 
   CAPABILITY_DEFINITIONS = [
+    CapabilityDefinition.new(
+      "editing", 1, "mochi-editing.js", "",
+      [] of CapabilityOperation, [] of Tuple(String, String)
+    ),
     CapabilityDefinition.new(
       "download", 1, "mochi-download.js", "MochiDownload",
       [CapabilityOperation.new("save", "sync")],
@@ -678,6 +681,7 @@ module MochiPackaging
       @capabilities = {} of String => Capability
       reachable = @order.to_set
       CAPABILITY_DEFINITIONS.each do |definition|
+        next if definition.exporting.empty? # Selected explicitly from a template.
         active_packages = @packages.values
           .select do |node|
             next false unless reachable.includes?(node.id)

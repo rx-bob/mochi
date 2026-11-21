@@ -9,6 +9,7 @@ module PortableTemplate
   record RowOperand, slot : Int32
   alias Part = String | BindingOperand | RowOperand
   alias Parts = Array(Part)
+  record Edit, property : String, value : Parts, method : String, row_context : Bool
   record Action, method : String, event_args : Int32, row_context : Bool, supported : Bool = true
 
   abstract class Node
@@ -36,8 +37,9 @@ module PortableTemplate
     getter children : Array(Node)
     getter action : Action?
     getter child_events : Hash(String, Action)
+    getter edit : Edit?
 
-    def initialize(@tag, @attributes, @children, @action = nil, @child_events = {} of String => Action)
+    def initialize(@tag, @attributes, @children, @action = nil, @child_events = {} of String => Action, @edit = nil)
     end
   end
 
@@ -127,16 +129,19 @@ module PortableTemplate
           if action = node.action
             reject(node.span, "buttons accept one handler with an optional $event argument") unless action.supported
           end
-          if !node.tag.in?("div", "span", "button")
+          if !node.tag.in?("div", "span", "button", "label", "input")
             reject(node.span, "child components inside keyed rows require the portable keyed child lifecycle") if in_row
             if node.children.any? { |child| !child.is_a?(Comment) && !(child.is_a?(Text) && !child.visible?) }
               reject(node.span, "portable child components do not accept slotted content")
             end
           end
+          if node.tag == "input" && !node.edit
+            reject(node.span, "portable input lost its binding or edit handler")
+          end
           node.child_events.each_value do |event|
             reject(node.span, "child connections accept one handler with an optional $event argument") unless event.supported
           end
-          annotate(node.children, node.tag.in?("span", "button"), in_row)
+          annotate(node.children, node.tag.in?("span", "button", "label"), in_row)
         when Conditional
           locate(node, "cond")
           reject_leaf(node, text_leaf)

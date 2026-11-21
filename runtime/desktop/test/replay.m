@@ -138,11 +138,11 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
 }
 
 - (NSButton *)requireButton:(id)element {
-    if (![element isKindOfClass:NSButton.class] || ![[element accessibilityRole] isEqual:NSAccessibilityButtonRole])
+    if (![element isKindOfClass:NSButton.class])
         DesktopFailure(@"selector must identify an accessible button");
     NSButton *button = element;
-    if (button.window != _window || button.hidden || !button.enabled || NSIsEmptyRect(button.visibleRect))
-        DesktopFailure(@"button must be visible and enabled");
+    if (button.window != _window || button.hidden || NSIsEmptyRect(button.visibleRect))
+        DesktopFailure(@"button must be visible");
     return button;
 }
 
@@ -210,7 +210,7 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
         [self mount:tag props:step[@"props"]];
         return;
     }
-    if (![@[@"unmount", @"press", @"click", @"focus", @"assert_focused", @"assert_text", @"assert_attribute"] containsObject:operation])
+    if (![@[@"unmount", @"press", @"click", @"focus", @"assert_focused", @"assert_text", @"assert_attribute", @"fill", @"assert_value"] containsObject:operation])
         DesktopFailure(@"unsupported desktop test operation");
     if (!_view) DesktopFailure(@"mount a component before interacting with it");
     if ([operation isEqual:@"unmount"]) {
@@ -219,7 +219,7 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
     }
     if ([operation isEqual:@"press"]) {
         NSString *key = step[@"key"];
-        [self requireButton:_window.firstResponder];
+        if (![_window.firstResponder isKindOfClass:NSTextView.class]) [self requireButton:_window.firstResponder];
         if ([key isEqual:@"Enter"]) press(_window, @"\r", 36);
         else if ([key isEqual:@"Space"]) press(_window, @" ", 49);
         else if ([key isEqual:@"Tab"]) press(_window, @"\t", 48);
@@ -227,11 +227,23 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
     } else {
         id element = [self find:step[@"selector"]];
         if ([operation isEqual:@"click"]) {
-            click(_window, [self requireButton:element]);
+            if ([element isKindOfClass:NSTextField.class]) click(_window, element);
+            else click(_window, [self requireButton:element]);
         } else if ([operation isEqual:@"focus"] || [operation isEqual:@"assert_focused"]) {
-            NSButton *button = [self requireButton:element];
-            if ([operation isEqual:@"focus"]) [_window makeFirstResponder:button];
-            if (_window.firstResponder != button) DesktopFailure(@"expected the selected button to have focus");
+            NSControl *control = [element isKindOfClass:NSTextField.class] ? element : [self requireButton:element];
+            if ([operation isEqual:@"focus"]) [_window makeFirstResponder:control];
+            id focused = control.currentEditor ?: control;
+            if (_window.firstResponder != focused) DesktopFailure(@"expected the selected control to have focus");
+        } else if ([operation isEqual:@"fill"] || [operation isEqual:@"assert_value"]) {
+            if (![element isKindOfClass:NSTextField.class]) DesktopFailure(@"selector must identify an accessible text field");
+            NSTextField *field = element;
+            if ([operation isEqual:@"fill"]) {
+                if (!field.enabled || ![_window makeFirstResponder:field]) DesktopFailure(@"text field must be enabled");
+                NSTextView *editor = (NSTextView *)field.currentEditor;
+                [editor insertText:step[@"value"] replacementRange:NSMakeRange(0, editor.string.length)];
+            } else if (![[field accessibilityValue] isEqual:step[@"expected"]]) {
+                DesktopFailure([NSString stringWithFormat:@"expected value '%@', got '%@'", step[@"expected"], field.accessibilityValue]);
+            }
         } else {
             NSString *actual = [operation isEqual:@"assert_text"]
                 ? ([element isKindOfClass:NSButton.class] ? [element title] : [element accessibilityValue])

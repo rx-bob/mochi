@@ -1310,6 +1310,37 @@ describe "Portable template records" do
     end
   end
 
+  it "shares bound editor methods with the DOM and enables the adapter only for portable inputs" do
+    with_portable_spec_project do |project|
+      write_portable_spec_screen(project,
+        %q(<div><label for="name">Name</label><input id="name" bind:value="@draft" oninput="{validate(@draft)}">{each [{"id" => 1}] as row, key: row["id"]}<input type="checkbox" aria-label="Open" bind:checked="{@open}" disabled>{end}</div>),
+        "def validate(value); value; end")
+      dom = compile_portable_spec(project, RenderTarget::Dom)
+      native = compile_portable_spec(project, RenderTarget::Desktop)
+      scene = JSON.parse(File.read(File.join(native, "scene.json")))
+      descriptor = JSON.parse(File.read(File.join(dom, "components/portable-screen.json")))
+      nodes = scene["components"]["portable-screen"]["nodes"][0]["nodes"]
+      nodes[0]["attrs"]["for"][0].as_s.should eq("name")
+      field = nodes[1]["edit"]
+      field["property"].as_s.should eq("value")
+      setter = field["method"].as_s
+      descriptor["html_template"].as_s.should contain(%(data-mochi-input="#{setter}"))
+      descriptor["html_template"].as_s.should contain(%(data-mochi-portable-edit="value"))
+      checkbox = nodes[2]["nodes"][0]
+      checkbox["edit"]["property"].as_s.should eq("checked")
+      checkbox["edit"]["row_context"].as_bool.should be_true
+      checkbox["attrs"].as_h.has_key?("disabled").should be_true
+      descriptor["capabilities"].as_a.map(&.as_s).should eq(["editing"])
+      File.file?(File.join(dom, "mochi-editing.js")).should be_true
+      File.file?(File.join(native, "mochi-editing.js")).should be_false
+
+      write_portable_spec_screen(project, %q(<input type="range" bind:value="@draft">))
+      portable_diagnostic(project, "portable inputs support text and checkbox types")
+      write_portable_spec_screen(project, %q(<input type="checkbox" bind:value="@draft">))
+      portable_diagnostic(project, "portable checkboxes require bind:checked")
+    end
+  end
+
   it "projects DOM paths and native operands for Unicode text in nested scopes" do
     with_portable_spec_project do |project|
       template = <<-HTML

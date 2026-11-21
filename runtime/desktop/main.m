@@ -36,6 +36,7 @@ int main(void) {
         NSMenuItem *app = [menu addItemWithTitle:@"" action:nil keyEquivalent:@""];
         app.submenu = [NSMenu new];
         [app.submenu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
+        DesktopInstallEditMenu(menu);
         NSApp.mainMenu = menu;
         DesktopApp *delegate = [DesktopApp new];
         NSApp.delegate = delegate;

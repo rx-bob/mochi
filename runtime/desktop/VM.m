@@ -52,7 +52,7 @@ NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(
     if (![scene isKindOfClass:NSDictionary.class]) DesktopFailure(@"Invalid desktop scene");
     _scene = scene;
     NSDictionary *root = _scene[@"components"][_scene[@"root"] ?: @""] ?: _scene;
-    if (![_scene[@"version"] isEqual:@5]) failIn(root, @"initialize", @"unsupported desktop scene version");
+    if (![_scene[@"version"] isEqual:@6]) failIn(root, @"initialize", @"unsupported desktop scene version");
     if (mochi_native_abi_version() != MOCHI_DESKTOP_NATIVE_ABI)
         failIn(root, @"initialize", @"incompatible native GVM ABI version");
     id fingerprint = _scene[@"capacity"];

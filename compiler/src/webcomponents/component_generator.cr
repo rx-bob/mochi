@@ -257,7 +257,15 @@ class ComponentGenerator
       {event.event, PortableTemplate::Action.new(event.method_sym, event.args.size, false,
         event.args.size <= 1 && event.args.all? { |arg| arg.kind == "event" })}
     end
-    compiled = PortableTemplate::Element.new(tag, operands, children.not_nil!, action, child_events)
+    edit = nil
+    if tag == "input" && (binding = local.find { |entry| entry.kind == "prop" }) && (property = binding.attr_name)
+      if handler = node_events.find { |event| event.event == BoundProperty.event(property, tag) && !event.component }
+        operands.delete(property)
+        edit = PortableTemplate::Edit.new(property, [PortableTemplate::BindingOperand.new(binding.id)] of PortableTemplate::Part,
+          handler.method_sym, false)
+      end
+    end
+    compiled = PortableTemplate::Element.new(tag, operands, children.not_nil!, action, child_events, edit)
     fragment.attach(compiled, local, node_events)
     compiled
   end
@@ -555,6 +563,7 @@ class ComponentGenerator
     bindings << new_expression_binding(path, "prop", attr_name, value, expression, setter_sym: setter_sym)
     events << EventDescriptor.new(path, event_name, setter_sym)
     additions << {"data-mochi-#{event_name}", setter_sym}
+    additions << {"data-mochi-portable-edit", attr_name} if @portable && tag == "input"
   end
 
   private def compose_bound_events(path, bindings, events, additions, removals)

@@ -4,26 +4,36 @@
 @class DesktopBox;
 @interface DesktopButton : NSButton
 @property(nonatomic, strong) DesktopBox *item;
+@property(nonatomic) BOOL checkbox;
 @end
 
 @implementation DesktopButton
-- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)acceptsFirstResponder { return self.enabled; }
+- (id)accessibilityValue {
+    return self.checkbox ? @(self.state == NSControlStateValueOn) : [super accessibilityValue];
+}
 - (BOOL)canBecomeKeyView { return self.enabled && !self.hidden; }
 - (BOOL)accessibilityPerformPress {
-    return self.enabled && [self sendAction:self.action to:self.target];
+    if (!self.enabled) return NO;
+    if (self.checkbox) {
+        [self performClick:nil];
+        return YES;
+    }
+    return [self sendAction:self.action to:self.target];
 }
 - (void)mouseDown:(NSEvent *)event {
     [self.window makeFirstResponder:self];
     [super mouseDown:event];
 }
 - (void)keyDown:(NSEvent *)event {
-    if ([event.characters isEqual:@"\r"] || [event.characters isEqual:@" "]) [self performClick:nil];
+    if ((!self.checkbox && [event.characters isEqual:@"\r"]) || [event.characters isEqual:@" "]) [self performClick:nil];
     else if (event.keyCode == 48) {
         NSView *next = (event.modifierFlags & NSEventModifierFlagShift) ? self.previousKeyView : self.nextKeyView;
         [self.window makeFirstResponder:next];
     } else [super keyDown:event];
 }
 - (void)drawRect:(NSRect)dirty {
+    if (self.checkbox) { [super drawRect:dirty]; return; }
     if (self.window.firstResponder == self) {
         [NSColor.keyboardFocusIndicatorColor setStroke];
         [NSBezierPath strokeRect:NSInsetRect(self.bounds, 2, 2)];
@@ -32,6 +42,50 @@
 - (BOOL)becomeFirstResponder { self.needsDisplay = YES; return [super becomeFirstResponder]; }
 - (BOOL)resignFirstResponder { self.needsDisplay = YES; return [super resignFirstResponder]; }
 @end
+
+@interface DesktopField : NSTextField
+@property(nonatomic, strong) DesktopBox *item;
+@property(nonatomic, copy) NSString *renderedValue, *committedValue;
+- (void)applyValue:(NSString *)value;
+@end
+
+@implementation DesktopField
+- (void)applyValue:(NSString *)value {
+    if ([self.renderedValue isEqual:value]) return;
+    NSTextView *editor = (NSTextView *)self.currentEditor;
+    if (editor.hasMarkedText) return;
+    self.renderedValue = value;
+    self.committedValue = value;
+    if (!editor) {
+        if (![self.stringValue isEqual:value]) self.stringValue = value;
+        return;
+    }
+    if ([editor.string isEqual:value]) return;
+    NSRange selection = editor.selectedRange;
+    editor.string = value;
+    selection.location = MIN(selection.location, value.length);
+    selection.length = MIN(selection.length, value.length - selection.location);
+    editor.selectedRange = selection;
+}
+
+- (id)accessibilityValue {
+    return self.currentEditor ? self.currentEditor.string : self.stringValue;
+}
+@end
+
+void DesktopInstallEditMenu(NSMenu *mainMenu) {
+    NSMenuItem *item = [mainMenu addItemWithTitle:@"Edit" action:nil keyEquivalent:@""];
+    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];
+    item.submenu = edit;
+    [edit addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+    NSMenuItem *redo = [edit addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"z"];
+    redo.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    [edit addItem:NSMenuItem.separatorItem];
+    [edit addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+    [edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [edit addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [edit addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+}
 
 @class DesktopMount;
 @interface DesktopLabel : NSAccessibilityElement
@@ -82,7 +136,7 @@
 @property(nonatomic) NSRect frame;
 @property(nonatomic, strong) DesktopTypography *typography;
 @property(nonatomic, strong) NSColor *color, *background;
-@property(nonatomic, copy) NSString *key, *label;
+@property(nonatomic, copy) NSString *key, *label, *formValue;
 @property(nonatomic, copy) NSDictionary *attrs, *definition;
 @property(nonatomic, copy) NSArray *rowArguments;
 @property(nonatomic, strong) DesktopMount *owner;
@@ -93,6 +147,15 @@
 #endif
 @end
 @implementation DesktopBox
+@end
+
+static DesktopBox *controlBox(id control) {
+    if ([control isKindOfClass:DesktopButton.class]) return ((DesktopButton *)control).item;
+    if ([control isKindOfClass:DesktopField.class]) return ((DesktopField *)control).item;
+    return nil;
+}
+
+@interface DesktopView () <NSTextFieldDelegate>
 @end
 
 // Clay invokes the host synchronously, on the AppKit thread, during one layout.
@@ -156,7 +219,8 @@ static NSString *displayValue(id value) {
     void (^_diagnostics)(NSString *);
     NSDictionary *_graphicsFonts;
     NSMutableDictionary<NSArray *, DesktopTypography *> *_typography;
-    NSMutableDictionary<NSString *, DesktopButton *> *_buttons;
+    NSMutableDictionary<NSString *, NSControl *> *_controls;
+    NSArray<NSDictionary *> *_labelTargets;
     NSArray *_commands, *_accessibles;
     int _textUsed;
 }
@@ -164,7 +228,7 @@ static NSString *displayValue(id value) {
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
     for (id item in _accessibles) {
-        if ([item isKindOfClass:NSButton.class]) { self.window.initialFirstResponder = item; break; }
+        if ([item isKindOfClass:NSControl.class] && [item isEnabled]) { self.window.initialFirstResponder = item; break; }
     }
 }
 - (BOOL)isFlipped { return YES; }
@@ -184,7 +248,7 @@ static NSString *displayValue(id value) {
     if (!(self = [super initWithFrame:NSMakeRect(0, 0, 560, 560)])) return nil;
     _program = program;
     _diagnostics = [diagnostics copy];
-    _buttons = [NSMutableDictionary dictionary];
+    _controls = [NSMutableDictionary dictionary];
     _children = [NSMutableDictionary dictionary];
     _pendingEvents = [NSMutableArray array];
     NSMutableDictionary *fonts = [NSMutableDictionary dictionary];
@@ -213,14 +277,14 @@ static NSString *displayValue(id value) {
 }
 
 - (NSDictionary *)attributesForAccessibilityElement:(id)element {
-    if ([element isKindOfClass:DesktopButton.class]) return ((DesktopButton *)element).item.attrs;
+    DesktopBox *box = controlBox(element);
+    if (box) return box.attrs;
     if ([element isKindOfClass:DesktopLabel.class]) return ((DesktopLabel *)element).attributes;
     return nil;
 }
 
 - (NSArray<NSDictionary *> *)componentAncestorsForAccessibilityElement:(id)element {
-    DesktopMount *owner = [element isKindOfClass:DesktopButton.class] ? ((DesktopButton *)element).item.owner :
-        ((DesktopLabel *)element).owner;
+    DesktopMount *owner = [element isKindOfClass:DesktopLabel.class] ? ((DesktopLabel *)element).owner : controlBox(element).owner;
     NSMutableArray *ancestors = [NSMutableArray array];
     for (; owner.parent; owner = owner.parent) {
         [ancestors insertObject:@{@"tag":owner.vm.scene[@"tag"], @"attributes":owner.attemptedAttributes} atIndex:0];
@@ -259,7 +323,15 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             id value = partValue(operand, slots, vm);
             if (!value || value == NSNull.null || [value isEqual:@"\uE004"]) continue;
         }
-        attributes[name] = [self renderParts:parts slots:slots vm:vm];
+        NSString *value = [self renderParts:parts slots:slots vm:vm];
+        if ([name isEqual:@"disabled"]) {
+            BOOL dynamic = [parts indexOfObjectPassingTest:^BOOL(id part, NSUInteger idx, BOOL *stop) {
+                return ![part isKindOfClass:NSString.class];
+            }] != NSNotFound;
+            NSString *boolean = [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
+            if (dynamic && (!boolean.length || [boolean isEqual:@"false"])) continue;
+        }
+        attributes[name] = value;
     }
     return attributes;
 }
@@ -462,6 +534,14 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         BOOL column = [(style[@"vertical"] ?: @(![style[@"flex"] boolValue])) boolValue];
         float width = [(style[@"width"] ?: @-1) floatValue];
         float height = [(style[@"height"] ?: @-1) floatValue];
+        NSDictionary *edit = node[@"edit"];
+        if (edit) {
+            box.formValue = [self renderParts:edit[@"value"] slots:slots vm:vm];
+            BOOL checkbox = [edit[@"property"] isEqual:@"checked"];
+            if (width < 0 && (checkbox || !stretch)) width = checkbox ? 18 : 180;
+            if (height < 0) height = checkbox ? 18 : 30;
+            if (!checkbox) box.typography = [self typographyFor:style scene:vm.scene];
+        }
         if (width >= 0) width = MAX(width, 2 * pad);
         if (height >= 0) height = MAX(height, 2 * pad);
         mochi_clay_open_box(font, column, stretch, width, height,
@@ -471,7 +551,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
                         scope:key slots:@[] arguments:nil owner:child seen:seen];
         } else if ([type isEqual:@"box"]) {
             [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots arguments:rowArgs owner:owner seen:seen];
-        } else {
+        } else if (!edit) {
             box.typography = [self typographyFor:style scene:vm.scene];
             NSMutableString *label = [NSMutableString string];
             for (NSDictionary *child in node[@"nodes"])
@@ -542,7 +622,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
     NSMutableArray *controls = [NSMutableArray array];
     NSUInteger leaf = 0;
     for (DesktopBox *box in boxes) {
-        id element = box.label ? _accessibles[leaf++] : nil;
+        id element = (box.label || box.formValue) ? _accessibles[leaf++] : nil;
         NSDictionary *attrs = box.attrs;
         NSString *key = attrs[@"data-view"];
         if (attrs[@"data-action"]) key = [@"action-" stringByAppendingString:attrs[@"data-action"]];
@@ -551,7 +631,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         NSRect frame = box.frame;
         NSString *role = nil;
         NSString *name = nil;
-        if (element && [element isKindOfClass:NSButton.class]) {
+        if ([element isKindOfClass:NSControl.class]) {
             frame = [element frame];
             role = [[element accessibilityRole] isEqual:NSAccessibilityButtonRole] ? @"button" : [element accessibilityRole];
             name = [element accessibilityLabel];
@@ -576,41 +656,116 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
 }
 #endif
 
-static void detachButton(DesktopButton *button) {
-    button.enabled = NO;
-    button.target = nil;
-    button.action = NULL;
-    button.item = nil;
-    button.nextKeyView = nil;
-    [button removeFromSuperview];
+static void detachControl(NSControl *control) {
+    control.enabled = NO;
+    control.target = nil;
+    control.action = NULL;
+    if ([control isKindOfClass:DesktopField.class]) {
+        DesktopField *field = (DesktopField *)control;
+        field.delegate = nil;
+        [field abortEditing];
+        field.item = nil;
+    } else {
+        ((DesktopButton *)control).item = nil;
+    }
+    control.nextKeyView = nil;
+    [control removeFromSuperview];
+}
+
+static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
+    return @[box.owner.key ?: @"", identifier];
+}
+
+- (NSControl *)controlForBox:(DesktopBox *)box title:(NSString *)title {
+    NSDictionary *edit = box.definition[@"edit"];
+    BOOL checkbox = [edit[@"property"] isEqual:@"checked"];
+    NSControl *control = _controls[box.key];
+    if (box.formValue && !checkbox) {
+        DesktopField *field = (DesktopField *)control;
+        if (!field) {
+            field = [[DesktopField alloc] initWithFrame:box.frame];
+            field.editable = YES;
+            field.selectable = YES;
+            field.bordered = YES;
+            field.bezelStyle = NSTextFieldSquareBezel;
+            field.usesSingleLineMode = YES;
+            field.accessibilityRole = NSAccessibilityTextFieldRole;
+            field.delegate = self;
+            [self addSubview:field];
+        }
+        field.item = box;
+        NSFont *font = box.typography.fonts.firstObject;
+        if (![field.font isEqual:font]) field.font = font;
+        if (![field.textColor isEqual:box.color]) field.textColor = box.color;
+        [field applyValue:box.formValue];
+        field.accessibilityLabel = title;
+        control = field;
+    } else {
+        DesktopButton *button = (DesktopButton *)control;
+        if (!button) {
+            button = [[DesktopButton alloc] initWithFrame:box.frame];
+            button.checkbox = checkbox;
+            if (checkbox) {
+                [button setButtonType:NSButtonTypeSwitch];
+                button.accessibilityRole = NSAccessibilityCheckBoxRole;
+            }
+            else {
+                button.bordered = NO;
+                button.focusRingType = NSFocusRingTypeNone;
+                button.accessibilityRole = NSAccessibilityButtonRole;
+            }
+            button.target = self;
+            button.action = @selector(activate:);
+            [self addSubview:button];
+        }
+        button.item = box;
+        button.title = box.label ?: @"";
+        button.accessibilityLabel = title;
+        if (checkbox) {
+            BOOL checked = [@[@"true", @"checked", @"1"] containsObject:box.formValue];
+            NSControlStateValue state = checked ? NSControlStateValueOn : NSControlStateValueOff;
+            if (button.state != state) button.state = state;
+        } else {
+            button.accessibilityValue = box.attrs[@"aria-pressed"] ? @([box.attrs[@"aria-pressed"] isEqual:@"true"]) : nil;
+        }
+        control = button;
+    }
+    BOOL enabled = !box.attrs[@"disabled"];
+    if (control.enabled != enabled) {
+        control.enabled = enabled;
+        if (!enabled && [control isKindOfClass:DesktopField.class]) [control abortEditing];
+    }
+    if (!NSEqualRects(control.frame, box.frame)) control.frame = box.frame;
+    return control;
 }
 
 - (void)syncControls:(NSArray<DesktopBox *> *)boxes {
     NSMutableDictionary *retained = [NSMutableDictionary dictionary];
+    NSMutableDictionary *labels = [NSMutableDictionary dictionary];
+    NSMutableArray *targets = [NSMutableArray array];
     NSMutableArray *accessible = [NSMutableArray array];
-    NSMutableArray<NSButton *> *order = [NSMutableArray array];
+    NSMutableArray<NSControl *> *order = [NSMutableArray array];
     for (DesktopBox *box in boxes) {
-        if (!box.label) continue;
-        if ([box.definition[@"type"] isEqual:@"button"]) {
-            DesktopButton *button = _buttons[box.key];
-            if (!button) {
-                button = [[DesktopButton alloc] initWithFrame:box.frame];
-                button.bordered = NO;
-                button.focusRingType = NSFocusRingTypeNone;
-                button.accessibilityRole = NSAccessibilityButtonRole;
-                button.target = self;
-                button.action = @selector(activate:);
-                [self addSubview:button];
-            }
-            button.title = box.label;
-            button.accessibilityLabel = box.attrs[@"aria-label"] ?: box.label;
-            button.accessibilityValue = box.attrs[@"aria-pressed"] ? @([box.attrs[@"aria-pressed"] isEqual:@"true"]) : nil;
-            button.frame = box.frame;
-            button.item = box;
-            retained[box.key] = button;
-            [order addObject:button];
-            [accessible addObject:button];
-        } else {
+        NSString *identifier = box.attrs[@"for"];
+        if (!identifier) continue;
+        NSArray *key = labelKey(box, identifier);
+        NSMutableArray *associated = labels[key];
+        if (!associated) labels[key] = associated = [NSMutableArray array];
+        [associated addObject:box];
+    }
+    for (DesktopBox *box in boxes) {
+        if (box.formValue || [box.definition[@"type"] isEqual:@"button"]) {
+            NSArray<DesktopBox *> *associated = box.attrs[@"id"] ? labels[labelKey(box, box.attrs[@"id"])] : nil;
+            NSString *name = box.attrs[@"aria-label"];
+            if (!name.length) name = [[associated valueForKey:@"label"] componentsJoinedByString:@" "] ?: box.label;
+            NSControl *control = [self controlForBox:box title:name];
+            retained[box.key] = control;
+            if (control.enabled) [order addObject:control];
+            else control.nextKeyView = nil;
+            [accessible addObject:control];
+            for (DesktopBox *label in associated)
+                [targets addObject:@{@"frame":[NSValue valueWithRect:label.frame], @"control":control}];
+        } else if (box.label) {
             DesktopLabel *label = [DesktopLabel new];
             label.accessibilityRole = NSAccessibilityStaticTextRole;
             label.accessibilityValue = box.label;
@@ -621,17 +776,53 @@ static void detachButton(DesktopButton *button) {
             [accessible addObject:label];
         }
     }
-    for (NSString *key in _buttons) if (!retained[key]) detachButton(_buttons[key]);
-    _buttons = retained;
+    for (NSString *key in _controls) if (!retained[key]) detachControl(_controls[key]);
+    _controls = retained;
+    _labelTargets = [targets copy];
     _accessibles = accessible;
     for (NSUInteger i = 0; i < order.count; i++) order[i].nextKeyView = order[(i+1) % order.count];
     self.window.initialFirstResponder = order.firstObject;
 }
 
+- (void)mouseDown:(NSEvent *)event {
+    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    for (NSDictionary *label in _labelTargets) {
+        if (!NSPointInRect(point, [label[@"frame"] rectValue])) continue;
+        NSControl *control = label[@"control"];
+        if (!control.enabled) return;
+        [self.window makeFirstResponder:control];
+        if ([control isKindOfClass:DesktopButton.class]) [(NSButton *)control performClick:nil];
+        return;
+    }
+    [super mouseDown:event];
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+    DesktopField *field = notification.object;
+    NSTextView *editor = (NSTextView *)field.currentEditor;
+    if (!field.enabled || !editor || editor.hasMarkedText || [field.committedValue isEqual:editor.string]) return;
+    field.committedValue = editor.string;
+    [self dispatchControl:field type:@"input" value:field.committedValue checked:NO];
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)editor doCommandBySelector:(SEL)command {
+    if (command == @selector(insertTab:) || command == @selector(insertBacktab:)) {
+        NSView *next = command == @selector(insertTab:) ? control.nextKeyView : control.previousKeyView;
+        return [self.window makeFirstResponder:next];
+    }
+    return NO;
+}
+
 - (void)activate:(DesktopButton *)button {
-    DesktopBox *box = button.item;
-    if (!_root || self.failureReason || !box || _buttons[box.key] != button) return;
-    NSString *method = box.definition[@"action"];
+    [self dispatchControl:button type:button.checkbox ? @"change" : @"click"
+                    value:button.checkbox ? @"on" : nil checked:button.checkbox && button.state == NSControlStateValueOn];
+}
+
+- (void)dispatchControl:(NSControl *)control type:(NSString *)eventType value:(NSString *)value checked:(BOOL)checked {
+    DesktopBox *box = controlBox(control);
+    if (!_root || self.failureReason || !box || !control.enabled || _controls[box.key] != control) return;
+    NSDictionary *edit = box.definition[@"edit"];
+    NSString *method = edit ? edit[@"method"] : box.definition[@"action"];
     if (!method) return;
     NSMutableDictionary *dataset = [NSMutableDictionary dictionary];
     for (NSString *name in box.attrs) {
@@ -641,10 +832,16 @@ static void detachButton(DesktopButton *button) {
         for (NSUInteger i = 1; i < parts.count; i++) [field appendString:[parts[i] capitalizedString]];
         dataset[field] = box.attrs[name];
     }
-    NSDictionary *payload = @{@"type":@"click", @"dataset":dataset, @"current_target_dataset":dataset};
+    NSMutableDictionary *payload = [@{@"type":eventType, @"dataset":dataset, @"target_dataset":dataset,
+        @"current_target_dataset":dataset} mutableCopy];
+    if (edit) {
+        [payload addEntriesFromDictionary:@{@"value":value, @"checked":@(checked), @"target_tag":@"input",
+            @"current_target_tag":@"input", @"target_id":box.attrs[@"id"] ?: @"", @"current_target_id":box.attrs[@"id"] ?: @""}];
+    }
+    NSDictionary *entry = edit ?: box.definition;
     NSArray *args = nil;
-    if ([box.definition[@"row_context"] boolValue] && box.rowArguments) args = [box.rowArguments arrayByAddingObject:payload];
-    else if ([box.definition[@"event_args"] intValue]) args = @[payload];
+    if ([entry[@"row_context"] boolValue] && box.rowArguments) args = [box.rowArguments arrayByAddingObject:payload];
+    else if (edit || [entry[@"event_args"] intValue]) args = @[payload];
     @try {
         [box.owner.vm activate:method arguments:args payload:payload];
         [self enqueueEvents:box.owner];
@@ -660,7 +857,7 @@ static void detachButton(DesktopButton *button) {
 - (void)showFailure:(NSString *)reason {
     _failureReason = [reason copy];
     NSLog(@"Mochi desktop: %@", reason);
-    for (NSButton *button in _buttons.allValues) button.enabled = NO;
+    for (NSControl *control in _controls.allValues) control.enabled = NO;
     NSTextField *error = [NSTextField wrappingLabelWithString:reason];
     error.frame = self.bounds;
     error.drawsBackground = YES;
@@ -709,8 +906,9 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
     _root = nil;
     [_pendingEvents removeAllObjects];
     self.window.initialFirstResponder = nil;
-    for (DesktopButton *button in _buttons.allValues) detachButton(button);
-    [_buttons removeAllObjects];
+    for (NSControl *control in _controls.allValues) detachControl(control);
+    _labelTargets = nil;
+    [_controls removeAllObjects];
     _accessibles = nil;
     _commands = nil;
 #ifdef MOCHI_DESKTOP_CAPTURE

@@ -254,11 +254,16 @@ class MrbcCompiler
     project_dir : String,
   ) : String
     components = graph.component_order.to_h { |component| {component.manifest.tag_name, component.manifest} }
-    receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject(&.includes?('.')).to_set
+    receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject { |name| name.empty? || name.includes?('.') }.to_set
     graph.component_order.each do |component|
       manifest = component.manifest
       profile = component.portable_profile.not_nil!
       profile.validate_template(components, receivers)
+      if profile.editing && @render_target.dom?
+        graph.ensure_capability("editing")
+        graph.capabilities["editing"].packages << manifest.package_id.not_nil!
+        manifest.capabilities << "editing"
+      end
       composition = profile.compose_styles(component.absolute_path, staged_root)
       manifest.css = component.css = composition.css
       manifest.style_resources = composition.resources
@@ -287,6 +292,7 @@ class MrbcCompiler
       fonts.resolve(manifest.portable_nodes.not_nil!)
       document_style = fonts.document_stylesheet(document_css)
       manifest.css = component.css = fonts.browser_css(manifest.css, window.try(&.host_css) || "")
+      manifest.css = component.css = PortableStyles::EDITOR_CSS + manifest.css if profile.editing
       manifest.font_resources = fonts.resources
       if resource = document_style
         manifest.document_style = resource.id

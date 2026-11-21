@@ -121,3 +121,9 @@ grep -qF "inspector_test.rb:7 (step 6 assert_text [data-view='selection']): expe
 grep -qF "(step 2 click [data-id='99']): selector matched no accessible control or text" "$log"
 grep -qF "(step 2 click .record): unsupported desktop selector" "$log"
 grep -qF "(step 2 click [data-view='selection']): selector must identify an accessible button" "$log"
+
+editor="$PWD/e2e/fixtures/clay_editor"
+compiler/mochi --target=desktop -i "$editor" -o "$work/Editor bundle"
+runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/editor.m "$work/editor"
+"$work/editor" "$work/Editor bundle/Mochi.app/Contents/Resources"
+compiler/mochi test --target=desktop -i "$editor" --test-file=editor_test.rb

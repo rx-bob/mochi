@@ -111,6 +111,25 @@ profile currently supports child tags outside keyed rows.
 See the [station inspector](../e2e/fixtures/clay_inspector) for a working
 project and its shared Ruby scenario.
 
+## Text fields and checkboxes
+
+Use a text `input` with `bind:value` and an optional `oninput` handler.
+Use `type="checkbox"` with `bind:checked` and an optional `onchange`
+handler. Associate a text-only `label` using `for` and the input's
+`id`, or supply `aria-label`. Bind `disabled` to a Ruby Boolean to
+control editing and keyboard activation.
+
+Ordinary text edits and paste commit on input. IME marks remain in the host
+editor until the composition commits. The Ruby handler runs once with the
+new value already installed. Checkbox activation installs the checked
+Boolean before its handler runs. Unrelated patches preserve editor identity,
+focus, selection and marked text. AppKit uses the native field editor and
+switch control, with standard Edit menu shortcuts. The web editing adapter
+loads with the first portable component that uses these bindings.
+
+The [standalone station editor](../e2e/fixtures/clay_editor) runs the same
+Ruby edit scenario on both targets.
+
 ## Native development build
 
 The AppKit host links a matching `mochi-gvm` source checkout. Build its

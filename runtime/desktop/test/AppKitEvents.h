@@ -1,6 +1,6 @@
 #import <AppKit/AppKit.h>
 
-static inline void click(NSWindow *window, NSButton *target) {
+static inline void click(NSWindow *window, NSView *target) {
     NSPoint middle = NSMakePoint(NSMidX(target.bounds), NSMidY(target.bounds));
     NSPoint point = [target convertPoint:middle toView:nil];
     NSEvent *(^event)(NSEventType) = ^(NSEventType type) {
