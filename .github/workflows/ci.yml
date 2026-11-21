@@ -285,13 +285,24 @@ jobs:
           test -n "$goose_bin"
           dirname "$goose_bin" >> "$GITHUB_PATH"
 
-      - name: Prepare the compiler and both GVM targets
+      - name: Build libpftrace on macOS
+        working-directory: fragments/vendor/libpftrace
+        run: zig build
+
+      - name: Build mruby host compiler on macOS
+        working-directory: build_wasm/mruby/src
         run: |
-          (cd fragments/vendor/libpftrace && zig build)
-          (cd build_wasm/mruby/src && ruby minirake -j2)
+          ruby minirake -j2
           test -x "$MRBC"
+
+      - name: Build the pinned GVM runtime on macOS
+        working-directory: mochi-gvm
+        run: |
           export PATH="$EMSDK/upstream/bin:$PATH"
-          (cd mochi-gvm && goose run scripts/build_wasm.goose)
+          goose run scripts/build_wasm.goose
+
+      - name: Prepare Mochi compiler sources on macOS
+        run: |
           (cd compiler && shards install)
           ruby scripts/fragments_generator.rb
           crystal tool format compiler/src/generated
