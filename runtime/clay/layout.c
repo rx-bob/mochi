@@ -8,6 +8,7 @@ void mochi_clay_rectangle(int node, float x, float y, float width, float height)
 void mochi_clay_line(const char *text, int length, int font, float x, float y, float height);
 void mochi_clay_fail(const char *message, int length);
 
+enum { ELEMENT_CAPACITY = 512 };
 static unsigned char arena[1024 * 1024];
 static char strings[64 * 1024];
 static Clay_RenderCommandArray commands;
@@ -21,7 +22,7 @@ static void layout_error(Clay_ErrorData error) {
 }
 
 void mochi_clay_init(void) {
-    Clay_SetMaxElementCount(512);
+    Clay_SetMaxElementCount(ELEMENT_CAPACITY);
     Clay_SetMaxMeasureTextCacheWordCount(4096);
     if (Clay_MinMemorySize() > sizeof(arena)) {
         Clay_String msg = CLAY_STRING("Clay arena too small");
@@ -39,29 +40,46 @@ int mochi_clay_string_capacity(void) { return sizeof(strings); }
 void mochi_clay_begin(float width) {
     // node and font indices are local to the current traversal.
     Clay_ResetMeasureTextCache();
+    // The host owns scroll position. Clay only measures the content for this frame.
+    Clay_GetCurrentContext()->scrollContainerDatas.length = 0;
     Clay_SetLayoutDimensions((Clay_Dimensions){width, 65535});
     Clay_BeginLayout();
 }
 
-void mochi_clay_open_box(int node, int column, int stretch, float width, float height,
+static void require_element(void) {
+    // Clay reserves the last slot and opens one implicit window element.
+    if (Clay_GetCurrentContext()->layoutElements.length >= ELEMENT_CAPACITY - 1) {
+        Clay_String message = CLAY_STRING("Clay layout element limit exceeded (510 boxes and text leaves per frame, including the app wrapper)");
+        mochi_clay_fail(message.chars, message.length);
+    }
+}
+
+void mochi_clay_open_box(int node, int column, int stretch, float width, float height, float max_height, int scroll,
                                int left, int right, int top, int bottom, int gap) {
+    require_element();
     Clay__OpenElement();
     Clay__ConfigureOpenElement((Clay_ElementDeclaration){
         .id = CLAY_IDI("node", node),
         .layout = {
             .sizing = {width >= 0 ? CLAY_SIZING_FIXED(width) : stretch ? CLAY_SIZING_GROW(0) : CLAY_SIZING_FIT(0),
-                       height >= 0 ? CLAY_SIZING_FIXED(height) : CLAY_SIZING_FIT(0)},
+                       height >= 0 ? CLAY_SIZING_FIXED(height) : CLAY_SIZING_FIT(0, max_height)},
             .layoutDirection = column ? CLAY_TOP_TO_BOTTOM : CLAY_LEFT_TO_RIGHT,
             .padding = {left, right, top, bottom}, .childGap = gap
         },
+        .clip = {.vertical = scroll},
         // The painter resolves CSS colors. Emit bounds even for transparent boxes.
         .backgroundColor = {0, 0, 0, 255}, .userData = (void *)(uintptr_t)node
     });
 }
 
 void mochi_clay_text_leaf(int offset, int length, int font, int line_height) {
+    require_element();
     CLAY_TEXT(((Clay_String){false, length, strings + offset}),
               CLAY_TEXT_CONFIG({.fontId = font, .lineHeight = line_height}));
+}
+
+float mochi_clay_content_height(int node) {
+    return Clay_GetScrollContainerData(CLAY_IDI("node", node)).contentDimensions.height;
 }
 
 void mochi_clay_close_box(void) { Clay__CloseElement(); }

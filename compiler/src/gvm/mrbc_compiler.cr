@@ -293,7 +293,9 @@ class MrbcCompiler
       document_css = window ? "body:has(> #{project.root}){margin:0;background:#ffffff}\n" : ""
       fonts.resolve(manifest.portable_nodes.not_nil!)
       document_style = fonts.document_stylesheet(document_css)
-      manifest.css = component.css = fonts.browser_css(manifest.css, window.try(&.host_css) || "")
+      host_css = window.try(&.host_css) || ""
+      host_css += ":host{container:mochi-portable-root/inline-size}" if manifest.tag_name == project.root
+      manifest.css = component.css = fonts.browser_css(manifest.css, host_css)
       manifest.css = component.css = PortableStyles::EDITOR_CSS + manifest.css if profile.editing
       manifest.font_resources = fonts.resources
       if resource = document_style

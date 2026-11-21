@@ -1,0 +1,17 @@
+Mochi::Test.test("reveals the last keyed station and clamps a shortened list") do
+  mount "record-inspector"
+  click "[data-list='toggle']"
+  checkpoint "expanded"
+  focus "[data-id='23']"
+  press "Tab"
+  assert_focused "[data-id='24']"
+  checkpoint "focused-bottom"
+  press "Space"
+  assert_focused "[data-id='24']"
+  assert_attribute "[data-id='24']", "aria-pressed", "true"
+  assert_text "[data-view='selection']", "Selected station 24"
+  checkpoint "selected-bottom"
+  click "[data-list='toggle']"
+  assert_text "[data-list='toggle']", "Show more stations"
+  checkpoint "shortened"
+end

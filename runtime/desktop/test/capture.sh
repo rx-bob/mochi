@@ -21,3 +21,10 @@ wrap_widths=$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV.fetch(0))).fetch("w
 for width in $wrap_widths; do
   "$work/replay" "$work/bundle/Stations.app/Contents/Resources" "$output/test-plan.json" "$output/native-1x" "$width" 1
 done
+
+ruby runtime/test/mochi_test_recorder.rb "$fixture/test" "$output/scroll-plan.json" scroll_test.rb
+mkdir -p "$output/native-scroll"
+scroll_widths=$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV.fetch(0))).fetch("scrollWidths")' "$fixture/parity.json")
+for width in $scroll_widths; do
+  "$work/replay" "$work/bundle/Stations.app/Contents/Resources" "$output/scroll-plan.json" "$output/native-scroll" "$width" 2
+done

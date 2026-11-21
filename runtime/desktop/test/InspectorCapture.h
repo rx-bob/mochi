@@ -30,7 +30,8 @@ static void captureInspector(DesktopView *view, NSString *directory, NSInteger w
     if (attrs[@"data-id"]) focus = [@"station-" stringByAppendingString:attrs[@"data-id"]];
     NSError *error = nil;
     NSData *json = [NSJSONSerialization dataWithJSONObject:@{
-        @"width":@(width), @"height":@(height), @"scale":@(scale), @"focus":focus, @"controls":observations
+        @"width":@(width), @"height":@(height), @"scale":@(scale), @"focus":focus, @"controls":observations,
+        @"scroll":view.scrollObservation ?: NSNull.null
     } options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:&error];
     if (!json || ![json writeToFile:[stem stringByAppendingPathExtension:@"json"] options:NSDataWritingAtomic error:&error])
         DesktopFailure(error.localizedDescription);

@@ -66,17 +66,26 @@ class ClayProfile
     rules = [] of PortableStyleRule
     css = source.text
     scan = StringScanner.new(css)
+    max_width = nil
     until scan.eos?
       scan.skip(/(?:\s+|\/\*.*?\*\/)+/m)
       break if scan.eos?
       at = scan.byte_offset
+      if max_width && scan.skip('}')
+        max_width = nil
+        next
+      end
+      if !max_width && scan.scan(/@container\s*\(\s*max-width\s*:\s*([1-9][0-9]{0,3})px\s*\)\s*\{/)
+        max_width = scan[1].to_i
+        next
+      end
       selector = scan.scan(/\.[a-zA-Z_][\w-]*/)
       unless selector && scan.skip(/(?:\s|\/\*.*?\*\/)*\{/m)
         reject(source.path, line_at(css, at, source.line), "expected a single class selector")
       end
       declarations = {} of String => String
       locations = {} of String => String
-      rules << PortableStyleRule.new(selector[1..], declarations, locations)
+      rules << PortableStyleRule.new(selector[1..], declarations, locations, max_width)
       loop do
         scan.skip(/(?:\s+|\/\*.*?\*\/)+/m)
         break if scan.skip('}')
@@ -86,7 +95,7 @@ class ClayProfile
           reject(source.path, line_at(css, at, source.line), "invalid style declaration")
         end
         value = raw.gsub(/\/\*.*?\*\//m, " ").strip
-        unless supported_style?(name, value)
+        unless supported_style?(name, value) && (!max_width || name == "flex-direction")
           reject(source.path, line_at(css, at, source.line), "unsupported CSS '#{name}: #{value}'")
         end
         if name.in?("font-family", "font-weight")
@@ -101,7 +110,7 @@ class ClayProfile
 
   private def normalize_style(name : String, value : String) : String
     case name
-    when "width", "height", "gap", "padding", "font-size", "line-height"
+    when "width", "height", "max-height", "gap", "padding", "font-size", "line-height"
       value == "auto" ? value : "#{value.to_i(strict: false)}px"
     when "color", "background-color"
       value.downcase
@@ -116,9 +125,12 @@ class ClayProfile
     case name
     when "display"                   then value == "flex"
     when "flex-direction"            then value.in?("column", "row")
+    when "overflow-y"                then value == "auto"
     when "color", "background-color" then value.matches?(/\A#[0-9a-fA-F]{6}\z/)
     when "width", "height"
       value == "auto" || value.matches?(/\A(?:[0-9]{1,4}px|0)\z/)
+    when "max-height"
+      value.matches?(/\A[0-9]{1,4}px\z/) && value.to_i(strict: false) > 0
     when "gap", "padding", "font-size", "line-height"
       value.matches?(/\A(?:[0-9]{1,4}px|0)\z/)
     when "font-family"
@@ -208,7 +220,7 @@ class ClayProfile
       at = scan.byte_offset
       name = scan.scan(/[\w:.-]+/)
       unless name && (name == "class" || name.matches?(/\A(?:aria-|data-(?!mochi-))[a-z][a-z0-9-]*\z/) ||
-             (name == "onclick" && tag == "button") || child_attribute?(name, child) ||
+             (tag == "button" && name.in?("onclick", "tabindex")) || child_attribute?(name, child) ||
              (tag == "label" && name == "for") ||
              (tag == "input" && name.in?("id", "type", "disabled", "bind:value", "bind:checked", "oninput", "onchange")))
         reject(@path, line_at(html, at, line), "unsupported attribute '#{name}' on <#{tag}>")
@@ -233,6 +245,9 @@ class ClayProfile
         end
       end
       attrs[name] = html.byte_slice(start, scan.byte_offset - start - 1)
+      if tag == "button" && name == "tabindex" && attrs[name] != "0"
+        reject(@path, line_at(html, at, line), "portable buttons accept only tabindex=\"0\"")
+      end
     end
     attrs
   end

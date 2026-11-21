@@ -76,7 +76,7 @@ static NSString *stepLocation(NSDictionary *step, NSUInteger number) {
 #ifdef MOCHI_DESKTOP_CAPTURE
     if (self.captureDirectory) {
         _window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
-        [_window setContentSize:NSMakeSize(self.captureWidth, 660)];
+        [_window setContentSize:NSMakeSize(self.captureWidth, 780)];
     }
 #endif
     [_window makeKeyAndOrderFront:nil];

@@ -39,7 +39,12 @@
         [NSBezierPath strokeRect:NSInsetRect(self.bounds, 2, 2)];
     }
 }
-- (BOOL)becomeFirstResponder { self.needsDisplay = YES; return [super becomeFirstResponder]; }
+- (BOOL)becomeFirstResponder {
+    if (![super becomeFirstResponder]) return NO;
+    if (self.enclosingScrollView) [self scrollRectToVisible:self.bounds];
+    self.needsDisplay = YES;
+    return YES;
+}
 - (BOOL)resignFirstResponder { self.needsDisplay = YES; return [super resignFirstResponder]; }
 @end
 
@@ -50,6 +55,12 @@
 @end
 
 @implementation DesktopField
+- (BOOL)becomeFirstResponder {
+    if (![super becomeFirstResponder]) return NO;
+    if (self.enclosingScrollView) [self scrollRectToVisible:self.bounds];
+    return YES;
+}
+
 - (void)applyValue:(NSString *)value {
     if ([self.renderedValue isEqual:value]) return;
     NSTextView *editor = (NSTextView *)self.currentEditor;
@@ -140,6 +151,7 @@ void DesktopInstallEditMenu(NSMenu *mainMenu) {
 @property(nonatomic, copy) NSDictionary *attrs, *definition;
 @property(nonatomic, copy) NSArray *rowArguments;
 @property(nonatomic, strong) DesktopMount *owner;
+@property(nonatomic) BOOL insideScroll;
 #ifdef MOCHI_DESKTOP_CAPTURE
 @property(nonatomic, strong) NSMutableArray<NSString *> *lines;
 @property(nonatomic, strong) NSMutableArray<NSArray<NSNumber *> *> *lineFrames;
@@ -160,12 +172,38 @@ static DesktopBox *controlBox(id control) {
 
 // Clay invokes the host synchronously, on the AppKit thread, during one layout.
 static NSMutableArray<DesktopBox *> *frameBoxes;
-static NSMutableArray *paintCommands;
+static NSMutableArray *paintCommands, *scrollCommands;
+static NSDictionary *layoutScene, *layoutNode;
+
+static void paintDesktopCommands(NSArray *commands);
+
+@interface DesktopScrollDocument : NSView
+@property(nonatomic, copy) NSArray *commands;
+@property(nonatomic) NSPoint layoutOrigin;
+@end
+@implementation DesktopScrollDocument
+- (BOOL)isFlipped { return YES; }
+- (void)drawRect:(NSRect)dirty {
+    CGContextRef context = NSGraphicsContext.currentContext.CGContext;
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, -self.layoutOrigin.x, -self.layoutOrigin.y);
+    paintDesktopCommands(self.commands);
+    CGContextRestoreGState(context);
+}
+@end
 
 static NSString *utf8(const char *bytes, int length) {
     return [[NSString alloc] initWithBytes:bytes length:length encoding:NSUTF8StringEncoding];
 }
-void mochi_clay_fail(const char *message, int length) { DesktopFailure(utf8(message, length)); }
+static NSString *layoutLocation(NSDictionary *scene, NSDictionary *node) {
+    NSDictionary *span = node[@"span"];
+    return [NSString stringWithFormat:@"%@:%@ (%@)", span[@"file"] ?: scene[@"source"],
+            span[@"line"] ?: @1, scene[@"class"]];
+}
+static void layoutFailure(NSString *reason) {
+    DesktopFailure(layoutScene ? [NSString stringWithFormat:@"%@: %@", layoutLocation(layoutScene, layoutNode), reason] : reason);
+}
+void mochi_clay_fail(const char *message, int length) { layoutFailure(utf8(message, length)); }
 float mochi_clay_measure(const char *text, int length, int font) {
     DesktopBox *box = frameBoxes[font];
     id line = [box.typography line:utf8(text, length) color:box.color];
@@ -174,7 +212,8 @@ float mochi_clay_measure(const char *text, int length, int font) {
 void mochi_clay_rectangle(int node, float x, float y, float width, float height) {
     DesktopBox *box = frameBoxes[node];
     box.frame = NSMakeRect(x, y, width, height);
-    if (box.background) [paintCommands addObject:@{@"rect":[NSValue valueWithRect:box.frame], @"fill":box.background}];
+    if (box.background) [(box.insideScroll ? scrollCommands : paintCommands)
+        addObject:@{@"rect":[NSValue valueWithRect:box.frame], @"fill":box.background}];
 }
 void mochi_clay_line(const char *text, int length, int font, float x, float y, float height) {
     DesktopBox *box = frameBoxes[font];
@@ -196,7 +235,8 @@ void mochi_clay_line(const char *text, int length, int font, float x, float y, f
     }
     [box.lineFaces addObject:faces];
 #endif
-    [paintCommands addObject:@{@"point":[NSValue valueWithPoint:NSMakePoint(x, baseline)], @"line":line}];
+    [(box.insideScroll ? scrollCommands : paintCommands)
+        addObject:@{@"point":[NSValue valueWithPoint:NSMakePoint(x, baseline)], @"line":line}];
 }
 
 static NSColor *color(NSNumber *rgb) {
@@ -222,7 +262,14 @@ static NSString *displayValue(id value) {
     NSMutableDictionary<NSString *, NSControl *> *_controls;
     NSArray<NSDictionary *> *_labelTargets;
     NSArray *_commands, *_accessibles;
-    int _textUsed;
+    NSScrollView *_scrollView;
+    DesktopScrollDocument *_scrollDocument;
+    NSString *_scrollKey;
+    CGFloat _layoutWidth;
+    int _textUsed, _scrollNode;
+#ifdef MOCHI_DESKTOP_CAPTURE
+    NSArray<DesktopBox *> *_observedBoxes;
+#endif
 }
 
 - (void)viewDidMoveToWindow {
@@ -351,13 +398,18 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             for (NSNumber *index in lookup[name]) [matched addIndex:index.unsignedIntegerValue];
         }
         [matched enumerateIndexesUsingBlock:^(NSUInteger index, BOOL *stop) {
-            [style addEntriesFromDictionary:rules[index]];
+            [self applyStyle:rules[index] to:style];
         }];
     } else {
         for (NSNumber *index in node[@"styles"])
-            [style addEntriesFromDictionary:rules[index.unsignedIntegerValue]];
+            [self applyStyle:rules[index.unsignedIntegerValue] to:style];
     }
     return style;
+}
+
+- (void)applyStyle:(NSDictionary *)rule to:(NSMutableDictionary *)style {
+    NSNumber *maxWidth = rule[@"max_width"];
+    if (!maxWidth || _layoutWidth <= maxWidth.doubleValue) [style addEntriesFromDictionary:rule];
 }
 
 - (DesktopTypography *)typographyFor:(NSDictionary *)style scene:(NSDictionary *)scene {
@@ -479,7 +531,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
 
 - (void)layoutNodes:(NSArray *)nodes parent:(NSDictionary *)parent stretch:(BOOL)stretch
               scope:(NSString *)scope slots:(NSArray *)slots arguments:(NSArray *)rowArgs
-              owner:(DesktopMount *)owner seen:(NSMutableSet<NSString *> *)seen {
+              owner:(DesktopMount *)owner seen:(NSMutableSet<NSString *> *)seen insideScroll:(BOOL)insideScroll {
     DesktopVM *vm = owner.vm;
     for (NSDictionary *node in nodes) {
         NSString *type = node[@"type"];
@@ -488,7 +540,8 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             NSString *value = vm.values[node[@"binding"]];
             NSInteger index = [value isEqual:@"true"] ? 0 : value.integerValue;
             if (([value isEqual:@"true"] || [value isEqual:@(index).stringValue]) && index >= 0 && index < (NSInteger)[node[@"branches"] count])
-                [self layoutNodes:node[@"branches"][index] parent:parent stretch:stretch scope:key slots:slots arguments:rowArgs owner:owner seen:seen];
+                [self layoutNodes:node[@"branches"][index] parent:parent stretch:stretch scope:key slots:slots
+                       arguments:rowArgs owner:owner seen:seen insideScroll:insideScroll];
             continue;
         }
         if ([type isEqual:@"each"]) {
@@ -507,7 +560,8 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
                 if ([keys containsObject:identity]) DesktopFailure([NSString stringWithFormat:@"%@: duplicate row key %@", vm.scene[@"source"], row[3]]);
                 [keys addObject:identity];
                 [self layoutNodes:node[@"nodes"] parent:parent stretch:stretch
-                            scope:[key stringByAppendingFormat:@":%@", identity] slots:row[1] arguments:@[row[0], @(index++)] owner:owner seen:seen];
+                            scope:[key stringByAppendingFormat:@":%@", identity] slots:row[1]
+                        arguments:@[row[0], @(index++)] owner:owner seen:seen insideScroll:insideScroll];
             }
             continue;
         }
@@ -525,6 +579,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         box.attrs = attrs;
         box.rowArguments = rowArgs;
         box.owner = owner;
+        box.insideScroll = insideScroll;
 #ifdef MOCHI_DESKTOP_CAPTURE
         box.lines = [NSMutableArray array];
         box.lineFrames = [NSMutableArray array];
@@ -538,6 +593,15 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         BOOL column = [(style[@"vertical"] ?: @(![style[@"flex"] boolValue])) boolValue];
         float width = [(style[@"width"] ?: @-1) floatValue];
         float height = [(style[@"height"] ?: @-1) floatValue];
+        float maxHeight = [style[@"max-height"] floatValue];
+        BOOL scroll = [style[@"scroll"] boolValue];
+        layoutScene = vm.scene;
+        layoutNode = node;
+        if (scroll) {
+            if (_scrollNode || !column || ![type isEqual:@"box"] || (height < 0 && maxHeight <= 0))
+                layoutFailure(@"vertical scrolling requires one column div with a bounded height");
+            _scrollNode = font;
+        }
         NSDictionary *edit = node[@"edit"];
         if (edit) {
             box.formValue = [self renderParts:edit[@"value"] slots:slots vm:vm];
@@ -548,13 +612,15 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         }
         if (width >= 0) width = MAX(width, 2 * pad);
         if (height >= 0) height = MAX(height, 2 * pad);
-        mochi_clay_open_box(font, column, stretch, width, height,
+        if (maxHeight > 0) maxHeight = MAX(maxHeight, 2 * pad);
+        mochi_clay_open_box(font, column, stretch, width, height, maxHeight, scroll,
                             pad, pad, pad, pad, [style[@"gap"] intValue]);
         if (childNode) {
             [self layoutNodes:child.vm.scene[@"nodes"] parent:@{} stretch:column
-                        scope:key slots:@[] arguments:nil owner:child seen:seen];
+                        scope:key slots:@[] arguments:nil owner:child seen:seen insideScroll:insideScroll];
         } else if ([type isEqual:@"box"]) {
-            [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots arguments:rowArgs owner:owner seen:seen];
+            [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots
+                     arguments:rowArgs owner:owner seen:seen insideScroll:insideScroll || scroll];
         } else if (!edit) {
             box.typography = [self typographyFor:style scene:vm.scene];
             NSMutableString *label = [NSMutableString string];
@@ -563,7 +629,9 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             NSArray *words = [label componentsSeparatedByCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" \t\n\r\f"]];
             box.label = [[words filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]] componentsJoinedByString:@" "];
             NSData *text = [box.label dataUsingEncoding:NSUTF8StringEncoding];
-            if (text.length > mochi_clay_string_capacity() - _textUsed) DesktopFailure(@"Clay frame exceeds its UTF-8 text capacity");
+            int textCapacity = mochi_clay_string_capacity();
+            if (text.length > textCapacity - _textUsed)
+                layoutFailure([NSString stringWithFormat:@"Clay layout UTF-8 text limit exceeded (%d bytes per frame)", textCapacity]);
             if (text.length) {
                 memcpy(mochi_clay_string_buffer() + _textUsed, text.bytes, text.length);
                 mochi_clay_text_leaf(_textUsed, (int)text.length, font, [(style[@"leading"] ?: @20) intValue]);
@@ -608,6 +676,8 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
 - (void)renderFrame {
     frameBoxes = [NSMutableArray arrayWithObject:[DesktopBox new]];
     paintCommands = [NSMutableArray array];
+    scrollCommands = [NSMutableArray array];
+    layoutScene = _root.vm.scene;
     @try {
         CGFloat width = self.bounds.size.width;
         mochi_clay_begin(width);
@@ -616,31 +686,81 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         CGFloat available = MAX(0, width - 2 * inset);
         NSNumber *cap = window[@"max_width"];
         CGFloat content = [cap isKindOfClass:NSNumber.class] ? MIN(available, cap.doubleValue) : available;
-        mochi_clay_open_box(0, 1, 1, content + 2 * inset, -1, inset, inset, inset, inset, 0);
+        _layoutWidth = content;
+        mochi_clay_open_box(0, 1, 1, content + 2 * inset, -1, 0, 0, inset, inset, inset, inset, 0);
         _textUsed = 0;
+        _scrollNode = 0;
         NSMutableSet *seen = [NSMutableSet set];
-        [self layoutNodes:_root.vm.scene[@"nodes"] parent:@{} stretch:YES scope:@"" slots:@[] arguments:nil owner:_root seen:seen];
+        [self layoutNodes:_root.vm.scene[@"nodes"] parent:@{} stretch:YES scope:@"" slots:@[]
+                 arguments:nil owner:_root seen:seen insideScroll:NO];
         mochi_clay_close_box();
+        layoutScene = _root.vm.scene;
+        layoutNode = nil;
         mochi_clay_end();
         mochi_clay_paint();
         [self disposeChildrenExcept:seen];
         _commands = [paintCommands copy];
+        [self updateScrollViewport];
         [self syncControls:frameBoxes];
 #ifdef MOCHI_DESKTOP_CAPTURE
-        [self observeLayout:frameBoxes];
+        _observedBoxes = [frameBoxes copy];
 #endif
         self.needsDisplay = YES;
     } @finally {
         frameBoxes = nil;
         paintCommands = nil;
+        scrollCommands = nil;
+        layoutScene = nil;
+        layoutNode = nil;
     }
 }
 
+- (void)updateScrollViewport {
+    DesktopBox *viewport = _scrollNode ? frameBoxes[_scrollNode] : nil;
+    if (![_scrollKey isEqual:viewport.key]) {
+        [_scrollView removeFromSuperview];
+        _scrollView = nil;
+        _scrollDocument = nil;
+        _scrollKey = viewport.key;
+    }
+    if (!viewport) return;
+
+    NSRect frame = viewport.frame;
+    if (!_scrollView) {
+        _scrollView = [[NSScrollView alloc] initWithFrame:frame];
+        _scrollView.drawsBackground = NO;
+        _scrollView.contentView.clipsToBounds = YES;
+        _scrollView.verticalScrollElasticity = NSScrollElasticityNone;
+        _scrollDocument = [[DesktopScrollDocument alloc] initWithFrame:NSZeroRect];
+        _scrollView.documentView = _scrollDocument;
+        [self addSubview:_scrollView];
+    }
+    NSClipView *clip = _scrollView.contentView;
+    CGFloat offset = clip.bounds.origin.y;
+    CGFloat height = MAX(frame.size.height, mochi_clay_content_height(_scrollNode));
+    if (!NSEqualRects(_scrollView.frame, frame)) _scrollView.frame = frame;
+    NSSize size = NSMakeSize(frame.size.width, height);
+    if (!NSEqualSizes(_scrollDocument.frame.size, size)) [_scrollDocument setFrameSize:size];
+    _scrollDocument.layoutOrigin = frame.origin;
+    _scrollDocument.commands = scrollCommands;
+    _scrollDocument.needsDisplay = YES;
+    NSPoint clamped = NSMakePoint(0, MIN(MAX(0, offset), height - frame.size.height));
+    if (!NSEqualPoints(clip.bounds.origin, clamped)) [clip scrollToPoint:clamped];
+    [_scrollView reflectScrolledClipView:clip];
+}
+
 #ifdef MOCHI_DESKTOP_CAPTURE
-- (void)observeLayout:(NSArray<DesktopBox *> *)boxes {
+- (NSDictionary *)scrollObservation {
+    if (!_scrollView) return nil;
+    NSRect frame = _scrollView.frame;
+    return @{@"rect":@[@(frame.origin.x), @(frame.origin.y), @(frame.size.width), @(frame.size.height)],
+             @"contentHeight":@(NSHeight(_scrollDocument.frame)), @"offset":@(_scrollView.contentView.bounds.origin.y)};
+}
+
+- (NSArray<NSDictionary *> *)layoutObservations {
     NSMutableArray *controls = [NSMutableArray array];
     NSUInteger leaf = 0;
-    for (DesktopBox *box in boxes) {
+    for (DesktopBox *box in _observedBoxes) {
         id element = (box.label || box.formValue) ? _accessibles[leaf++] : nil;
         NSDictionary *attrs = box.attrs;
         NSString *key = attrs[@"data-view"];
@@ -648,16 +768,21 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         if (attrs[@"data-id"]) key = [@"station-" stringByAppendingString:attrs[@"data-id"]];
         if (!key) continue;
         NSRect frame = box.frame;
+        CGFloat offset = box.insideScroll ? _scrollView.contentView.bounds.origin.y : 0;
+        frame.origin.y -= offset;
         NSString *role = nil;
         NSString *name = nil;
         if ([element isKindOfClass:NSControl.class]) {
-            frame = [element frame];
             role = [[element accessibilityRole] isEqual:NSAccessibilityButtonRole] ? @"button" : [element accessibilityRole];
             name = [element accessibilityLabel];
         } else if (element) {
-            frame = [element accessibilityFrameInParentSpace];
             role = [[element accessibilityRole] isEqual:NSAccessibilityStaticTextRole] ? @"text" : [element accessibilityRole];
             name = [element accessibilityValue];
+        }
+        NSMutableArray *lines = [NSMutableArray array];
+        for (NSArray *line in box.lineFrames) {
+            [lines addObject:@[line[0], @([line[1] doubleValue] - offset), line[2],
+                               line[3], @([line[4] doubleValue] - offset)]];
         }
         NSDictionary *control = @{
             @"id":key, @"rect":@[@(frame.origin.x), @(frame.origin.y), @(frame.size.width), @(frame.size.height)],
@@ -667,11 +792,11 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
                 @(lround(box.color.greenComponent * 255)), @(lround(box.color.blueComponent * 255))],
             @"fill":box.background ? @[@(lround(box.background.redComponent * 255)),
                 @(lround(box.background.greenComponent * 255)), @(lround(box.background.blueComponent * 255))] : NSNull.null,
-            @"lineFrames":box.lineFrames, @"lineFaces":box.lineFaces,
+            @"lineFrames":lines, @"lineFaces":box.lineFaces,
         };
         [controls addObject:control];
     }
-    _layoutObservations = [controls copy];
+    return controls;
 }
 #endif
 
@@ -710,7 +835,6 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
             field.usesSingleLineMode = YES;
             field.accessibilityRole = NSAccessibilityTextFieldRole;
             field.delegate = self;
-            [self addSubview:field];
         }
         field.item = box;
         NSFont *font = box.typography.fonts.firstObject;
@@ -735,7 +859,6 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
             }
             button.target = self;
             button.action = @selector(activate:);
-            [self addSubview:button];
         }
         button.item = box;
         button.title = box.label ?: @"";
@@ -754,7 +877,11 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
         control.enabled = enabled;
         if (!enabled && [control isKindOfClass:DesktopField.class]) [control abortEditing];
     }
-    if (!NSEqualRects(control.frame, box.frame)) control.frame = box.frame;
+    NSView *parent = box.insideScroll ? _scrollDocument : self;
+    if (control.superview != parent) [parent addSubview:control];
+    NSRect frame = box.frame;
+    if (box.insideScroll) frame = NSOffsetRect(frame, -_scrollDocument.layoutOrigin.x, -_scrollDocument.layoutOrigin.y);
+    if (!NSEqualRects(control.frame, frame)) control.frame = frame;
     return control;
 }
 
@@ -783,13 +910,15 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
             else control.nextKeyView = nil;
             [accessible addObject:control];
             for (DesktopBox *label in associated)
-                [targets addObject:@{@"frame":[NSValue valueWithRect:label.frame], @"control":control}];
+                [targets addObject:@{@"box":label, @"control":control}];
         } else if (box.label) {
             DesktopLabel *label = [DesktopLabel new];
             label.accessibilityRole = NSAccessibilityStaticTextRole;
             label.accessibilityValue = box.label;
-            label.accessibilityParent = self;
-            label.accessibilityFrameInParentSpace = box.frame;
+            label.accessibilityParent = box.insideScroll ? _scrollDocument : self;
+            NSRect frame = box.frame;
+            if (box.insideScroll) frame = NSOffsetRect(frame, -_scrollDocument.layoutOrigin.x, -_scrollDocument.layoutOrigin.y);
+            label.accessibilityFrameInParentSpace = frame;
             label.attributes = box.attrs;
             label.owner = box.owner;
             [accessible addObject:label];
@@ -806,7 +935,11 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
 - (void)mouseDown:(NSEvent *)event {
     NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
     for (NSDictionary *label in _labelTargets) {
-        if (!NSPointInRect(point, [label[@"frame"] rectValue])) continue;
+        DesktopBox *box = label[@"box"];
+        NSRect frame = box.frame;
+        if (box.insideScroll) frame = NSIntersectionRect(_scrollView.frame,
+            NSOffsetRect(frame, 0, -_scrollView.contentView.bounds.origin.y));
+        if (!NSPointInRect(point, frame)) continue;
         NSControl *control = label[@"control"];
         if (!control.enabled) return;
         [self.window makeFirstResponder:control];
@@ -885,7 +1018,7 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
 }
 
 - (void)setFrameSize:(NSSize)size {
-    BOOL resized = self.frame.size.width != size.width;
+    BOOL resized = !NSEqualSizes(self.frame.size, size);
     [super setFrameSize:size];
     if (resized) {
         @try { [self refresh]; }
@@ -900,11 +1033,9 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
     return CGContextConvertRectToUserSpace(context, CGRectMake(left, top, right - left, bottom - top));
 }
 
-- (void)drawRect:(NSRect)dirty {
-    [(_program.scene[@"window"] ? NSColor.whiteColor : NSColor.windowBackgroundColor) setFill];
-    NSRectFill(dirty);
+static void paintDesktopCommands(NSArray *commands) {
     CGContextRef context = NSGraphicsContext.currentContext.CGContext;
-    for (NSDictionary *command in _commands) {
+    for (NSDictionary *command in commands) {
         if (command[@"rect"]) {
             [command[@"fill"] setFill];
             NSRectFill(deviceAlignedRect(context, [command[@"rect"] rectValue]));
@@ -920,6 +1051,13 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
         }
     }
 }
+
+- (void)drawRect:(NSRect)dirty {
+    [(_program.scene[@"window"] ? NSColor.whiteColor : NSColor.windowBackgroundColor) setFill];
+    NSRectFill(dirty);
+    paintDesktopCommands(_commands);
+}
+
 - (void)close {
     DesktopVM *vm = _root.vm;
     _root = nil;
@@ -928,10 +1066,14 @@ static NSRect deviceAlignedRect(CGContextRef context, NSRect rect) {
     for (NSControl *control in _controls.allValues) detachControl(control);
     _labelTargets = nil;
     [_controls removeAllObjects];
+    [_scrollView removeFromSuperview];
+    _scrollView = nil;
+    _scrollDocument = nil;
+    _scrollKey = nil;
     _accessibles = nil;
     _commands = nil;
 #ifdef MOCHI_DESKTOP_CAPTURE
-    _layoutObservations = nil;
+    _observedBoxes = nil;
 #endif
     [self disposeChildrenExcept:nil];
     @try { [vm close]; }

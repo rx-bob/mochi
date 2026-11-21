@@ -10,7 +10,7 @@ require "zlib"
 module ToolchainArchive
   SCHEMA = 1
   MANIFEST_SCHEMA = 3
-  SCENE_SCHEMA = 7
+  SCENE_SCHEMA = 8
   NATIVE_ABI = 3
   CORE_PATHS = %w[compiler mrbc gvm_wasm gvm_js gvm_capacity loader woff2_decoder].freeze
   DESKTOP_PATHS = %w[host replay packager clay_license].freeze

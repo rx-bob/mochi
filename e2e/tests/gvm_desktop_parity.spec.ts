@@ -30,7 +30,7 @@ for (const { width, scale } of sizes) {
       fs.writeFileSync(entry, html);
       const sizedBrowser = {
         newPage: () => browser.newPage({
-          viewport: { width, height: 660 }, deviceScaleFactor: scale, colorScheme: "light",
+          viewport: { width, height: 780 }, deviceScaleFactor: scale, colorScheme: "light",
         }),
       };
       const captures: { name: string; dom: Capture; native: Capture; mismatches: unknown[] }[] = [];
@@ -82,7 +82,12 @@ for (const { width, scale } of sizes) {
           expect(control("panel").rect.slice(0, 3)).toEqual([24, 24, contentWidth]);
           expect(control("actions").rect[0]).toBe(40);
           expect(control("action-reverse").rect.slice(2)).toEqual([108, 38]);
-          expect(control("action-details").rect[0] - control("action-reverse").rect[0]).toBe(116);
+          if (contentWidth <= 315) {
+            expect(control("action-details").rect[0]).toBe(control("action-reverse").rect[0]);
+            expect(control("action-details").rect[1] - control("action-reverse").rect[1]).toBe(46);
+          } else {
+            expect(control("action-details").rect[0] - control("action-reverse").rect[0]).toBe(116);
+          }
           expect(control("station-02").rect[2]).toBe(contentWidth - 32);
           for (const id of ["action-reverse", "action-details"]) {
             const action = control(id);
@@ -116,6 +121,101 @@ for (const { width, scale } of sizes) {
     });
   });
 }
+
+function visibleStations(capture: Capture) {
+  const [, y, , height] = capture.scroll!.rect;
+  return capture.controls.filter(control => control.id.startsWith("station-")).flatMap(control => {
+    const [left, top, width, rowHeight] = control.rect;
+    const visibleTop = Math.max(y, top);
+    const visibleBottom = Math.min(y + height, top + rowHeight);
+    return visibleBottom > visibleTop ? [{
+      id: control.id, rect: [left, visibleTop, width, visibleBottom - visibleTop],
+      clipped: visibleBottom - visibleTop < rowHeight,
+    }] : [];
+  });
+}
+
+for (const width of matrix.scrollWidths as number[]) {
+  test(`inspector capture parity for station scrolling at ${width} points`, async ({ browser, browserName }) => {
+    test.skip(!artifactRoot, "requires native scroll captures");
+    const output = path.join(artifactRoot!, browserName + "-scroll");
+    fs.mkdirSync(output, { recursive: true });
+    const plan = JSON.parse(fs.readFileSync(path.join(artifactRoot!, "scroll-plan.json"), "utf8"));
+
+    await withCompiledProject(fixture, async (url, bundle) => {
+      const entry = path.join(bundle, "index.html");
+      fs.writeFileSync(entry, fs.readFileSync(entry, "utf8").replace("<record-inspector></record-inspector>", ""));
+      const sizedBrowser = { newPage: () => browser.newPage({ viewport: { width, height: 780 }, deviceScaleFactor: 2 }) };
+      const offsets = new Map<string, number>();
+      await runCase(sizedBrowser, browserName, url, plan.tests[0], async (page: Page, name: string) => {
+        const stem = `${width}-${name}`;
+        const domStem = path.join(output, stem);
+        const nativeStem = path.join(artifactRoot!, "native-scroll", stem);
+        const dom = await captureDOM(page, domStem);
+        const native: Capture = JSON.parse(fs.readFileSync(nativeStem + ".json", "utf8"));
+        expect(dom.scroll).toEqual(native.scroll);
+        const visible = visibleStations(dom);
+        expect(visible).toEqual(visibleStations(native));
+        const paint = await comparePaint(page, dom, native, domStem + ".png", nativeStem + ".png", domStem + ".diff.png", matrix);
+        expect(paint.solids).toEqual([]);
+        const scroll = dom.scroll!;
+        offsets.set(name, scroll.offset);
+        if (name.endsWith("-bottom")) {
+          expect(dom.focus).toBe("station-24");
+          expect(native.focus).toBe(dom.focus);
+          expect(scroll.offset).toBe(scroll.contentHeight - scroll.rect[3]);
+          expect(visible.at(-1)).toMatchObject({ id: "station-24", clipped: false });
+          expect(visible[0].clipped).toBe(true);
+        }
+      });
+      expect(Array.from(offsets.keys())).toEqual(["expanded", "focused-bottom", "selected-bottom", "shortened"]);
+      expect(offsets.get("focused-bottom")).toBeGreaterThan(0);
+      expect(offsets.get("selected-bottom")).toBe(offsets.get("focused-bottom"));
+      expect(offsets.get("shortened")).toBe(0);
+    });
+  });
+}
+
+test("wheel scrolling, resize and a Ruby update preserve station focus and a valid offset", async ({ page }) => {
+  await withCompiledProject(fixture, async url => {
+    await page.setViewportSize({ width: 364, height: 660 });
+    await page.goto(url);
+    const host = page.locator("record-inspector");
+    const scroll = host.locator("[data-scroll=stations]");
+    const toggle = host.locator("[data-list=toggle]");
+    const details = host.getByRole("button", { name: "Details", exact: true });
+    const offset = () => scroll.evaluate(element => element.scrollTop);
+    const direction = () => host.locator(".actions").evaluate(element => getComputedStyle(element).flexDirection);
+
+    await expect.poll(direction).toBe("row");
+    await toggle.click();
+    await expect(host.locator(".record")).toHaveCount(18);
+    await scroll.hover();
+    await page.mouse.wheel(0, 100);
+    await expect.poll(offset).toBeGreaterThan(0);
+    const last = host.locator("[data-id='24']");
+    await host.locator("[data-id='23']").focus();
+    await page.keyboard.press("Tab");
+    await expect(last).toBeFocused();
+    const before = await last.elementHandle();
+    const bottom = await offset();
+    await details.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(host.locator("[data-view=details]")).toHaveText("Showing details for station 01");
+    expect(await offset()).toBe(bottom);
+    await page.keyboard.press("Space");
+    await expect(last).toHaveAttribute("aria-pressed", "true");
+    expect(await offset()).toBe(bottom);
+
+    await page.setViewportSize({ width: 363, height: 620 });
+    await expect.poll(direction).toBe("column");
+    await expect(last).toBeFocused();
+    expect(await last.evaluate((node, original) => node === original, before)).toBe(true);
+    expect(await scroll.evaluate(el => el.scrollTop <= el.scrollHeight - el.clientHeight)).toBe(true);
+    await toggle.click();
+    await expect(host.locator(".record")).toHaveCount(3);
+    await expect.poll(offset).toBe(0);
+  });
+});
 
 test("station inspector uses real DOM buttons and preserves keyed state through layout changes", async ({ page }) => {
   await withCompiledProject(fixture, async url => {

@@ -10,7 +10,7 @@ static void check(BOOL ok, NSString *why) {
 }
 
 static NSButton *button(DesktopView *view, NSString *prefix) {
-    for (NSButton *item in view.subviews) {
+    for (NSButton *item in view.accessibilityChildren) {
         if ([item isKindOfClass:NSButton.class] && [item.title hasPrefix:prefix]) return item;
     }
     DesktopFailure([@"Missing native button " stringByAppendingString:prefix]);
@@ -71,6 +71,96 @@ static void checkFailedMount(DesktopProgram *program) {
     check(mochi_component_count() == 0, @"first flush failure disposes the mounted instance");
 }
 
+static NSDictionary *probeNode(NSInteger identifier, NSString *text) {
+    return @{@"id":@(identifier), @"type":text ? @"label" : @"box",
+             @"nodes":text ? @[@{@"parts":@[text]}] : @[]};
+}
+
+static void checkLayoutLimits(NSURL *resources) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSURL *scratch = [files.temporaryDirectory URLByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    check([files copyItemAtURL:resources toURL:scratch error:nil], @"copy layout limit fixture");
+    @try {
+        NSURL *sceneURL = [scratch URLByAppendingPathComponent:@"scene.json"];
+        NSMutableDictionary *scene = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:sceneURL]
+            options:NSJSONReadingMutableContainers error:nil];
+        NSMutableDictionary *root = scene[@"components"][scene[@"root"]];
+        DesktopView *(^mount)(NSArray *) = ^DesktopView *(NSArray *nodes) {
+            root[@"nodes"] = nodes;
+            NSData *json = [NSJSONSerialization dataWithJSONObject:scene options:0 error:nil];
+            check([json writeToURL:sceneURL atomically:YES], @"write layout limit fixture");
+            return [[DesktopView alloc] initWithResources:scratch];
+        };
+
+        NSMutableArray *boxes = [NSMutableArray array];
+        for (NSInteger i = 0; i < 507; i++) [boxes addObject:probeNode(i, nil)];
+        [boxes addObject:probeNode(507, @"Exact element limit")];
+        DesktopView *exact = mount(boxes);
+        check(label(exact, @"Exact element limit"), @"510 elements render including the app wrapper");
+        [exact close];
+        [boxes addObject:probeNode(508, nil)];
+        expectComponentFailure(@"510 boxes and text leaves", ^{ mount(boxes); });
+        check(mochi_component_count() == 0, @"element overflow disposes the failed mount");
+
+        NSMutableArray *text = [NSMutableArray array];
+        NSString *kilobyte = [@"" stringByPaddingToLength:512 withString:@"é" startingAtIndex:0];
+        for (NSInteger i = 0; i < 64; i++) [text addObject:probeNode(i, kilobyte)];
+        exact = mount(text);
+        check(exact.accessibilityChildren.count == 64, @"65,536 bytes of text render after an element overflow");
+        [exact close];
+        text[63] = probeNode(63, [kilobyte stringByAppendingString:@"x"]);
+        expectComponentFailure(@"65536 bytes per frame", ^{ mount(text); });
+        check(mochi_component_count() == 0, @"text overflow disposes the failed mount");
+        text[63] = probeNode(63, kilobyte);
+        exact = mount(text);
+        check(exact.accessibilityChildren.count == 64, @"a fresh mount renders after text overflow");
+        [exact close];
+    } @finally {
+        [files removeItemAtURL:scratch error:nil];
+    }
+}
+
+static CGFloat scrollOffset(NSScrollView *scroll) { return scroll.contentView.bounds.origin.y; }
+
+static void checkScrolling(DesktopView *view, NSWindow *window) {
+    [window setContentSize:NSMakeSize(364, 540)];
+    NSButton *reverse = button(view, @"Reverse");
+    NSButton *details = button(view, @"Details");
+    check(details.frame.origin.x > reverse.frame.origin.x, @"actions stay in a row above 315 content points");
+    [window setContentSize:NSMakeSize(363, 540)];
+    check(details.frame.origin.x == reverse.frame.origin.x && details.frame.origin.y > reverse.frame.origin.y,
+          @"actions stack at 315 content points");
+
+    NSScrollView *scroll = button(view, @"Harbor").enclosingScrollView;
+    check([button(view, @"Show more stations") accessibilityPerformPress], @"expand station list");
+    check(scroll && scroll.contentView.bounds.size.height == 200 && scrollOffset(scroll) == 0,
+          @"expanded list keeps its bounded viewport");
+    NSButton *last = button(view, @"Station 24");
+    NSButton *clipped = button(view, @"Station 13");
+    NSPoint center = NSMakePoint(NSMidX(clipped.bounds), NSMidY(clipped.bounds));
+    NSPoint point = [clipped convertPoint:center toView:view];
+    check(NSPointInRect(point, view.bounds) && !NSPointInRect(point, scroll.frame) &&
+          [view hitTest:[view convertPoint:point toView:view.superview]] != clipped,
+          @"clipped station inside the window cannot receive a pointer hit");
+
+    [window makeFirstResponder:button(view, @"Station 23")];
+    press(window, @"\t", 48);
+    NSClipView *clip = scroll.contentView;
+    check(window.firstResponder == last && NSContainsRect(clip.documentVisibleRect, last.frame),
+          @"Tab reveals the last station");
+    CGFloat offset = scrollOffset(scroll);
+    check(offset == NSHeight(scroll.documentView.frame) - NSHeight(clip.bounds), @"last station reaches the end of the list");
+    press(window, @" ", 49);
+    check(label(view, @"Selected station 24") && scrollOffset(scroll) == offset, @"selection keeps scroll and focus");
+    check([details accessibilityPerformPress] && scrollOffset(scroll) == offset && window.firstResponder == last,
+          @"an unrelated component update keeps the offset");
+    [window setContentSize:NSMakeSize(364, 525)];
+    check(button(view, @"Station 24") == last && window.firstResponder == last &&
+          scrollOffset(scroll) <= NSHeight(scroll.documentView.frame) - NSHeight(clip.bounds), @"resize preserves keyed focus and clamps offset");
+    check([button(view, @"Show fewer stations") accessibilityPerformPress] && scrollOffset(scroll) == 0,
+          @"shortening clamps scroll to zero");
+}
+
 static void checkPatchBatches(NSDictionary *scene) {
     static const uint8_t payload[] = {
         1, 0, 3, 0, 0, 0, 'n', 'e', 'w',
@@ -91,6 +181,7 @@ static void checkPatchBatches(NSDictionary *scene) {
 
 static void inspect(NSURL *resources, NSString *capture) {
     checkSceneCompatibility(resources);
+    checkLayoutLimits(resources);
     DesktopProgram *program = [[DesktopProgram alloc] initWithResources:resources];
     check(mochi_component_count() == 0, @"program validation leaves no mounted instances");
     checkFailedMount(program);
@@ -107,11 +198,11 @@ static void inspect(NSURL *resources, NSString *capture) {
     [window makeKeyAndOrderFront:nil];
     [window display];
     check(window.isVisible && label(view, @"Selected station 01"), @"initial native frame");
-    NSArray *buttons = [view.subviews filteredArrayUsingPredicate:
+    NSArray *buttons = [view.accessibilityChildren filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(NSView *item, NSDictionary *unused) {
             return [item isKindOfClass:NSButton.class];
         }]];
-    check(buttons.count == 5, @"three station buttons and two inspector actions");
+    check(buttons.count == 6, @"three station buttons and three inspector actions");
     NSButton *harbor = button(view, @"Harbor");
     check([harbor.accessibilityValue boolValue], @"station 01 is initially pressed");
     NSButton *cafe = button(view, @"Café");
@@ -164,6 +255,7 @@ static void inspect(NSURL *resources, NSString *capture) {
     check(mochi_component_count() == 1 && button(replacement, @"Café") != cafe &&
           ![cafe accessibilityPerformPress] && label(replacement, @"Selected station 01"),
           @"stale row cannot dispatch after remount");
+    checkScrolling(replacement, window);
     [replacement close];
     check(mochi_component_count() == 0, @"remounted instance unregisters on close");
     [window close];
@@ -178,7 +270,7 @@ int main(int argc, const char **argv) {
         [NSApp finishLaunching];
         @try {
             inspect([NSURL fileURLWithPath:@(argv[1])], argc > 2 ? @(argv[2]) : nil);
-            puts("PASS native inspector: click, accessibility, keyed identity and focus, keyboard, resize, drawing, isolated mounts, failure recovery and teardown");
+            puts("PASS native inspector: input, scroll, resize, keyed focus, layout limits, recovery and teardown");
         } @catch (NSException *exception) {
             fprintf(stderr, "FAIL %s\n", exception.reason.UTF8String);
             return 1;

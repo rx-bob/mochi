@@ -82,6 +82,7 @@ runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/inspector.m "$work/tes
 export MOCHI_E2E_NODE_MODULES="$work/no-playwright"
 test_file=inspector_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file="$test_file"
+compiler/mochi test --target=desktop -i "$project" --test-file=scroll_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file=details_test.rb
 
 rejected="$work/Rejected details"

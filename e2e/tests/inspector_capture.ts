@@ -21,6 +21,7 @@ export type Capture = {
   scale: number;
   focus: string | null;
   controls: Control[];
+  scroll: { rect: Rect; contentHeight: number; offset: number } | null;
 };
 type Policy = { edgeTolerance: number; channelDelta: number; solidChannelDelta: number };
 type Mismatch = { control: string; check: string; dom: unknown; native: unknown };
@@ -95,7 +96,13 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
         ink: style.color.match(/\d+/g)!.map(Number) as RGB, lineFrames,
       };
     });
-    return { width: innerWidth, height: Math.ceil(panel.bottom + panel.top), scale: devicePixelRatio, focus, controls };
+    const viewport = focused.querySelector<HTMLElement>("[data-scroll=stations]");
+    const bounds = viewport?.getBoundingClientRect();
+    const scroll = viewport && bounds ? {
+      rect: [bounds.x, bounds.y, bounds.width, bounds.height] as Rect,
+      contentHeight: viewport.scrollHeight, offset: viewport.scrollTop,
+    } : null;
+    return { width: innerWidth, height: Math.ceil(panel.bottom + panel.top), scale: devicePixelRatio, focus, controls, scroll };
   });
   const panel = root.locator(".panel");
   await page.screenshot({
@@ -182,8 +189,18 @@ export async function comparePaint(page: Page, dom: Capture, native: Capture, do
     context.putImageData(highlight, 0, 0);
     const solids: { control: string; host: string; expected: RGB; observed: number[] }[] = [];
     const fractions: Record<string, number> = {};
+    function paintedBounds(control: Control, capture: Capture): Rect | null {
+      if (!capture.scroll || !control.id.startsWith("station-")) return control.rect;
+      const [x, y, width, height] = control.rect;
+      const [, scrollY, , scrollHeight] = capture.scroll.rect;
+      const top = Math.max(y, scrollY);
+      const bottom = Math.min(y + height, scrollY + scrollHeight);
+      return bottom > top ? [x, top, width, bottom - top] : null;
+    }
     for (const control of dom.controls) {
-      const [x, y, w, h] = control.rect;
+      const rect = paintedBounds(control, dom);
+      if (!rect) continue;
+      const [x, y, w, h] = rect;
       const left = Math.floor(x * dom.scale), right = Math.min(width, Math.ceil((x + w) * dom.scale));
       const top = Math.floor(y * dom.scale), bottom = Math.min(height, Math.ceil((y + h) * dom.scale));
       let count = 0;
@@ -192,20 +209,31 @@ export async function comparePaint(page: Page, dom: Capture, native: Capture, do
       fractions[control.id] = count / ((right - left) * (bottom - top));
     }
     for (const [host, capture, pixels] of [["dom", dom, web], ["native", native, mac]] as const) {
-      for (const control of capture.controls) {
-        if (!control.fill) continue;
-        const [x, y, w, h] = control.rect;
-        // Bottom-right padding avoids text and focus outlines. Sample 4 device pixels.
-        const right = Math.floor((x + w - 5) * capture.scale);
-        const bottom = Math.floor((y + h - 5) * capture.scale);
+      function checkFill(control: string, expected: RGB, x: number, y: number) {
+        const left = Math.floor(x * capture.scale);
+        const top = Math.floor(y * capture.scale);
         for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-          const offset = ((bottom + dy) * width + right + dx) * 4;
+          const offset = ((top + dy) * width + left + dx) * 4;
           const observed = Array.from(pixels.slice(offset, offset + 4));
-          if (observed[3] !== 255 || !control.fill.every((value, k) => Math.abs(value - observed[k]) <= policy.solidChannelDelta)) {
-            solids.push({ control: control.id, host, expected: control.fill, observed });
+          if (observed[3] !== 255 || !expected.every((value, k) => Math.abs(value - observed[k]) <= policy.solidChannelDelta)) {
+            solids.push({ control, host, expected, observed });
             break;
           }
         }
+      }
+      for (const control of capture.controls) {
+        if (!control.fill) continue;
+        const rect = paintedBounds(control, capture);
+        if (!rect) continue;
+        const [x, y, w, h] = rect;
+        // Bottom-right padding avoids text and focus outlines. Sample 4 device pixels.
+        if (h >= 4) checkFill(control.id, control.fill, x + w - 5, y + h - Math.min(5, h / 2));
+      }
+      const panelFill = capture.controls.find(control => control.id === "panel")?.fill;
+      if (panelFill && capture.scroll && capture.scroll.contentHeight > capture.scroll.rect[3]) {
+        const [x, y, w, h] = capture.scroll.rect;
+        checkFill("above viewport", panelFill, x + w - 5, y - 3);
+        checkFill("below viewport", panelFill, x + w - 5, y + h + 2);
       }
     }
     return { fractions, solids, sizes: images.map(img => [img.width, img.height]), diff: canvas.toDataURL("image/png") };

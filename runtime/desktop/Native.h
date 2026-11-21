@@ -3,20 +3,21 @@
 #include <mochi_native.h>
 
 #define MOCHI_DESKTOP_NATIVE_ABI 3
-#define MOCHI_DESKTOP_SCENE_SCHEMA 7
+#define MOCHI_DESKTOP_SCENE_SCHEMA 8
 #if MOCHI_NATIVE_ABI_VERSION != MOCHI_DESKTOP_NATIVE_ABI
 #error "Mochi desktop requires native GVM ABI version 3"
 #endif
 
 void mochi_clay_init(void);
 void mochi_clay_begin(float width);
-void mochi_clay_open_box(int node, int column, int stretch, float width, float height,
+void mochi_clay_open_box(int node, int column, int stretch, float width, float height, float max_height, int scroll,
                         int left, int right, int top, int bottom, int gap);
 void mochi_clay_close_box(void);
 char *mochi_clay_string_buffer(void);
 int mochi_clay_string_capacity(void);
 void mochi_clay_text_leaf(int offset, int length, int font, int line_height);
 float mochi_clay_end(void);
+float mochi_clay_content_height(int node);
 void mochi_clay_paint(void);
 
 BOOL DesktopPrintToolchainInfo(int argc, const char **argv);
@@ -65,6 +66,7 @@ void DesktopValidateChildEvent(NSDictionary *scene, NSString *method, NSString *
 @interface DesktopView : NSView
 #ifdef MOCHI_DESKTOP_CAPTURE
 @property(nonatomic, readonly) NSArray<NSDictionary *> *layoutObservations;
+@property(nonatomic, readonly) NSDictionary *scrollObservation;
 #endif
 @property(nonatomic, readonly) NSString *failureReason;
 - (instancetype)initWithResources:(NSURL *)resources;

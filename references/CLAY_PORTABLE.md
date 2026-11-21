@@ -50,6 +50,23 @@ available space in a column and fits the content in a row. A fixed `width` or
 pixels. Text inherits its color, family, size, weight and line height, including
 inside buttons. Buttons start with zero border and padding and left-aligned text.
 
+Use `@container (max-width: 315px)` around single-class rules that change
+`flex-direction`. The threshold is inclusive and measures the root's
+logical width after the window inset and width cap. Both hosts reevaluate the
+rule when the root resizes.
+
+The portable profile supports one vertical scroll region. Give a column
+`div` an explicit `height` or `max-height` and `overflow-y: auto`. Rows retain
+their natural height and keep their keys as the viewport moves. Keyboard focus
+reveals the focused row. Updates preserve the scroll offset and clamp it when
+content shrinks. The scroll region clips paint and pointer hits at its viewport.
+Use `tabindex="0"` on row buttons to put them in the browser's keyboard order.
+
+The native Clay frame accepts up to 510 explicit boxes and nonempty text
+leaves, including Mochi's app wrapper, and up to 65,536 UTF-8 text bytes.
+An over-limit frame names the component and limit. A fresh mount can render
+after a capacity failure.
+
 Layout, hit testing, and accessibility use logical bounds. AppKit maps
 each paint edge to the active drawing target's device coordinates and rounds
 each edge independently to the nearest device pixel. Layout keeps fractional

@@ -5,7 +5,7 @@ require "../tooling/portable_project"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 7
+  VERSION = 8
 
   def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @fonts : PortableFonts)
   end
@@ -57,19 +57,21 @@ class DesktopScene
         j.array do
           @styles.rules.each do |rule|
             j.object do
+              j.field "max_width", rule.max_width if rule.max_width
               rule.declarations.each do |key, value|
                 case key
                 when "color"            then j.field "ink", value[1..].to_i(16)
                 when "background-color" then j.field "fill", value[1..].to_i(16)
                 when "width", "height"
                   j.field key, value == "auto" ? -1 : value.to_i(strict: false)
-                when "gap", "padding" then j.field key, value.to_i(strict: false)
-                when "font-size"      then j.field "size", value.to_i(strict: false)
-                when "line-height"    then j.field "leading", value.to_i(strict: false)
-                when "font-weight"    then j.field "weight", value.to_i
-                when "font-family"    then j.field "face", value
-                when "display"        then j.field "flex", true
-                when "flex-direction" then j.field "vertical", value == "column"
+                when "gap", "padding", "max-height" then j.field key, value.to_i(strict: false)
+                when "font-size"                    then j.field "size", value.to_i(strict: false)
+                when "line-height"                  then j.field "leading", value.to_i(strict: false)
+                when "font-weight"                  then j.field "weight", value.to_i
+                when "font-family"                  then j.field "face", value
+                when "display"                      then j.field "flex", true
+                when "flex-direction"               then j.field "vertical", value == "column"
+                when "overflow-y"                   then j.field "scroll", true
                 end
               end
             end

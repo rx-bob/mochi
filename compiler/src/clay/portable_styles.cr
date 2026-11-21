@@ -1,7 +1,8 @@
 require "digest/sha1"
 require "../webcomponents/style_composer"
 
-record PortableStyleRule, name : String, declarations : Hash(String, String), font_locations : Hash(String, String)
+record PortableStyleRule, name : String, declarations : Hash(String, String), font_locations : Hash(String, String),
+  max_width : Int32? = nil
 
 # Ordered single-class rules shared by both renderers. Shared CSS stays in
 # independently cached fragments, and the component's own rules come last.
@@ -25,6 +26,9 @@ class PortableStyles
   def self.css(rules : Array(PortableStyleRule)) : String
     String.build do |io|
       rules.each do |rule|
+        if width = rule.max_width
+          io << "@container mochi-portable-root (max-width:" << width << "px){"
+        end
         io << "." << rule.name << "{"
         rule.declarations.each do |name, value|
           io << name << ":" << value << ";"
@@ -35,9 +39,13 @@ class PortableStyles
             io << "align-items:" << (value == "row" ? "flex-start" : "stretch") << ";"
           when "width", "height"
             io << "min-" << name << ":" << (value == "auto" ? "0" : value) << ";"
+          when "overflow-y"
+            io << "overflow-x:hidden;scrollbar-width:none;overflow-anchor:none;"
           end
         end
         io << "}\n"
+        io << "." << rule.name << ">*{flex-shrink:0}\n" if rule.declarations.has_key?("overflow-y")
+        io << "}\n" if rule.max_width
       end
     end
   end
