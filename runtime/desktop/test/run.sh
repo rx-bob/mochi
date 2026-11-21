@@ -44,8 +44,9 @@ ruby -rjson -e '
   files = Dir.glob("**/*", base: dom).select { |file| File.file?(File.join(dom, file)) }
   manifest = JSON.parse(File.read(File.join(dom, "mochi-manifest.json")))
   resources_by_kind = manifest.fetch("resources").values.group_by { |resource| resource.fetch("kind") }
-  abort "unexpected portable resource inventory" unless
-    resources_by_kind.transform_values(&:size) == { "font" => 3, "font-license" => 1, "document-style" => 2, "style" => 1 }
+  counts = resources_by_kind.transform_values(&:size)
+  abort "unexpected portable resource inventory: #{counts}" unless
+    counts == { "font" => 3, "font-license" => 1, "document-style" => 2, "style" => 2 }
   expected = %w[index.html mochi-manifest.json mochi-gvm.wasm mochi-gvm.js mochi-loader.js
     components/record-inspector.json components/record-inspector.chi
     components/station-details.json components/station-details.chi

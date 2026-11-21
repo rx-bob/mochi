@@ -24,11 +24,14 @@ Fixtures:
   later `FormatBadge` component that calls `MochiFormat`.
 - `compiler/spec/fixtures/payload/network` — an entry `NetworkPanel` that calls
   `Mochi.fetch`, making the network adapter part of its initial load.
+- `e2e/fixtures/clay_inspector` — a portable app built for the DOM. Its
+  runtime filenames and SHA-256 hashes must match the ordinary minimal fixture.
+  The full bundle is checked for manifest membership and deterministic builds.
 
 Every fixture is compiled twice in separate temporary roots. The script
 requires byte-identical file sets and SHA-256 hashes for both builds. Every
-fixture receives the same file-integrity and capability membership checks.
-Fixture expectations independently require no capabilities in minimal,
+fixture receives the same file-integrity checks. Capability expectations
+independently require no capabilities in minimal,
 formatting only in the later feature load, and network in the network entry
 closure. The audit checks both adapters and their declared Ruby packages.
 A negative check moves formatting into the entry closure and must fail.
@@ -64,6 +67,32 @@ WASM from the current shared worktree:
 | Feature total | 444,302 | 142,310 | 11 |
 | Network initial | 433,344 | 138,800 | 8 |
 | Network total | 433,344 | 138,800 | 8 |
+
+### Open raw ceiling overage at portable prefix deployment (E6.S2)
+
+The audit on incoming Mochi revision `4cbed74` with the local GVM artifacts
+from the `0151bc5` checkout already reported a raw core of **436,941 bytes**.
+This is **12,410 bytes** above the existing 424,531-byte ceiling. The same
+runtime measured **133,251 gzip bytes**, within the gzip ceiling. The incoming
+loader contributes 241,775 raw bytes, up 5,955 from the loader source at the
+last budget update (`b3bfb38`). Using the loader from the preceding revision
+(`d1c52ea`) with the same compiler and GVM artifacts still exceeds the raw
+ceiling at 435,948 bytes. The keyed-row focus change in `4cbed74` accounts for
+993 raw bytes of the incoming overage.
+
+With E6.S2, the ordinary minimal fixture matches the incoming build
+byte-for-byte. Its loader, GVM JavaScript and WASM also match those in the
+portable inspector by SHA-256. Prefix deployment adds zero core or desktop
+renderer bytes. The raw gate still fails with the existing measurements
+below. The later formatting load remains at its existing ceiling.
+
+| Set | Existing raw ceiling | Incoming and current raw | Overage |
+| --- | ---: | ---: | ---: |
+| Core runtime | 424,531 | 436,941 | 12,410 |
+| Minimal initial | 428,209 | 440,619 | 12,410 |
+| Feature initial | 429,021 | 441,431 | 12,410 |
+| Feature total | 444,302 | 456,712 | 12,410 |
+| Network initial and total | 433,344 | 445,754 | 12,410 |
 
 ### Stable generated host bridge properties (Ruby reliability audit)
 

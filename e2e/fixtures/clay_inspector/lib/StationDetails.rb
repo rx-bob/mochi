@@ -50,6 +50,7 @@ class StationDetails
 
   def css
     %Q{
+      @import "./styles/details.css";
       .detail-panel {
         background-color: #d3e8de;
         color: #162d27;
@@ -65,11 +66,6 @@ class StationDetails
         flex-direction: column;
         gap: 4px;
         padding: 8px;
-      }
-      .confirm {
-        padding: 8px;
-        color: #ffffff;
-        background-color: #26634f;
       }
     }
   end

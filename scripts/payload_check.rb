@@ -18,7 +18,9 @@ module PayloadCheck
   ROOT = File.expand_path("..", __dir__)
   COMPILER = File.join(ROOT, "compiler", "mochi")
   FIXTURES = File.join(ROOT, "compiler", "spec", "fixtures", "payload")
+  INSPECTOR = File.join(ROOT, "e2e", "fixtures", "clay_inspector")
   BUDGETS_PATH = File.join(ROOT, "references", "payload_budgets.json")
+  WEB_RUNTIME = %w[mochi-gvm.js mochi-gvm.wasm mochi-loader.js].freeze
 
   class Failure < StandardError; end
 
@@ -41,20 +43,26 @@ module PayloadCheck
       feature_b = build_fixture("feature", File.join(tmp, "b"))
       network_a = build_fixture("network", File.join(tmp, "a"))
       network_b = build_fixture("network", File.join(tmp, "b"))
+      inspector_a = build_fixture("clay_inspector", File.join(tmp, "a"), project: INSPECTOR)
+      inspector_b = build_fixture("clay_inspector", File.join(tmp, "b"), project: INSPECTOR)
 
       assert_deterministic("minimal", minimal_a, minimal_b)
       assert_deterministic("feature", feature_a, feature_b)
       assert_deterministic("network", network_a, network_b)
+      assert_deterministic("clay_inspector", inspector_a, inspector_b)
       assert_common_initial_artifacts(minimal_a, feature_a)
       assert_minimal_boundary(minimal_a)
       assert_feature_boundary(feature_a)
-      [minimal_a, feature_a, network_a].each { |bundle| assert_bundle_integrity(bundle) }
+      [minimal_a, feature_a, network_a, inspector_a].each { |bundle| assert_bundle_integrity(bundle) }
+      assert_shared_web_runtime(minimal_a, inspector_a)
       assert_capability_membership(minimal_a, {})
       assert_capability_membership(feature_a, { "formatting" => false })
       assert_capability_membership(network_a, { "network" => true })
       assert_membership_rejects_eager_capability(feature_a)
       assert_exclusion_rejects_unused(minimal_a)
+      puts "payload membership, runtime identity, and determinism: ok"
       print_report(minimal_a, feature_a, network_a)
+      print_set("inspector total", inspector_a, inspector_a.files)
       assert_budgets(minimal_a, feature_a, network_a, budgets)
     end
     puts "payload checks: ok"
@@ -67,10 +75,10 @@ module PayloadCheck
     raise Failure, message unless condition
   end
 
-  def build_fixture(name, parent)
+  def build_fixture(name, parent, project: File.join(FIXTURES, name))
     FileUtils.mkdir_p(parent)
     source = File.join(parent, name)
-    FileUtils.cp_r(File.join(FIXTURES, name), source)
+    FileUtils.cp_r(project, source)
     output = File.join(parent, "#{name}-bundle")
     stdout, stderr, status = Open3.capture3(
       COMPILER, "-i", source, "-o", output,
@@ -272,12 +280,34 @@ module PayloadCheck
   end
 
   def assert_minimal_boundary(bundle)
+    expected = WEB_RUNTIME + %w[
+      index.html mochi-manifest.json components/my-counter.chi components/my-counter.json
+    ]
+    fail_unless(bundle.files == expected.sort,
+      "minimal bundle file set changed: expected #{expected.sort.inspect}, got #{bundle.files.inspect}")
     fail_unless(bundle.later_files.empty?,
       "minimal bundle unexpectedly has later files: #{bundle.later_files.to_a.inspect}")
     fail_unless(bundle.manifest["format_host"].nil?,
       "minimal bundle declares a formatting adapter")
     fail_unless(!bundle.files.include?("mochi-format.js"),
       "minimal bundle includes mochi-format.js")
+  end
+
+  def assert_shared_web_runtime(minimal, inspector)
+    [minimal, inspector].each do |bundle|
+      fail_unless(bundle.core_files.sort == WEB_RUNTIME,
+        "web runtime file set changed: #{bundle.core_files.inspect}")
+      hosts = (bundle.manifest["capabilities"] || {}).values.map { |entry| entry["host"] }.compact
+      actual = bundle.files.grep(/\.(?:js|wasm)\z/) - hosts
+      fail_unless(actual == WEB_RUNTIME, "unexpected web runtime files: #{actual.inspect}")
+    end
+    WEB_RUNTIME.each do |file|
+      fail_unless(minimal.digests.fetch(file) == inspector.digests.fetch(file),
+        "portable build changed web runtime artifact #{file}")
+    end
+    kinds = inspector.manifest.fetch("resources").values.map { |entry| entry.fetch("kind") }.uniq
+    fail_unless((kinds - %w[style document-style font font-license icon]).empty?,
+      "unexpected inspector resource kinds: #{kinds.inspect}")
   end
 
   # Every adapter is a member of the initial bundle exactly when one of its
@@ -396,18 +426,23 @@ module PayloadCheck
       "network_initial" => network.summary(network.initial_files),
       "network_total" => network.summary(network.files)
     }
-    actual.each do |name, measured|
+    violations = actual.flat_map do |name, measured|
       baseline = budgets.fetch("baselines").fetch(name)
       gzip_tolerance = budgets.fetch("gzip_tolerance")
       gzip_ceiling = baseline.fetch("gzip") + [
         gzip_tolerance.fetch("minimum_bytes"),
         (baseline.fetch("gzip") * gzip_tolerance.fetch("ratio")).ceil
       ].max
-      fail_unless(measured.fetch("raw") <= baseline.fetch("raw"),
-        "#{name} raw bytes #{measured.fetch("raw")} exceed ceiling #{baseline.fetch("raw")}")
-      fail_unless(measured.fetch("gzip") <= gzip_ceiling,
-        "#{name} gzip bytes #{measured.fetch("gzip")} exceed ceiling #{gzip_ceiling}")
+      errors = []
+      if measured.fetch("raw") > baseline.fetch("raw")
+        errors << "#{name} raw bytes #{measured.fetch("raw")} exceed ceiling #{baseline.fetch("raw")}"
+      end
+      if measured.fetch("gzip") > gzip_ceiling
+        errors << "#{name} gzip bytes #{measured.fetch("gzip")} exceed ceiling #{gzip_ceiling}"
+      end
+      errors
     end
+    fail_unless(violations.empty?, violations.join("\n"))
   end
 
   def print_report(minimal, feature, network)

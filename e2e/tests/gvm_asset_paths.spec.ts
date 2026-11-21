@@ -14,12 +14,14 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
   ".chi": "application/octet-stream",
   ".svg": "image/svg+xml",
+  ".css": "text/css; charset=utf-8",
+  ".woff2": "font/woff2",
 };
 
 function startStaticServer(rootDir: string): Promise<{ server: http.Server; baseURL: string }> {
   const server = http.createServer((request, response) => {
     const requestPath = decodeURIComponent((request.url || "/").split("?")[0].split("#")[0]);
-    const relative = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
+    const relative = requestPath.replace(/^\/+/, "") + (requestPath.endsWith("/") ? "index.html" : "");
     const filePath = path.resolve(rootDir, relative);
     if (filePath !== rootDir && !filePath.startsWith(rootDir + path.sep)) {
       response.writeHead(403).end();
@@ -111,5 +113,91 @@ end
       new Promise<void>((resolve) => deploymentServer.server.close(() => resolve())),
     ]);
     fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("the static station inspector loads only its mounted components under a nested prefix", async ({ page }) => {
+  test.setTimeout(180_000);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-inspector-prefix-"));
+  const prefix = "/deployments/tenant/stations/";
+  const bundle = path.join(temp, prefix);
+  let server: http.Server | undefined;
+  try {
+    execFileSync(compilerBinary, [
+      "-i", path.join(repoRoot, "e2e", "fixtures", "clay_inspector"), "-o", bundle,
+    ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+    const readJSON = (file: string) => JSON.parse(fs.readFileSync(path.join(bundle, file), "utf8"));
+    const manifest = readJSON("mochi-manifest.json");
+    const componentFiles = (tag: string): string[] => {
+      const entry = manifest.components.find((entry: { tag_name: string }) => entry.tag_name === tag);
+      const descriptor = readJSON(entry.descriptor);
+      const styleIds: string[] = [...(descriptor.style_resources ?? [])];
+      if (descriptor.document_style) styleIds.push(descriptor.document_style);
+      return [
+        entry.descriptor,
+        manifest.packages[entry.package].file,
+        ...styleIds.map((id) => manifest.resources[id].file),
+      ];
+    };
+    const resourceFiles = Object.values<{ kind: string; file: string }>(manifest.resources);
+    const fontFiles = resourceFiles.filter((resource) => resource.kind === "font").map((resource) => resource.file);
+    expect(fontFiles).toHaveLength(3);
+    const root = componentFiles("record-inspector");
+    const row = componentFiles("station-row");
+    const details = componentFiles("station-details");
+    const initial = new Set([
+      "", "mochi-loader.js", "mochi-manifest.json", "mochi-gvm.js", "mochi-gvm.wasm",
+      ...root, ...row, ...fontFiles, manifest.packages["ruby:lib/station_numbers.rb"].file,
+    ]);
+    const later = details.filter((file) => !initial.has(file));
+    expect(later).toEqual([
+      "components/station-details.json", "components/station-details.chi",
+      expect.stringMatching(/^components\/styles\/.+\.css$/),
+    ]);
+
+    const staticHost = await startStaticServer(temp);
+    server = staticHost.server;
+    const deploymentURL = new URL(prefix, staticHost.baseURL);
+    const urls = (files: Iterable<string>) => [...files].map((file) => new URL(file, deploymentURL).href).sort();
+    const requested: string[] = [];
+    const successful = new Set<string>();
+    page.on("request", (request) => requested.push(request.url()));
+    page.on("response", (response) => {
+      if (response.ok()) successful.add(response.url());
+    });
+
+    await page.goto(deploymentURL.href);
+    const inspector = page.locator("record-inspector");
+    const open = inspector.getByRole("button", { name: "Details" });
+    await expect(inspector.getByText("Station records Ω")).toBeVisible();
+    await expect(inspector.getByRole("button", { name: /Café/ })).toBeVisible();
+    await expect(open).toHaveCSS("padding-top", "8px");
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    await expect.poll(() => [...successful].sort()).toEqual(urls(initial));
+    expect([...new Set(requested)].sort()).toEqual(urls(initial));
+    const beforeDetails = requested.length;
+
+    await inspector.getByRole("button", { name: /Café/ }).click();
+    await open.click();
+    const confirm = inspector.getByRole("button", { name: "Confirm station" });
+    await expect(confirm).toHaveJSProperty("tagName", "BUTTON");
+    await expect(confirm).toHaveCSS("background-color", "rgb(38, 99, 79)");
+    expect(await confirm.evaluate(async (button) => {
+      const family = getComputedStyle(button).fontFamily.split(",")[0].replace(/["']/g, "");
+      await document.fonts.ready;
+      return family.startsWith("MochiFont-") && Array.from(document.fonts).some(
+        (face) => face.family === family && face.status === "loaded",
+      );
+    })).toBe(true);
+    await confirm.click();
+    await expect(inspector.getByText("102: Café / 1 / parent")).toBeVisible();
+    await expect(page.locator("canvas")).toHaveCount(0);
+
+    const all = urls([...initial, ...later]);
+    await expect.poll(() => [...successful].sort()).toEqual(all);
+    expect(requested.slice(beforeDetails).sort()).toEqual(urls(later));
+  } finally {
+    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    fs.rmSync(temp, { recursive: true, force: true });
   }
 });

@@ -128,11 +128,10 @@ class MrbcCompiler
     )
     graph = @package_graph.not_nil!
     desktop_scene = if portable_project
-                      validate_portable_project(graph, portable_project, staged_project_dir.not_nil!, project_root.not_nil!)
+                      prepare_portable_project(graph, portable_project, staged_project_dir.not_nil!, project_root.not_nil!)
+                    elsif @render_target.desktop?
+                      raise "The desktop target requires #{PortableProject::FILE_NAME}"
                     end
-    if @render_target.desktop? && !desktop_scene
-      raise "The desktop target requires #{PortableProject::FILE_NAME}"
-    end
 
     @mrbc_path ||= resolved_mrbc_path
     before_emit.try(&.call)
@@ -247,12 +246,12 @@ class MrbcCompiler
     File.write(@manifest_path.not_nil!, build_manifest_json(sorted_components, package_resources))
   end
 
-  private def validate_portable_project(
+  private def prepare_portable_project(
     graph : MochiPackaging::PackageGraph,
     project : PortableProject,
     staged_root : String,
     project_dir : String,
-  ) : String
+  ) : String?
     components = graph.component_order.to_h { |component| {component.manifest.tag_name, component.manifest} }
     receivers = MochiPackaging::CAPABILITY_DEFINITIONS.select(&.host).map(&.exporting).reject { |name| name.empty? || name.includes?('.') }.to_set
     uses_storage = false
@@ -305,6 +304,8 @@ class MrbcCompiler
       graph.packages[manifest.package_id].resources.concat(manifest.font_resources.map(&.id))
       font_plans[manifest.tag_name] = fonts
     end
+    return unless @render_target.desktop?
+
     packages = graph.order.map { |id| graph.packages[id].file }
     DesktopScene.write(project, graph.component_order, packages, @capacity_config.fingerprint, font_plans, uses_storage)
   end

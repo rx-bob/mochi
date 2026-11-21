@@ -27,6 +27,39 @@ identifier and `display_name` the name users should see. Mount the declared
 tag in `index.html`. Mochi loads each component's font stylesheet on mount
 and the browser downloads the faces needed by its text.
 
+## Static web deployment
+
+Keep the loader URL relative in the entry page and mount the root component
+in the body.
+
+```html
+<script src="mochi-loader.js" defer></script>
+<record-inspector></record-inspector>
+```
+
+Build the station inspector into a nested directory and serve its parent.
+Open `http://localhost:8080/deployments/tenant/stations/`, including the
+trailing slash so the browser resolves the loader URL inside that directory.
+
+```sh
+mochi -i e2e/fixtures/clay_inspector -o build/web/deployments/tenant/stations
+python3 -m http.server 8080 --directory build/web
+```
+
+Deploy the entire output directory together. The loader finds the manifest
+beside itself, the manifest locates descriptors, bytecode and styles, and
+generated font stylesheets locate their font files relative to themselves.
+The root and station rows load on entry. Opening Details fetches its descriptor,
+bytecode and scoped stylesheet and reuses the loaded regular face. Chromium,
+Firefox and WebKit verify these requests and the rendered controls.
+
+For an app with deep routes, configure the host to rewrite navigation within
+the prefix to its entry page. Set the loader URL to its deployment path, such
+as `/deployments/tenant/stations/mochi-loader.js`, or set a document base at the
+prefix. Ordinary authored asset URLs follow browser URL rules. Serve framework
+and font files directly, with `application/wasm` for WASM and `font/woff2` for
+WOFF2.
+
 ## Window and component layout
 
 Set `window` when the root owns the window surface. Mount that root directly
