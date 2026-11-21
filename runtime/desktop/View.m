@@ -10,7 +10,7 @@
 @implementation DesktopButton
 - (BOOL)acceptsFirstResponder { return self.enabled; }
 - (id)accessibilityValue {
-    return self.checkbox ? @(self.state == NSControlStateValueOn) : [super accessibilityValue];
+    return self.checkbox ? [NSNumber numberWithBool:self.state == NSControlStateValueOn] : [super accessibilityValue];
 }
 - (BOOL)canBecomeKeyView { return self.enabled && !self.hidden; }
 - (BOOL)accessibilityPerformPress {
@@ -273,6 +273,7 @@ static NSString *displayValue(id value) {
     DesktopMount *_root;
     NSMutableDictionary<NSString *, DesktopMount *> *_children;
     NSMutableArray<NSDictionary *> *_pendingEvents;
+    NSMutableArray<NSDictionary *> *_pendingFocus;
     void (^_diagnostics)(NSString *);
     NSDictionary *_graphicsFonts;
     NSMutableDictionary<NSArray *, DesktopTypography *> *_typography;
@@ -297,6 +298,7 @@ static NSString *displayValue(id value) {
     for (id item in _accessibles) {
         if ([item isKindOfClass:NSControl.class] && [item isEnabled]) { self.window.initialFirstResponder = item; break; }
     }
+    [self applyFocusRequests];
 }
 - (BOOL)isFlipped { return YES; }
 - (BOOL)isAccessibilityElement { return NO; }
@@ -318,6 +320,7 @@ static NSString *displayValue(id value) {
     _controls = [NSMutableDictionary dictionary];
     _children = [NSMutableDictionary dictionary];
     _pendingEvents = [NSMutableArray array];
+    _pendingFocus = [NSMutableArray array];
     NSMutableDictionary *fonts = [NSMutableDictionary dictionary];
     for (NSString *face in program.scene[@"fonts"]) {
         NSURL *url = [program.resources URLByAppendingPathComponent:program.scene[@"fonts"][face]];
@@ -482,6 +485,8 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
     for (NSString *reason in [owner.vm takeHostErrors]) [self reportComponentFailure:reason];
     for (NSDictionary *event in [owner.vm takeEvents])
         [_pendingEvents addObject:@{@"owner":owner, @"event":event}];
+    for (NSString *reference in [owner.vm takeFocusRequests])
+        [_pendingFocus addObject:@{@"owner":owner, @"ref":reference}];
 }
 
 - (DesktopMount *)reconcileChild:(NSDictionary *)node key:(NSString *)key owner:(DesktopMount *)owner
@@ -726,9 +731,36 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         }
         if (![self dispatchNextChildEvent]) break;
     }
+    [self applyFocusRequests];
     // Storage callbacks can add/remove components or redraw a different
     // window. Drain only after Clay releases its global frame scratch.
     [_program.storage drain];
+}
+
+- (void)applyFocusRequests {
+    if (!self.window) return;
+    NSArray *requests = [_pendingFocus copy];
+    [_pendingFocus removeAllObjects];
+    for (NSDictionary *request in requests) {
+        DesktopMount *owner = request[@"owner"];
+        if (owner != _root && _children[owner.key] != owner) continue;
+        NSString *reference = request[@"ref"];
+        NSControl *target = nil;
+        for (NSControl *control in _controls.allValues) {
+            DesktopBox *box = controlBox(control);
+            if (box.owner == owner && [box.attrs[@"data-mochi-ref"] isEqual:reference]) {
+                target = control;
+                break;
+            }
+        }
+        if (!target.enabled || ![self.window makeFirstResponder:target])
+            [self reportComponentFailure:[NSString stringWithFormat:@"%@: cannot focus ref '%@'", owner.vm.scene[@"tag"], reference]];
+    }
+}
+
+- (void)announce:(NSString *)text priority:(NSAccessibilityPriorityLevel)priority {
+    NSAccessibilityPostNotificationWithUserInfo(NSApp, NSAccessibilityAnnouncementRequestedNotification,
+        @{NSAccessibilityAnnouncementKey:text, NSAccessibilityPriorityKey:@(priority)});
 }
 
 - (void)renderFrame {
@@ -834,9 +866,13 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         frame.origin.y -= offset;
         NSString *role = nil;
         NSString *name = nil;
+        id value = NSNull.null;
         if ([element isKindOfClass:NSControl.class]) {
-            role = [[element accessibilityRole] isEqual:NSAccessibilityButtonRole] ? @"button" : [element accessibilityRole];
+            NSString *nativeRole = [element accessibilityRole];
+            role = @{NSAccessibilityButtonRole:@"button", NSAccessibilityTextFieldRole:@"textbox",
+                     NSAccessibilityCheckBoxRole:@"checkbox"}[nativeRole] ?: nativeRole;
             name = [element accessibilityLabel];
+            if (box.formValue) value = [element accessibilityValue] ?: NSNull.null;
         } else if (element) {
             role = [[element accessibilityRole] isEqual:NSAccessibilityStaticTextRole] ? @"text" : [element accessibilityRole];
             name = [element accessibilityValue];
@@ -855,6 +891,8 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             @"fill":box.background ? @[@(lround(box.background.redComponent * 255)),
                 @(lround(box.background.greenComponent * 255)), @(lround(box.background.blueComponent * 255))] : NSNull.null,
             @"lineFrames":lines, @"lineFaces":box.lineFaces,
+            @"value":value,
+            @"disabled":[element isKindOfClass:NSControl.class] ? [NSNumber numberWithBool:![element isEnabled]] : NSNull.null,
         };
         [controls addObject:control];
     }
@@ -998,6 +1036,8 @@ static NSString *rowIdentityInList(NSString *scope, NSString *controlKey) {
 }
 
 - (void)syncControls:(NSArray<DesktopBox *> *)boxes previousLists:(NSDictionary *)previousLists {
+    NSClipView *clip = _scrollView.contentView;
+    NSPoint offset = clip.bounds.origin;
     NSResponder *firstResponder = self.window.firstResponder;
     NSString *focusKey = controlBox(firstResponder).key;
     if (!focusKey && [firstResponder isKindOfClass:NSTextView.class]) {
@@ -1036,6 +1076,7 @@ static NSString *rowIdentityInList(NSString *scope, NSString *controlKey) {
                 [targets addObject:@{@"box":label, @"control":control}];
         } else if (box.label) {
             DesktopLabel *label = _labels[box.key] ?: [DesktopLabel new];
+            NSString *previous = [label accessibilityValue];
             label.accessibilityRole = NSAccessibilityStaticTextRole;
             label.accessibilityValue = box.label;
             label.accessibilityParent = box.insideScroll ? _scrollDocument : self;
@@ -1046,9 +1087,14 @@ static NSString *rowIdentityInList(NSString *scope, NSString *controlKey) {
             label.owner = box.owner;
             retainedLabels[box.key] = label;
             [accessible addObject:label];
+            NSString *live = box.attrs[@"aria-live"];
+            BOOL immediate = [live isEqual:@"assertive"];
+            if (previous && box.label.length && ![previous isEqual:box.label] &&
+                (immediate || [live isEqual:@"polite"]) && self.window) {
+                [self announce:box.label priority:immediate ? NSAccessibilityPriorityHigh : NSAccessibilityPriorityMedium];
+            }
         }
     }
-    if (focusKey && !retained[focusKey]) [self restoreRemovedRowFocus:focusKey previousLists:previousLists order:order];
     for (NSString *key in _controls) if (!retained[key]) detachControl(_controls[key]);
     for (NSString *key in _labels) {
         if (retainedLabels[key]) continue;
@@ -1061,6 +1107,13 @@ static NSString *rowIdentityInList(NSString *scope, NSString *controlKey) {
     _accessibles = accessible;
     for (NSUInteger i = 0; i < order.count; i++) order[i].nextKeyView = order[(i+1) % order.count];
     self.window.initialFirstResponder = order.firstObject;
+    // AppKit can scroll during control reconciliation when the viewport
+    // moves. Keep the clamped offset until a deliberate focus change.
+    if (clip && !NSEqualPoints(clip.bounds.origin, offset)) {
+        [clip scrollToPoint:offset];
+        [_scrollView reflectScrolledClipView:clip];
+    }
+    if (focusKey && !retained[focusKey]) [self restoreRemovedRowFocus:focusKey previousLists:previousLists order:order];
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -1193,6 +1246,7 @@ static void paintDesktopCommands(NSArray *commands) {
     DesktopVM *vm = _root.vm;
     _root = nil;
     [_pendingEvents removeAllObjects];
+    [_pendingFocus removeAllObjects];
     self.window.initialFirstResponder = nil;
     for (NSControl *control in _controls.allValues) detachControl(control);
     _labelTargets = nil;

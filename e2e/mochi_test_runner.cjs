@@ -516,7 +516,7 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
         } else if (step.operation === "press") {
           if (!host) throw new Error(`${origin}: mount a component before using press`);
           await page.keyboard.press(step.key);
-        } else if (["click", "fill", "focus", "assert_focused", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value"].includes(step.operation)) {
+        } else if (["click", "fill", "focus", "assert_focused", "assert_text", "assert_attribute", "assert_no_attribute", "assert_value", "assert_checked"].includes(step.operation)) {
           if (!host) throw new Error(`${origin}: mount a component before using ${step.operation}`);
           const result = await page.evaluate(({ tag, step }) => {
             const element = document.querySelector(tag);
@@ -557,6 +557,11 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
               return { present: target.hasAttribute(step.name), actual: target.getAttribute(step.name) };
             }
             if (step.operation === "assert_value") return { actual: target.value };
+            if (step.operation === "assert_checked") {
+              if (!(target instanceof HTMLInputElement) || target.type !== "checkbox")
+                return { invalid: "target is not a checkbox" };
+              return { actual: target.checked };
+            }
             const actual = (target.innerText || target.textContent || "").trim();
             return { actual };
           }, { tag: host, step });
@@ -572,7 +577,7 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
           if (step.operation === "assert_no_attribute" && result.present) {
             throw new Error(`${origin}: expected attribute '${step.name}' to be absent, got '${result.actual}'`);
           }
-          if (step.operation === "assert_value" && result.actual !== step.expected) {
+          if (["assert_value", "assert_checked"].includes(step.operation) && result.actual !== step.expected) {
             throw new Error(`${origin}: expected value '${step.expected}' at '${step.selector}', got '${result.actual}'`);
           }
           if (step.operation === "assert_text" && result.actual !== step.expected) {

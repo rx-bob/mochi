@@ -28,10 +28,7 @@ class StationDetails
   end
 
   def station_pair
-    expected = ["Harbor", "Café", "West"][@station_id - 1]
-    # A partial prop update must never reach this getter.
-    station_id = @station_id / (expected == @station_name ? 1 : 0)
-    "#{station_id}: #{@station_name}"
+    "#{@station_id}: #{@station_name}"
   end
 
   def html

@@ -5,7 +5,7 @@ require "../tooling/portable_project"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 9
+  VERSION = 10
 
   def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @fonts : PortableFonts)
   end

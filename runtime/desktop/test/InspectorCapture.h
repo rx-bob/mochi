@@ -25,7 +25,17 @@ static void captureInspector(DesktopView *view, NSString *directory, NSInteger w
         DesktopFailure(@"cannot write native inspector PNG");
 
     id focus = NSNull.null;
-    NSDictionary *attrs = [view attributesForAccessibilityElement:view.window.firstResponder];
+    id responder = view.window.firstResponder;
+    if ([responder isKindOfClass:NSTextView.class]) {
+        for (id element in view.accessibilityChildren) {
+            if ([element isKindOfClass:NSControl.class] && [element currentEditor] == responder) {
+                responder = element;
+                break;
+            }
+        }
+    }
+    NSDictionary *attrs = [view attributesForAccessibilityElement:responder];
+    if (attrs[@"data-view"]) focus = attrs[@"data-view"];
     if (attrs[@"data-action"]) focus = [@"action-" stringByAppendingString:attrs[@"data-action"]];
     if (attrs[@"data-id"]) focus = [@"station-" stringByAppendingString:attrs[@"data-id"]];
     NSError *error = nil;

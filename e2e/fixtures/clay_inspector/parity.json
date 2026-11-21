@@ -13,6 +13,7 @@
     366
   ],
   "scrollWidths": [363, 364],
+  "editorWidths": [363, 568],
   "checkpoints": [
     "initial",
     "selected",
@@ -30,6 +31,7 @@
         "actions": 0.113,
         "action-reverse": 0.086,
         "action-details": 0.095,
+        "action-edit": 0.06,
         "station-01": 0.032,
         "station-02": 0.039,
         "station-03": 0.022,
@@ -45,9 +47,10 @@
       "regions": {
         "panel": 0.075,
         "title": 0.082,
-        "actions": 0.1,
+        "actions": 0.115,
         "action-reverse": 0.085,
         "action-details": 0.086,
+        "action-edit": 0.09,
         "station-01": 0.06,
         "station-02": 0.085,
         "station-03": 0.052,
@@ -66,6 +69,7 @@
         "actions": 0.111,
         "action-reverse": 0.082,
         "action-details": 0.08,
+        "action-edit": 0.03,
         "station-01": 0.007,
         "station-02": 0.009,
         "station-03": 0.007,
@@ -81,7 +85,8 @@
   "paint1x": {
     "chromium": {
       "regions": {
-        "title": 0.055
+        "title": 0.055,
+        "action-edit": 0.08
       },
       "focused": {
         "action-details": 0.315
@@ -89,9 +94,10 @@
     },
     "firefox": {
       "regions": {
-        "actions": 0.14,
+        "actions": 0.175,
         "action-reverse": 0.145,
-        "action-details": 0.175
+        "action-details": 0.175,
+        "action-edit": 0.145
       },
       "focused": {
         "action-details": 0.315

@@ -162,6 +162,7 @@ static NSURL *storageDirectory(void) {
     NSDictionary<NSNumber *, NSString *> *_patches;
     NSDictionary *_attributes;
     NSMutableArray<NSDictionary *> *_events;
+    NSMutableArray<NSString *> *_focusRequests;
     NSMutableArray<NSString *> *_hostErrors;
     DesktopStorage *_storage;
     BOOL _closing;
@@ -191,6 +192,7 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     _scene = scene;
     if (!_scene) DesktopFailure(@"Missing desktop component descriptor");
     _events = [NSMutableArray array];
+    _focusRequests = [NSMutableArray array];
     NSDictionary *props = DesktopProps(_scene, nil, attributes);
     NSString *name = _scene[@"class"];
     NSData *className __attribute__((objc_precise_lifetime)) = [name dataUsingEncoding:NSUTF8StringEncoding];
@@ -278,6 +280,12 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     BOOL mutatedStorage = NO;
     for (NSDictionary *entry in effects) {
         NSString *kind = entry[@"__host"];
+        if ([kind isEqual:@"focus"]) {
+            if (![entry[@"instance"] isEqual:ownHandle] || ![entry[@"name"] isKindOfClass:NSString.class] ||
+                ![entry[@"name"] length]) failIn(_scene, method, @"invalid native focus request");
+            if (!_closing) [_focusRequests addObject:entry[@"name"]];
+            continue;
+        }
         if (kind) {
             if (!_storage || ![entry[@"key"] isKindOfClass:NSString.class])
                 failIn(_scene, method, @"invalid native storage record");
@@ -328,6 +336,12 @@ static NSData *jsonData(NSDictionary *scene, NSString *method, id value) {
     NSArray *events = [_events copy];
     [_events removeAllObjects];
     return events;
+}
+
+- (NSArray<NSString *> *)takeFocusRequests {
+    NSArray *requests = [_focusRequests copy];
+    [_focusRequests removeAllObjects];
+    return requests;
 }
 
 - (void)updateAttributes:(NSDictionary *)attributes {

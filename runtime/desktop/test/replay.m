@@ -149,6 +149,9 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
 - (NSString *)attribute:(NSString *)name ofElement:(id)element {
     NSDictionary *attrs = [_view attributesForAccessibilityElement:element];
     if ([name hasPrefix:@"data-"]) return attrs[name];
+    if ([name isEqual:@"disabled"] && [element isKindOfClass:NSControl.class])
+        return [element isEnabled] ? nil : attrs[name];
+    if ([name isEqual:@"aria-invalid"] || [name isEqual:@"aria-live"]) return attrs[name];
     if ([element isKindOfClass:NSButton.class]) {
         if ([name isEqual:@"aria-label"]) return attrs[name] ? [element accessibilityLabel] : nil;
         if ([name isEqual:@"aria-pressed"] || [name isEqual:@"aria-expanded"]) {
@@ -212,7 +215,8 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
         [self mount:tag props:step[@"props"]];
         return;
     }
-    if (![@[@"unmount", @"press", @"click", @"focus", @"assert_focused", @"assert_text", @"assert_attribute", @"fill", @"assert_value"] containsObject:operation])
+    if (![@[@"unmount", @"press", @"click", @"focus", @"assert_focused", @"assert_text", @"assert_attribute",
+            @"fill", @"assert_value", @"assert_checked"] containsObject:operation])
         DesktopFailure(@"unsupported desktop test operation");
     if (!_view) DesktopFailure(@"mount a component before interacting with it");
     if ([operation isEqual:@"unmount"]) {
@@ -236,6 +240,11 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
             if ([operation isEqual:@"focus"]) [_window makeFirstResponder:control];
             id focused = control.currentEditor ?: control;
             if (_window.firstResponder != focused) DesktopFailure(@"expected the selected control to have focus");
+        } else if ([operation isEqual:@"assert_checked"]) {
+            if (![element isKindOfClass:NSButton.class] || ![[element accessibilityRole] isEqual:NSAccessibilityCheckBoxRole])
+                DesktopFailure(@"selector must identify an accessible checkbox");
+            if ([[element accessibilityValue] boolValue] != [step[@"expected"] boolValue])
+                DesktopFailure(@"checkbox state differs from the expected value");
         } else if ([operation isEqual:@"fill"] || [operation isEqual:@"assert_value"]) {
             if (![element isKindOfClass:NSTextField.class]) DesktopFailure(@"selector must identify an accessible text field");
             NSTextField *field = element;

@@ -3,25 +3,25 @@ class RecordInspector
   @records
   @first_stations
   @more
-  @list_action
   @selected
   @details
-  @station_name
+  @current
+  @editing
   @metadata
   @confirmations
   @confirmation
 
   def initialize
     @first_stations = [
-      {"id" => "01", "name" => "Harbor", "label" => " weather station"},
-      {"id" => "02", "name" => "Café", "label" => " observation from the northern coastal monitoring station"},
-      {"id" => "03", "name" => "West", "label" => " ridge sensor"}
+      StationRecords.read("01", "Harbor", " weather station"),
+      StationRecords.read("02", "Café", " observation from the northern coastal monitoring station"),
+      StationRecords.read("03", "West", " ridge sensor")
     ]
     @records = @first_stations
     @more = false
-    @list_action = "Show more stations"
     @selected = "01"
-    @station_name = "Harbor"
+    @current = @records[0]
+    @editing = nil
     @metadata = {"note" => ["parent"]}
     @confirmations = 0
     @confirmation = "No station confirmed"
@@ -30,7 +30,7 @@ class RecordInspector
 
   def select_record(event)
     @selected = event["id"]
-    @station_name = event["name"]
+    @current = @records.find { |record| record["id"] == @selected }
   end
 
   def hide_record(event)
@@ -44,7 +44,6 @@ class RecordInspector
 
   def toggle_stations
     @more = !@more
-    @list_action = @more ? "Show fewer stations" : "Show more stations"
     @records = @first_stations
     return unless @more
 
@@ -52,10 +51,14 @@ class RecordInspector
     number = 10
     while number <= 24
       id = number.to_s
-      extra << {"id" => id, "name" => "Station #{id}", "label" => " monitoring point"}
+      extra << StationRecords.read(id, "Station #{id}", " monitoring point")
       number += 1
     end
     @records = @records + extra
+  end
+
+  def list_action
+    @more ? "Show fewer stations" : "Show more stations"
   end
 
   def toggle_details
@@ -67,23 +70,46 @@ class RecordInspector
     @confirmation = "#{event["id"] + 100}: #{event["name"]} / #{@confirmations} / #{@metadata["note"][0]}"
   end
 
+  def edit_station
+    @editing = @current
+    @details = false
+  end
+
+  def close_editor
+    @editing = nil
+    Mochi.focus(:edit_station)
+  end
+
+  def station_saved(event)
+    @first_stations = StationRecords.update(@first_stations, event)
+    @records = StationRecords.update(@records, event)
+    if @selected == event["id"]
+      @current = @current.merge({"name" => event["name"], "open" => event["open"]})
+    end
+    close_editor
+  end
+
   def html
     %Q{
       <div class="panel" data-view="panel">
         <span class="title" data-view="title">Station records Ω</span>
         <div class="actions" data-view="actions">
           <button class="action action-default action-fixed" data-action="reverse" onclick="{reverse_records}">Reverse order</button>
-          <button class="action-default action" data-action="details" onclick="{toggle_details}">Details</button>
+          <button class="action-default action {if @editing}inactive{end}" data-action="details" disabled="{@editing != nil}" onclick="{toggle_details}">Details</button>
+          <button class="action {if @editing}inactive{end}" data-action="edit" ref="edit_station" tabindex="0" disabled="{@editing != nil}" onclick="{edit_station}">Edit station</button>
         </div>
+        {if @editing}
+          <station-editor station-id="{@editing["id"]}" station-name="{@editing["name"]}" public-access="{@editing["open"]}" on:saved="{station_saved($event)}" on:cancelled="{close_editor}"></station-editor>
+        {end}
         <div class="stations" data-scroll="stations">
           {each @records as record, key: record["id"]}
             <station-row data-station="{record['id']}" station-id="{record['id']}" station-name="{record['name']}" description="{record['label']}" selected="{@selected == record['id']}" on:select="{select_record($event)}" on:hide="{hide_record($event)}"></station-row>
           {end}
         </div>
         <span class="selection" data-view="selection">Selected st&#97;tion {@selected}</span>
-        <button class="action" data-list="toggle" onclick="{toggle_stations}">{@list_action}</button>
+        <button class="action" data-list="toggle" onclick="{toggle_stations}">{list_action}</button>
         {if @details}
-          <station-details station-id="{StationNumbers.id(@selected)}" station-name="{@station_name}" metadata="{@metadata}" on:confirm="{confirm_station($event)}"></station-details>
+          <station-details station-id="{StationNumbers.id(@selected)}" station-name="{@current["name"]}" metadata="{@metadata}" on:confirm="{confirm_station($event)}"></station-details>
           <span data-confirmation="status">{@confirmation}</span>
         {end}
       </div>
@@ -139,6 +165,10 @@ class RecordInspector
       .action-fixed {
         width: 108px;
         height: 38px;
+      }
+      .inactive {
+        color: #344940;
+        background-color: #c1d4ca;
       }
     }
   end

@@ -243,7 +243,7 @@ class ComponentGenerator
     return unless fragment
     local = bindings[first_binding...binding_end]
     node_events = events[first_event...event_end]
-    attrs = DomAttributes.read(node).reject { |name, _| name.starts_with?("data-mochi-") }
+    attrs = DomAttributes.read(node).reject { |name, _| name.starts_with?("data-mochi-") && name != "data-mochi-ref" }
     operands = attrs.to_h do |name, text|
       fields = local.select { |binding| binding.attr_name == name && binding.template_start }
       {name, portable_parts(text, fields)}

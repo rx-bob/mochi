@@ -3,6 +3,7 @@ set -eu
 cd "$(dirname "$0")/../../.."
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+export MOCHI_DESKTOP_STORAGE_DIR="$work/inspector-storage"
 project="$work/Station inspector"
 dom="$work/Web bundle"
 desktop="$work/Mac bundle"
@@ -35,8 +36,8 @@ ruby -rjson -e '
   dom_chi = Dir.glob("components/*.chi", base: dom).map { |file| File.basename(file) }.sort
   abort "different component inventories" unless dom_chi == scene.fetch("packages").sort
   shared = scene.fetch("packages").select { |file| file.start_with?("ruby-") }
-  abort "missing or duplicated shared station package" unless shared.size == 1 &&
-    scene.fetch("packages").first == shared.first
+  abort "missing or duplicated shared station packages" unless shared.size == 2 &&
+    scene.fetch("packages").take(2) == shared
   dom_chi.each do |name|
     abort "different bytecode for #{name}" unless File.binread(File.join(resources, name)) ==
       File.binread(File.join(dom, "components", name))
@@ -50,7 +51,9 @@ ruby -rjson -e '
   expected = %w[index.html mochi-manifest.json mochi-gvm.wasm mochi-gvm.js mochi-loader.js
     components/record-inspector.json components/record-inspector.chi
     components/station-details.json components/station-details.chi
+    components/station-editor.json components/station-editor.chi
     components/station-row.json components/station-row.chi] +
+    ["mochi-editing.js"] +
     shared.map { |file| "components/#{file}" } +
     resources_by_kind.values.flatten.map { |resource| resource.fetch("file") }
   abort "unexpected DOM inventory: #{files.sort}" unless files.sort == expected.sort
@@ -78,7 +81,8 @@ fi
 runtime/desktop/build_host.sh "$gvm" "$gvm/tests/gvm/abi_host_test.c" "$work/abi_host_test"
 "$work/abi_host_test" "$work/native_probe.irep"
 runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/inspector.m "$work/test-inspector"
-"$work/test-inspector" "$resources" "$work/inspector.png"
+MOCHI_DESKTOP_STORAGE_DIR="$work/interactive-storage" "$work/test-inspector" "$resources" "$work/inspector.png"
+MOCHI_DESKTOP_STORAGE_DIR="$work/interactive-storage" "$work/test-inspector" "$resources" --reopen-editor
 
 # A broken browser dependency override must be irrelevant to desktop replay.
 export MOCHI_E2E_NODE_MODULES="$work/no-playwright"
@@ -87,6 +91,9 @@ compiler/mochi test --target=desktop -i "$project" --test-file="$test_file"
 compiler/mochi test --target=desktop -i "$project" --test-file=scroll_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file=details_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file=keyed_rows_test.rb
+MOCHI_DESKTOP_STORAGE_DIR="$work/valid-edit-storage" compiler/mochi test --target=desktop -i "$project" --test-file=editor_test.rb
+cp "$project/probes/editor_quota_test.rb" "$project/test/"
+MOCHI_DESKTOP_STORAGE_DIR="$work/quota-edit-storage" compiler/mochi test --target=desktop -i "$project" --test-file=editor_quota_test.rb
 compiler/mochi test --target=desktop -i e2e/fixtures/clay_inspector/probes/keyed --test-file=keyed_lifetime_test.rb
 
 rejected="$work/Rejected details"
@@ -134,6 +141,7 @@ runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/editor.m "$work/editor
 compiler/mochi test --target=desktop -i "$editor" --test-file=editor_test.rb
 
 storage="$PWD/e2e/fixtures/clay_storage"
+unset MOCHI_DESKTOP_STORAGE_DIR
 compiler/mochi test --target=desktop -i "$storage" --test-file=storage_test.rb
 quota="$work/Quota project"
 cp -R "$storage" "$quota"

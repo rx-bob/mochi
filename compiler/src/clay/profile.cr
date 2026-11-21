@@ -20,11 +20,11 @@ class ClayProfile
   getter styles = PortableStyles.new
   getter source_marks = [] of PortableTemplate::SourceMark
 
-  # VM-only operations shared by the two hosts. Add host-backed operations
+  # Operations shared by the two hosts. Add host-backed operations
   # when both hosts implement them.
   STORAGE_OPERATIONS = Set{"storage_get", "get_storage", "storage_set", "set_storage",
                            "storage_remove", "remove_storage", "storage_subscribe"}
-  SHARED_MOCHI_OPERATIONS = Set{"json_parse", "json_generate", "time_at"} | STORAGE_OPERATIONS
+  SHARED_MOCHI_OPERATIONS = Set{"json_parse", "json_generate", "time_at", "focus"} | STORAGE_OPERATIONS
 
   def initialize(
     @source : String,
@@ -220,15 +220,15 @@ class ClayProfile
       at = scan.byte_offset
       name = scan.scan(/[\w:.-]+/)
       unless name && (name == "class" || name.matches?(/\A(?:aria-|data-(?!mochi-))[a-z][a-z0-9-]*\z/) ||
-             (tag == "button" && name.in?("onclick", "tabindex")) || child_attribute?(name, child) ||
+             (tag == "button" && name.in?("onclick", "tabindex", "ref", "disabled")) || child_attribute?(name, child) ||
              (tag == "label" && name == "for") ||
-             (tag == "input" && name.in?("id", "type", "disabled", "bind:value", "bind:checked", "oninput", "onchange")))
+             (tag == "input" && name.in?("id", "type", "ref", "tabindex", "disabled", "bind:value", "bind:checked", "oninput", "onchange")))
         reject(@path, line_at(html, at, line), "unsupported attribute '#{name}' on <#{tag}>")
       end
       if tag.in?("input", "label") && attrs.has_key?(name)
         reject(@path, line_at(html, at, line), "duplicate #{name} attribute on <#{tag}>")
       end
-      if tag == "input" && name == "disabled" && !scan.check(/\s*=/)
+      if tag.in?("button", "input") && name == "disabled" && !scan.check(/\s*=/)
         attrs[name] = ""
         next
       end
@@ -245,8 +245,8 @@ class ClayProfile
         end
       end
       attrs[name] = html.byte_slice(start, scan.byte_offset - start - 1)
-      if tag == "button" && name == "tabindex" && attrs[name] != "0"
-        reject(@path, line_at(html, at, line), "portable buttons accept only tabindex=\"0\"")
+      if tag.in?("button", "input") && name == "tabindex" && attrs[name] != "0"
+        reject(@path, line_at(html, at, line), "portable controls accept only tabindex=\"0\"")
       end
     end
     attrs

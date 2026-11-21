@@ -175,7 +175,9 @@ Use a text `input` with `bind:value` and an optional `oninput` handler.
 Use `type="checkbox"` with `bind:checked` and an optional `onchange`
 handler. Associate a text-only `label` using `for` and the input's
 `id`, or supply `aria-label`. Bind `disabled` to a Ruby Boolean to
-control editing and keyboard activation.
+control editing and keyboard activation on inputs and buttons. Use
+`tabindex="0"` on controls that must participate in the keyboard order
+across browsers.
 
 Ordinary text edits and paste commit on input. IME marks remain in the host
 editor until the composition commits. The Ruby handler runs once with the
@@ -187,6 +189,33 @@ loads with the first portable component that uses these bindings.
 
 The [standalone station editor](../e2e/fixtures/clay_editor) runs the same
 Ruby edit scenario on both targets.
+
+Give a button or input a static `ref` to focus it with `Mochi.focus(:name)`.
+The ref belongs to the component that declares it. The host applies the focus
+request after rendering, so it can reach a newly enabled control. Keep an
+`aria-live="polite"` text span mounted and change its text to announce
+validation or storage errors. AppKit posts the corresponding accessibility
+announcement when the text changes.
+
+## Editing a station
+
+The inspector opens a draft for the selected station and focuses **Station
+name**. **Save station** stays disabled until a field changes. A blank or
+whitespace-only name shows **Enter a station name.** and returns focus to
+the name field. The editor stores the name and **Open to public** checkbox in
+one JSON value under the station ID. Only a confirmed save updates the row and
+returns focus to **Edit station**. A failed write shows **Could not save
+station. Try again.** and keeps the current controls, draft and focus.
+**Cancel** discards the draft and returns focus to the same button.
+
+Run the authored scenario from the repository root. Each invocation uses
+isolated storage by default.
+
+```sh
+mochi test -i e2e/fixtures/clay_inspector --test-file=editor_test.rb --browsers=all
+mochi test --target=desktop -i e2e/fixtures/clay_inspector --test-file=editor_test.rb
+task desktop:parity
+```
 
 ## App storage
 

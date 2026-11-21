@@ -131,6 +131,11 @@ module Mochi
         record("assert_value", { "selector" => selector.to_s, "expected" => expected.to_s })
       end
 
+      def assert_checked(selector, expected)
+        raise ArgumentError, "assert_checked requires a Boolean" unless expected == true || expected == false
+        record("assert_checked", { "selector" => test_selector(selector), "expected" => expected })
+      end
+
       def expect_error(message)
         unless message.is_a?(String) && !message.strip.empty?
           raise ArgumentError, "expect_error requires a non-empty message"

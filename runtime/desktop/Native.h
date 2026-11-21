@@ -3,7 +3,7 @@
 #include <mochi_native.h>
 
 #define MOCHI_DESKTOP_NATIVE_ABI 3
-#define MOCHI_DESKTOP_SCENE_SCHEMA 9
+#define MOCHI_DESKTOP_SCENE_SCHEMA 10
 #if MOCHI_NATIVE_ABI_VERSION != MOCHI_DESKTOP_NATIVE_ABI
 #error "Mochi desktop requires native GVM ABI version 3"
 #endif
@@ -59,6 +59,7 @@ void DesktopValidateChildEvent(NSDictionary *scene, NSString *method, NSString *
 - (void)reportHostError:(NSString *)reason;
 - (void)updateAttributes:(NSDictionary *)attributes;
 - (NSArray<NSDictionary *> *)takeEvents;
+- (NSArray<NSString *> *)takeFocusRequests;
 - (void)activate:(NSString *)method arguments:(NSArray *)args payload:(NSDictionary *)payload;
 - (void)close;
 @end

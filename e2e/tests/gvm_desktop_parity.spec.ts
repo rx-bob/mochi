@@ -176,6 +176,57 @@ for (const width of matrix.scrollWidths as number[]) {
   });
 }
 
+for (const width of matrix.editorWidths as number[]) {
+  test(`inspector capture parity for station editing at ${width} points`, async ({ browser, browserName }) => {
+    test.skip(!artifactRoot, "requires native editor captures");
+    const output = path.join(artifactRoot!, browserName + "-editor");
+    fs.mkdirSync(output, { recursive: true });
+    const plan = JSON.parse(fs.readFileSync(path.join(artifactRoot!, "editor-plan.json"), "utf8"));
+
+    await withCompiledProject(fixture, async (url) => {
+      const sizedBrowser = { newPage: () => browser.newPage({
+        viewport: { width, height: 780 }, deviceScaleFactor: 2, colorScheme: "light",
+      }) };
+      const captured: string[] = [];
+      const unchecked = new Map<string, { capture: Capture; png: string }>();
+      await runCase(sizedBrowser, browserName, url, plan.tests[0], async (page: Page, name: string) => {
+        const stem = `${width}-${name}`;
+        const domStem = path.join(output, stem);
+        const nativeStem = path.join(artifactRoot!, "native-editor", stem);
+        const dom = await captureDOM(page, domStem);
+        const native: Capture = JSON.parse(fs.readFileSync(nativeStem + ".json", "utf8"));
+        const mismatches = compareObservations(dom, native, matrix.edgeTolerance);
+        const paint = await comparePaint(page, dom, native, domStem + ".png", nativeStem + ".png", domStem + ".diff.png", matrix);
+        fs.writeFileSync(domStem + ".comparison.json", JSON.stringify({ mismatches, paint }, null, 2));
+        expect(mismatches).toEqual([]);
+        expect(paint.solids).toEqual([]);
+        expect(paint.sizes).toEqual([[dom.width * dom.scale, dom.height * dom.scale],
+          [native.width * native.scale, native.height * native.scale]]);
+        expect(dom.scroll).toEqual(native.scroll);
+        for (const id of ["editor", "editor-heading", "name-label", "open-label", "editor-message", "action-save", "action-cancel"]) {
+          expect(paint.fractions[id], id).toBeLessThan(dom.focus === id ? 0.30 : 0.13);
+        }
+        // The field bezel uses each host's own chrome.
+        expect(paint.fractions["name-field"]).toBeLessThan(0.45);
+        for (const [host, capture, png] of [["dom", dom, domStem + ".png"],
+                                           ["appkit", native, nativeStem + ".png"]] as const) {
+          if (name === "editor-disabled") unchecked.set(host, { capture, png });
+          if (name === "editor-error") {
+            const before = unchecked.get(host)!;
+            const change = await comparePaint(page, before.capture, capture, before.png, png,
+              domStem + "." + host + "-checked.diff.png", matrix);
+            expect(change.fractions["open-field"], `${host} paints a checked checkbox`).toBeGreaterThan(0.08);
+          }
+        }
+        if (name === "editor-scrolled") expect(dom.scroll!.offset).toBeGreaterThan(0);
+        captured.push(name);
+      });
+      expect(captured).toEqual(["editor-disabled", "editor-error", "editor-checkbox-focus",
+        "editor-save-focus", "editor-scrolled"]);
+    }, "");
+  });
+}
+
 test("wheel scrolling, resize and a Ruby update preserve station focus and a valid offset", async ({ page }) => {
   await withCompiledProject(fixture, async url => {
     await page.setViewportSize({ width: 364, height: 660 });
@@ -312,6 +363,96 @@ test("keyed child lifetime and duplicate rejection replay from Ruby", ({ browser
 test("station details replays typed props and events using the Ruby runner", ({ browserName }) => {
   expect(runRubyProject(fixture, browserName, "details_test.rb"))
     .toContain(`PASS [${browserName}] updates one typed details panel and routes its confirmation`);
+});
+
+test("station 02 validates, saves and reopens through mochi test", ({ browserName }) => {
+  expect(runRubyProject(fixture, browserName, "editor_test.rb"))
+    .toContain(`PASS [${browserName}] edits, validates, saves and reopens station 02`);
+});
+
+test("station 02 rejects a storage quota without losing its draft in the shared Ruby scenario", async ({ browser, browserName }) => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "mochi-station-quota-"));
+  try {
+    const plan = path.join(work, "plan.json");
+    execFileSync("ruby", [path.join(__dirname, "../../runtime/test/mochi_test_recorder.rb"),
+      path.join(fixture, "probes"), plan, "editor_quota_test.rb"]);
+    const [scenario] = JSON.parse(fs.readFileSync(plan, "utf8")).tests;
+    const quotaBrowser = {
+      newPage: async () => {
+        const page = await browser.newPage();
+        await page.addInitScript(() => {
+          const write = Storage.prototype.setItem;
+          Storage.prototype.setItem = function (key, value) {
+            if (key === "station-record-02" && value.length > 4100)
+              throw new DOMException("quota", "QuotaExceededError");
+            write.call(this, key, value);
+          };
+        });
+        return page;
+      },
+    };
+    await withCompiledProject(fixture, async url => {
+      await runCase(quotaBrowser, browserName, url, scenario);
+    }, "");
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("the inspector keeps focus and the exact draft after a failed write and retries", async ({ page }) => {
+  await page.addInitScript(() => {
+    const write = Storage.prototype.setItem;
+    let failed = false;
+    Storage.prototype.setItem = function (key, value) {
+      if (!failed && key === "station-record-02" && value.includes("North gate")) {
+        failed = true;
+        throw new DOMException("fixture write rejected", "QuotaExceededError");
+      }
+      write.call(this, key, value);
+    };
+  });
+  await withCompiledProject(fixture, async url => {
+    const showEditor = async (tab: Page) => {
+      await tab.locator("[data-id='02']").press("Space");
+      await tab.getByRole("button", { name: "Edit station" }).press("Space");
+      await expect(tab.getByRole("textbox", { name: "Station name" })).toBeFocused();
+    };
+    await page.goto(url);
+    await showEditor(page);
+    const edit = page.getByRole("button", { name: "Edit station" });
+    const name = page.getByRole("textbox", { name: "Station name" });
+    const open = page.getByRole("checkbox", { name: "Open to public" });
+    const save = page.getByRole("button", { name: "Save station" });
+    await expect(save).toBeDisabled();
+    await name.fill("Café Saved");
+    await save.press("Space");
+    await expect(edit).toBeFocused();
+    await edit.press("Space");
+    await name.fill("North gate");
+    await open.press("Space");
+    await expect(open).toBeChecked();
+    await save.press("Space");
+    await expect(save).toBeFocused();
+    await expect(name).toHaveValue("North gate");
+    await expect(open).toBeChecked();
+    await expect(page.locator("[aria-live='polite']")).toHaveText("Could not save station. Try again.");
+
+    const fresh = await page.context().newPage();
+    try {
+      await fresh.goto(url);
+      await showEditor(fresh);
+      await expect(fresh.getByRole("textbox", { name: "Station name" })).toHaveValue("Café Saved");
+      await expect(fresh.getByRole("checkbox", { name: "Open to public" })).not.toBeChecked();
+    } finally {
+      await fresh.close();
+    }
+    await save.press("Space");
+    await expect(edit).toBeFocused();
+    await page.reload();
+    await showEditor(page);
+    await expect(name).toHaveValue("North gate");
+    await expect(open).toBeChecked();
+  });
 });
 
 test("station details rejects invalid inputs while leaving siblings interactive", ({ browserName }) => {

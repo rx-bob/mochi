@@ -10,6 +10,8 @@ export type Control = {
   name: string | null;
   lines: string[];
   pressed: boolean | null;
+  value: string | boolean | null;
+  disabled: boolean | null;
   fill: RGB | null;
   ink: RGB;
   lineFrames: [number, number, number, number, number][];
@@ -30,7 +32,7 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
   const root = page.locator("record-inspector");
   const selectors = "[data-view], [data-action], [data-id]";
   await root.locator(selectors).evaluateAll(async elements => {
-    await Promise.all(elements.filter(el => !["panel", "actions"].includes((el as HTMLElement).dataset.view || "")).map(async el => {
+    await Promise.all(elements.filter(el => !el.matches("div") && !!el.textContent?.trim()).map(async el => {
       const style = getComputedStyle(el);
       const faces = await document.fonts.load(`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, el.textContent || "");
       if (!faces.length || faces.some(face => face.status !== "loaded")) throw new Error("inspector font unavailable");
@@ -53,7 +55,9 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
       const key = view || (action ? `action-${action}` : `station-${id}`);
       if (focused === el) focus = key;
       const bounds = el.getBoundingClientRect();
-      const container = view === "panel" || view === "actions";
+      const container = el.matches("div");
+      const input = el instanceof HTMLInputElement ? el : null;
+      const value = input ? (input.type === "checkbox" ? input.checked : input.value) : null;
       const lines: string[] = [];
       const lineFrames: Control["lineFrames"] = [];
       const style = getComputedStyle(el);
@@ -91,11 +95,15 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
         throw new Error(`unexpected fixture background for ${key}: ${style.backgroundColor}`);
       const pressed = el.getAttribute("aria-pressed");
       return {
-        id: key, name: null, lines, role: container ? null : el.tagName === "BUTTON" ? "button" : "text",
+        id: key, name: null, lines,
+        role: input ? (input.type === "checkbox" ? "checkbox" : "textbox") :
+          container ? null : el.tagName === "BUTTON" ? "button" : "text",
         rect: [bounds.x, bounds.y, bounds.width, bounds.height],
         pressed: pressed === null ? null : pressed === "true",
-        fill: rgba.length === 3 ? [rgba[0], rgba[1], rgba[2]] : null,
+        fill: !input && rgba.length === 3 ? [rgba[0], rgba[1], rgba[2]] : null,
         ink: style.color.match(/\d+/g)!.map(Number) as RGB, lineFrames,
+        value,
+        disabled: input?.disabled ?? (el instanceof HTMLButtonElement ? el.disabled : null),
       };
     });
     const viewport = shadow.querySelector<HTMLElement>("[data-scroll=stations]");
@@ -117,8 +125,8 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
     const snapshot = (await root.locator(selectors).nth(index).ariaSnapshot()).trim();
     // Each fixture leaf is one static text node or one named button.
     const text = /^- text: (.+)$/.exec(snapshot);
-    const named = /^- ([\w-]+) ("(?:[^"\\]|\\.)*")(?: \[.*\])?$/.exec(snapshot);
-    control.role = text ? "text" : named?.[1] ?? null;
+    const named = /^- ([\w-]+) ("(?:[^"\\]|\\.)*")(?: \[[^\]]*\])*(?::.*)?$/.exec(snapshot);
+    control.role = text || !snapshot ? "text" : named?.[1] ?? null;
     control.name = text?.[1] ?? (named ? JSON.parse(named[2]) : snapshot);
     if (control.pressed !== null) control.pressed = /\[pressed(?:=true)?\]/.test(snapshot);
   }
@@ -141,7 +149,7 @@ export function compareObservations(dom: Capture, native: Capture, edgeTolerance
   for (const web of dom.controls) {
     const mac = native.controls.find(c => c.id === web.id);
     if (!mac) continue;
-    for (const field of ["role", "name", "pressed", "lines", "fill", "ink"] as const) {
+    for (const field of ["role", "name", "pressed", "lines", "fill", "ink", "value", "disabled"] as const) {
       compare(web.id, field, web[field], mac[field]);
     }
     for (const [index, line] of web.lineFrames.entries()) {

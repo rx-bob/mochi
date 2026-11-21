@@ -22,6 +22,117 @@ static BOOL label(DesktopView *view, NSString *text) {
     return NO;
 }
 
+static id element(DesktopView *view, NSString *name) {
+    for (id item in view.accessibilityChildren) {
+        if ([[view attributesForAccessibilityElement:item][@"data-view"] isEqual:name]) return item;
+    }
+    DesktopFailure([@"Missing native element " stringByAppendingString:name]);
+}
+
+@interface DesktopView (AnnouncementProbe)
+- (void)announce:(NSString *)text priority:(NSAccessibilityPriorityLevel)priority;
+@end
+
+@interface EditorProbeView : DesktopView
+@property(nonatomic, strong) NSMutableArray<NSString *> *announcements;
+@end
+
+@implementation EditorProbeView
+- (void)announce:(NSString *)text priority:(NSAccessibilityPriorityLevel)priority {
+    check(priority == NSAccessibilityPriorityMedium, @"editor uses polite announcements");
+    [self.announcements addObject:text];
+    [super announce:text priority:priority];
+}
+@end
+
+static void fillField(NSTextField *field, NSWindow *window, NSString *text) {
+    check([window makeFirstResponder:field], @"focus the native station name field");
+    NSTextView *editor = (NSTextView *)field.currentEditor;
+    [editor insertText:text replacementRange:NSMakeRange(0, editor.string.length)];
+}
+
+static void checkEditor(NSURL *resources, NSString *persistedName, BOOL persistedOpen) {
+    DesktopProgram *program = [[DesktopProgram alloc] initWithResources:resources];
+    NSMutableArray *diagnostics = [NSMutableArray array];
+    EditorProbeView *view = [[EditorProbeView alloc] initWithProgram:program attributes:@{}
+                                                         diagnostics:^(NSString *error) { [diagnostics addObject:error]; }];
+    view.announcements = [NSMutableArray array];
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 560, 560)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+    window.releasedWhenClosed = NO;
+    window.autorecalculatesKeyViewLoop = NO;
+    window.contentView = view;
+    [window makeKeyAndOrderFront:nil];
+    @try {
+        NSButton *edit = button(view, @"Edit station");
+        NSButton *row = button(view, persistedName ?: @"Café");
+        [row accessibilityPerformPress];
+        [edit accessibilityPerformPress];
+        NSTextField *field = element(view, @"name-field");
+        NSButton *open = element(view, @"open-field");
+        NSButton *save = button(view, @"Save station");
+        check([field.accessibilityRole isEqual:NSAccessibilityTextFieldRole] &&
+              [field.accessibilityLabel isEqual:@"Station name"] && field.currentEditor == window.firstResponder,
+              @"the editor exposes and focuses the named native text field");
+        check([open.accessibilityRole isEqual:NSAccessibilityCheckBoxRole] &&
+              [open.accessibilityLabel isEqual:@"Open to public"] &&
+              [open.accessibilityValue boolValue] == persistedOpen && !save.enabled && ![save accessibilityPerformPress],
+              @"the native checkbox state and disabled save are accessible");
+        if (persistedName) {
+            check([field.accessibilityValue isEqual:persistedName], @"a fresh process opens the durable name and checkbox");
+            return;
+        }
+        fillField(field, window, @" ");
+        [window makeFirstResponder:save];
+        press(window, @" ", 49);
+        check(field.currentEditor == window.firstResponder &&
+              [view.announcements isEqual:@[@"Enter a station name."]] &&
+              label(view, @"Enter a station name."), @"announce validation once and return focus to the invalid field");
+        press(window, @"\t", 48);
+        check(window.firstResponder == open, @"native reading order reaches the checkbox after the text field");
+        fillField(field, window, @"Café Saved");
+        click(window, save);
+        check(button(view, @"Café Saved") == row && window.firstResponder == edit, @"save updates the retained row and restores focus");
+        [edit accessibilityPerformPress];
+        field = element(view, @"name-field");
+        open = element(view, @"open-field");
+        save = button(view, @"Save station");
+        fillField(field, window, @"North gate");
+        [open accessibilityPerformPress];
+        [window makeFirstResponder:save];
+        NSString *directory = NSProcessInfo.processInfo.environment[@"MOCHI_DESKTOP_STORAGE_DIR"];
+        NSString *backup = [directory stringByAppendingString:@".held"];
+        NSFileManager *files = NSFileManager.defaultManager;
+        check(directory.length && [files moveItemAtPath:directory toPath:backup error:NULL], @"hold the isolated station store");
+        BOOL blocked = [files createFileAtPath:directory contents:[NSData data] attributes:nil];
+        @try {
+            check(blocked, @"block writes to the isolated store");
+            press(window, @" ", 49);
+            check(diagnostics.count == 1 && [diagnostics.firstObject containsString:@"unavailable"] &&
+                  field == element(view, @"name-field") && [field.accessibilityValue isEqual:@"North gate"] &&
+                  [open.accessibilityValue boolValue] && window.firstResponder == save && save.enabled &&
+                  [view.announcements.lastObject isEqual:@"Could not save station. Try again."] &&
+                  view.announcements.count == 2 && button(view, @"Café Saved") == row,
+                  @"write failure announces once and retains draft, focus and the confirmed row");
+        } @finally {
+            if (blocked) check([files removeItemAtPath:directory error:NULL], @"remove the test write obstruction");
+            check([files moveItemAtPath:backup toPath:directory error:NULL], @"restore the isolated station store");
+        }
+        NSTask *fresh = [NSTask new];
+        fresh.executableURL = [NSURL fileURLWithPath:NSProcessInfo.processInfo.arguments.firstObject];
+        fresh.arguments = @[resources.path, @"--confirmed-editor"];
+        check([fresh launchAndReturnError:NULL], @"relaunch the inspector after the failed write");
+        [fresh waitUntilExit];
+        check(fresh.terminationStatus == 0, @"a fresh process retains the previously confirmed station");
+        press(window, @" ", 49);
+        check(window.firstResponder == edit && button(view, @"North gate") == row &&
+              diagnostics.count == 1, @"retry saves the exact draft and restores focus");
+    } @finally {
+        [view close];
+        [window close];
+    }
+}
+
 static void expectComponentFailure(NSString *message, void (^operation)(void)) {
     @try {
         operation();
@@ -136,7 +247,7 @@ static void checkScrolling(DesktopView *view, NSWindow *window) {
     check(scroll && scroll.contentView.bounds.size.height == 200 && scrollOffset(scroll) == 0,
           @"expanded list keeps its bounded viewport");
     NSButton *last = button(view, @"Station 24");
-    NSButton *clipped = button(view, @"Station 13");
+    NSButton *clipped = button(view, @"Station 11");
     NSPoint center = NSMakePoint(NSMidX(clipped.bounds), NSMidY(clipped.bounds));
     NSPoint point = [clipped convertPoint:center toView:view];
     check(NSPointInRect(point, view.bounds) && !NSPointInRect(point, scroll.frame) &&
@@ -202,7 +313,7 @@ static void inspect(NSURL *resources, NSString *capture) {
         [NSPredicate predicateWithBlock:^BOOL(NSView *item, NSDictionary *unused) {
             return [item isKindOfClass:NSButton.class];
         }]];
-    check(buttons.count == 6, @"three station buttons and three inspector actions");
+    check(buttons.count == 7, @"three station buttons and four inspector actions");
     NSButton *harbor = button(view, @"Harbor");
     check([harbor.accessibilityValue boolValue], @"station 01 is initially pressed");
     NSButton *cafe = button(view, @"Café");
@@ -231,6 +342,8 @@ static void inspect(NSURL *resources, NSString *capture) {
     [window display];
     check(cafe.frame.size.height > wide && cafe.frame.size.width < 285, @"native font measurement and wrapped layout");
     check(window.firstResponder == button(view, @"Details"), @"resize retains keyboard focus");
+    press(window, @"\t", 48);
+    check(window.firstResponder == button(view, @"Edit station"), @"Tab reaches the edit action next");
     press(window, @"\t", 48);
     check(window.firstResponder == button(view, @"West"), @"tab order follows reversed rows");
     press(window, @" ", 49);
@@ -286,11 +399,27 @@ static void inspect(NSURL *resources, NSString *capture) {
 int main(int argc, const char **argv) {
     @autoreleasepool {
         if (argc < 2) return 2;
+        if (!NSProcessInfo.processInfo.environment[@"MOCHI_DESKTOP_STORAGE_DIR"].length) {
+            fputs("The inspector test requires an isolated MOCHI_DESKTOP_STORAGE_DIR.\n", stderr);
+            return 2;
+        }
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [NSApp finishLaunching];
         @try {
-            inspect([NSURL fileURLWithPath:@(argv[1])], argc > 2 ? @(argv[2]) : nil);
+            NSURL *resources = [NSURL fileURLWithPath:@(argv[1])];
+            if (argc == 3 && [@(argv[2]) isEqual:@"--confirmed-editor"]) {
+                checkEditor(resources, @"Café Saved", NO);
+                puts("PASS native inspector relaunch after failed save");
+                return 0;
+            }
+            if (argc == 3 && [@(argv[2]) isEqual:@"--reopen-editor"]) {
+                checkEditor(resources, @"North gate", YES);
+                puts("PASS native inspector editor relaunch");
+                return 0;
+            }
+            inspect(resources, argc > 2 ? @(argv[2]) : nil);
+            checkEditor(resources, nil, NO);
             puts("PASS native inspector: input, scroll, resize, keyed focus, layout limits, recovery and teardown");
         } @catch (NSException *exception) {
             fprintf(stderr, "FAIL %s\n", exception.reason.UTF8String);

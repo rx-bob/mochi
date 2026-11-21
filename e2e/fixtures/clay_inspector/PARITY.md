@@ -66,6 +66,21 @@ position and color, which accounts for the separate focused limits. Other
 differences concentrate on glyph edges and the fractional edges of the compact
 action buttons. Focus identity, wrapping, and geometry have independent checks.
 
+## Editor checkpoints
+
+`editor_test.rb` captures the editor at 363 and 568 logical points at 2×.
+Both hosts capture the clean draft with disabled Save, validation error,
+checkbox focus, Save focus, and the form opened with the station list scrolled
+to the last row. The comparison checks the same box edges, line breaks, line
+metrics and fill pixels as the read-only view. It also checks control order,
+accessible names, focus, disabled state, field value, checkbox value and
+scroll offset.
+
+The text field bezel and checkbox glyph use each host's native appearance.
+The paint comparison allows variation in the field bezel and independently
+checks that the checkbox repaints from unchecked to checked on each host.
+The editor shell, labels, error and buttons retain matched paint checks.
+
 The font files are SIL Open Font License subsets of the Noto Sans faces under
 `devground/public/fonts/noto-sans/static/`. The bold subset retains U+0020
 through U+007E and U+00E9. The symbol subset retains U+03A9 from the same

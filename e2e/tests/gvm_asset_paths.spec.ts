@@ -148,6 +148,7 @@ test("the static station inspector loads only its mounted components under a nes
     const initial = new Set([
       "", "mochi-loader.js", "mochi-manifest.json", "mochi-gvm.js", "mochi-gvm.wasm",
       ...root, ...row, ...fontFiles, manifest.packages["ruby:lib/station_numbers.rb"].file,
+      manifest.packages["ruby:lib/station_records.rb"].file,
     ]);
     const later = details.filter((file) => !initial.has(file));
     expect(later).toEqual([
@@ -196,6 +197,14 @@ test("the static station inspector loads only its mounted components under a nes
     const all = urls([...initial, ...later]);
     await expect.poll(() => [...successful].sort()).toEqual(all);
     expect(requested.slice(beforeDetails).sort()).toEqual(urls(later));
+
+    const beforeEditor = requested.length;
+    await inspector.getByRole("button", { name: "Edit station" }).click();
+    await expect(inspector.getByRole("textbox", { name: "Station name" })).toHaveValue("Café");
+    const editRequests = [...componentFiles("station-editor").filter((file) => !initial.has(file)),
+      manifest.capabilities.editing.host];
+    await expect.poll(() => [...successful].sort()).toEqual(urls([...initial, ...later, ...editRequests]));
+    expect(requested.slice(beforeEditor).sort()).toEqual(urls(editRequests));
   } finally {
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
     fs.rmSync(temp, { recursive: true, force: true });

@@ -94,6 +94,17 @@ below. The later formatting load remains at its existing ceiling.
 | Feature total | 444,302 | 456,712 | 12,410 |
 | Network initial and total | 433,344 | 445,754 | 12,410 |
 
+### Station edit and save (E5.S3)
+
+The inspector fetches the station editor descriptor, bytecode, and existing
+editing adapter on first open. These three files measure **11,441 raw /
+3,912 gzip bytes**. The entry shares the editor's font files with the station
+rows. The inspector adds its record helper to the entry closure so it can
+read saved names during initialization. Portable focus and announcements reuse
+the existing browser focus and ARIA behavior. The ordinary DOM core is still
+**436,941 raw / 133,251 gzip bytes**, and the open raw ceiling overage above
+continues to fail the gate.
+
 ### Stable generated host bridge properties (Ruby reliability audit)
 
 The generated GVM bridge now uses quoted public `Module` property names for
