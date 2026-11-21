@@ -3,13 +3,19 @@ require "path"
 require "digest/sha256"
 require "../gvm/package_graph"
 require "../gvm/capacity_config"
+require "../clay/desktop_scene"
+
+record DesktopTools, packager : String, host : String?, replay : String?, gvm : String?,
+  clay_license : String, archive_root : String?, notices : Array(String)
 
 # Resolves Mochi's development resources from explicit overrides, an installed
 # development record, then paths inside this compiler's source checkout.
 class InstallationPaths
-  RECORD_SCHEMA_VERSION = 1
-  DEVELOPMENT_ROOT      = File.expand_path(Path[__DIR__, "../../.."].to_s)
-  MANIFEST_SCHEMA       = MochiPackaging::SCHEMA_VERSION
+  RECORD_SCHEMA_VERSION  = 1
+  DEVELOPMENT_ROOT       = File.expand_path(Path[__DIR__, "../../.."].to_s)
+  MANIFEST_SCHEMA        = MochiPackaging::SCHEMA_VERSION
+  DESKTOP_PACKAGE_SCHEMA = 1
+  DESKTOP_NATIVE_ABI     = 3
 
   getter record_path : String?
   getter development_root : String
@@ -23,6 +29,9 @@ class InstallationPaths
   )
     @record_path = @environment["MOCHI_INSTALL_RECORD"]?
     @record = read_record(@record_path)
+    if archive_install?
+      @development_root = File.dirname(@record_path.not_nil!)
+    end
   end
 
   def compiler : String?
@@ -30,27 +39,16 @@ class InstallationPaths
   end
 
   def mrbc : String?
-    defaults = [
-      File.join(@development_root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc"),
-      File.join(@development_root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc"),
-    ]
-    root = gvm_root
-    if root
-      defaults << File.join(root, "build_wasm", "mruby", "src", "build", "mochi-v2-host", "bin", "mrbc")
-      defaults << File.join(root, "build_wasm", "mruby", "src", "build", "host", "bin", "mrbc")
-    end
-    resolve("MRBC", "mrbc", defaults, true)
+    resolve("MRBC", "mrbc", mrbc_defaults, true)
   end
 
   def wasm : String?
-    root = gvm_root
-    defaults = root ? [File.join(root, "dist", "mochi-gvm.wasm")] : [] of String
-    resolve("MOCHI_GVM_WASM", "gvm_wasm", defaults)
+    resolve("MOCHI_GVM_WASM", "gvm_wasm", wasm_defaults)
   end
 
   def js : String?
     if @environment["MOCHI_GVM_JS"]?
-      return resolve("MOCHI_GVM_JS", "gvm_js", js_defaults)
+      return selected("MOCHI_GVM_JS", "gvm_js")
     end
     if wasm_override = @environment["MOCHI_GVM_WASM"]?
       sibling = wasm_override.sub(/\.wasm\z/, ".js")
@@ -59,9 +57,7 @@ class InstallationPaths
       end
       raise setup_error("MOCHI_GVM_WASM override has no sibling runtime JS at #{sibling}; set MOCHI_GVM_JS to the matching file")
     end
-    root = gvm_root
-    defaults = root ? [File.join(root, "dist", "mochi-gvm.js")] : [] of String
-    resolve("MOCHI_GVM_JS", "gvm_js", defaults)
+    resolve("MOCHI_GVM_JS", "gvm_js", js_defaults)
   end
 
   def loader : String?
@@ -74,11 +70,7 @@ class InstallationPaths
 
   def host_adapter(host : String) : String?
     name = File.basename(host)
-    environment_key = if name == "mochi-format.js"
-                        "MOCHI_FORMAT_HOST"
-                      else
-                        "MOCHI_HOST_ADAPTER_#{name.upcase.gsub(/[^A-Z0-9]/, "_")}"
-                      end
+    environment_key = host_adapter_override(name)
     if override = @environment[environment_key]?
       return validate_path(override, environment_key, false, false)
     end
@@ -100,7 +92,125 @@ class InstallationPaths
 
   def gvm_root : String?
     defaults = [File.expand_path(File.join(@development_root, "..", "mochi-gvm"))]
-    resolve("MOCHI_GVM_DIR", "gvm_root", defaults, directory: true)
+    resolve("MOCHI_GVM_DIR", "gvm_root", archive_install? ? [] of String : defaults, directory: true)
+  end
+
+  def woff2_decoder : String?
+    selected("MOCHI_WOFF2_DECOMPRESS", "woff2_decoder", executable: true) || Process.find_executable("woff2_decompress")
+  end
+
+  def desktop_tools! : DesktopTools
+    compiler_path = compiler || raise(setup_error("compiler resource is missing"))
+    mrbc_path = mrbc || raise(setup_error("mrbc not found; set MRBC or install the matching toolchain"))
+    if path = selected("MOCHI_DESKTOP_TOOLCHAIN", "desktop_toolchain", directory: true)
+      return read_desktop_tools(path, compiler_path, mrbc_path)
+    end
+    if archive_install?
+      raise setup_error("desktop toolchain is missing from installation record #{@record_path}; install the matching desktop archive")
+    end
+    source = gvm_root || raise(setup_error("desktop needs a matching GVM source checkout or MOCHI_DESKTOP_TOOLCHAIN"))
+    host_root = File.join(@development_root, "runtime", "desktop")
+    %w[dist/goose_vm.c src/gvm/include/mochi_native.h src/gvm/include/mochi_capacity_profile.h].each do |file|
+      validate_path(File.join(source, file), "desktop GVM checkout", false, false)
+    end
+    header = File.read(File.join(source, "src/gvm/include/mochi_native.h"))
+    unless header.matches?(/MOCHI_NATIVE_ABI_VERSION\s+#{DESKTOP_NATIVE_ABI}\b/)
+      raise setup_error("#{source}/src/gvm/include/mochi_native.h requires native ABI #{DESKTOP_NATIVE_ABI}")
+    end
+    capacity = File.join(source, "src/gvm/include/mochi_capacity_profile.h")
+    unless File.read(capacity).includes?(%("#{CapacityConfig.default.fingerprint}"))
+      raise setup_error("#{capacity} does not match compiler capacity #{CapacityConfig.default.fingerprint}")
+    end
+    DesktopTools.new(File.join(host_root, "package.rb"), nil, nil, source,
+      File.join(@development_root, "runtime/clay/LICENSE.clay.txt"), nil, [] of String)
+  end
+
+  private def read_desktop_tools(root : String, compiler_path : String, mrbc_path : String) : DesktopTools
+    descriptor = File.join(root, "desktop.json")
+    metadata = JSON.parse(File.read(descriptor)).as_h
+    expected = {
+      "schema_version"       => JSON::Any.new(DESKTOP_PACKAGE_SCHEMA.to_i64),
+      "target"               => JSON::Any.new("desktop"),
+      "platform"             => JSON::Any.new("macos"),
+      "architecture"         => JSON::Any.new({{ flag?(:aarch64) ? "arm64" : "x86_64" }}),
+      "scene_schema"         => JSON::Any.new(DesktopScene::VERSION.to_i64),
+      "native_abi"           => JSON::Any.new(DESKTOP_NATIVE_ABI.to_i64),
+      "capacity_fingerprint" => JSON::Any.new(CapacityConfig.default.fingerprint),
+    }
+    expected.each do |key, value|
+      unless metadata[key]? == value
+        raise setup_error("#{descriptor} #{key} mismatch (expected #{value}, found #{metadata[key]? || "missing"})")
+      end
+    end
+    {"compiler_sha256" => compiler_path, "mrbc_sha256" => mrbc_path}.each do |key, path|
+      unless metadata[key]?.try(&.as_s?) == Digest::SHA256.hexdigest(File.read(path))
+        raise setup_error("#{path} does not match #{key} in #{descriptor}")
+      end
+    end
+    files = metadata["files"].as_h
+    files.each do |relative, digest|
+      artifact = desktop_artifact(root, relative)
+      unless digest.as_s? == Digest::SHA256.hexdigest(File.read(artifact))
+        raise setup_error("#{artifact} does not match its SHA-256 in #{descriptor}")
+      end
+    end
+    paths = metadata["paths"].as_h
+    host = desktop_path(root, paths, files, "host")
+    replay = desktop_path(root, paths, files, "replay")
+    [host, replay].each do |artifact|
+      verify_desktop_executable!(artifact, expected)
+    end
+    notices = files.keys.select(&.starts_with?("licenses/")).sort
+    DesktopTools.new(desktop_path(root, paths, files, "packager"), host, replay, nil,
+      desktop_path(root, paths, files, "clay_license"), root, notices)
+  rescue ex : JSON::ParseException | KeyError | TypeCastError | File::Error
+    raise setup_error("invalid desktop toolchain at #{descriptor}: #{ex.message}")
+  end
+
+  private def desktop_artifact(root : String, relative : String) : String
+    unless relative.matches?(/\A[A-Za-z0-9_.@+-]+(?:\/[A-Za-z0-9_.@+-]+)*\z/) &&
+           relative.split('/').none? { |part| part.in?(".", "..") }
+      raise setup_error("#{root}/desktop.json has invalid artifact path #{relative.inspect}")
+    end
+    artifact = File.join(root, relative)
+    unless File.file?(artifact) && File.realpath(artifact) == File.join(File.realpath(root), relative)
+      raise setup_error("desktop toolchain artifact #{artifact} is missing or is a symlink")
+    end
+    artifact
+  end
+
+  private def desktop_path(root, paths, files, key) : String
+    relative = paths[key].as_s
+    raise setup_error("#{root}/desktop.json has no identity for #{relative}") unless files.has_key?(relative)
+    desktop_artifact(root, relative)
+  end
+
+  private def verify_desktop_executable!(artifact : String, expected : Hash(String, JSON::Any)) : Nil
+    validate_path(artifact, "desktop toolchain artifact", true, false)
+    header = Bytes.new(8)
+    architecture = File.open(artifact) do |file|
+      if file.read(header) == header.size && header[0, 4] == Bytes[0xcf, 0xfa, 0xed, 0xfe]
+        case IO::ByteFormat::LittleEndian.decode(UInt32, header[4, 4])
+        when 0x0100000c then "arm64"
+        when 0x01000007 then "x86_64"
+        end
+      end
+    end
+    unless architecture == expected["architecture"].as_s
+      raise setup_error("#{artifact} has wrong Mach-O architecture (expected #{expected["architecture"]}, found #{architecture || "unknown"})")
+    end
+    probe = IO::Memory.new
+    status = Process.run(artifact, ["--mochi-toolchain-info"], output: probe, error: probe)
+    raise setup_error("#{artifact} failed the native toolchain probe: #{probe.to_s.strip}") unless status.success?
+    actual = JSON.parse(probe.to_s).as_h
+    expected.each do |key, value|
+      next if key == "schema_version"
+      unless actual[key]? == value
+        raise setup_error("#{artifact} reports incompatible #{key} (expected #{value}, found #{actual[key]? || "missing"})")
+      end
+    end
+  rescue ex : JSON::ParseException | TypeCastError | IO::Error
+    raise setup_error("#{artifact} failed the native toolchain probe: #{ex.message}")
   end
 
   # Validate all artifacts needed by a standard build before output cleanup or
@@ -108,8 +218,8 @@ class InstallationPaths
   # profile; current bundles use manifest schema 3.
   def validate_build_resources! : Nil
     compiler = required_path("MOCHI_COMPILER", "compiler", [File.join(@development_root, "compiler", "mochi")], executable: true)
-    required_path("MRBC", "mrbc", mrbc_defaults, executable: true)
-    wasm_path = required_path("MOCHI_GVM_WASM", "gvm_wasm", wasm_defaults)
+    mrbc || raise(setup_error("required resource 'mrbc' not found; set MRBC or run `task install`"))
+    wasm_path = wasm || raise(setup_error("required runtime WASM not found; set MOCHI_GVM_WASM or run `task install`"))
     js_path = js || raise(setup_error("required runtime JS not found; set MOCHI_GVM_JS or run `task install`"))
     loader_path = required_path("MOCHI_LOADER", "loader", [File.join(@development_root, "runtime", "mochi-loader.js")])
 
@@ -137,10 +247,12 @@ class InstallationPaths
   def validate_runtime_artifacts!(hosts : Array(String) = [] of String) : Nil
     validate_build_resources!
     hosts.each do |host|
-      environment_key = host == "mochi-format.js" ? "MOCHI_FORMAT_HOST" : "MOCHI_HOST_ADAPTER_#{File.basename(host).upcase.gsub(/[^A-Z0-9]/, "_")}"
-      defaults = [File.join(@development_root, "runtime", File.basename(host))]
-      resolve(environment_key, "", defaults) || raise(setup_error("host adapter '#{host}' missing; set #{environment_key} or rerun `task install`"))
+      host_adapter(host) || raise(setup_error("host adapter '#{host}' missing; set #{host_adapter_override(File.basename(host))} or rerun `task install`"))
     end
+  end
+
+  private def host_adapter_override(name : String) : String
+    name == "mochi-format.js" ? "MOCHI_FORMAT_HOST" : "MOCHI_HOST_ADAPTER_#{name.upcase.gsub(/[^A-Z0-9]/, "_")}"
   end
 
   def required_test_dependencies! : String
@@ -219,6 +331,14 @@ class InstallationPaths
     raise setup_error(
       "required resource '#{record_key}' not found from #{location}; set #{environment_key} or run `task install`"
     )
+  end
+
+  private def archive_install? : Bool
+    record_value("installation_kind") == "archive"
+  end
+
+  private def selected(environment_key : String, record_key : String, executable : Bool = false, directory : Bool = false) : String?
+    resolve(environment_key, record_key, [] of String, executable, directory)
   end
 
   private def resolve(

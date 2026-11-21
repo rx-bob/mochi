@@ -262,6 +262,7 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
 
 int main(int argc, const char **argv) {
     @autoreleasepool {
+        if (DesktopPrintToolchainInfo(argc, argv)) return 0;
 #ifdef MOCHI_DESKTOP_CAPTURE
         if (argc != 3 && argc != 6) return 2;
 #else

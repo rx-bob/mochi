@@ -68,7 +68,7 @@ class RubyTestRunner
       end
 
       if target.desktop?
-        run_desktop(workspace, bundle_dir, plan_path)
+        run_desktop(workspace, bundle_dir, plan_path, PortableProject.read(stage_dir).not_nil!.bundle_name)
       else
         run_browser(workspace, bundle_dir, plan_path, selected.not_nil!, node_modules.not_nil!)
       end
@@ -99,19 +99,18 @@ class RubyTestRunner
     ).exit_code
   end
 
-  private def run_desktop(workspace, bundle_dir, plan_path) : Int32
-    gvm = InstallationPaths.new.gvm_root || raise "Desktop tests need a matching mochi-gvm checkout (MOCHI_GVM_DIR)"
-    host = File.join(InstallationPaths::DEVELOPMENT_ROOT, "runtime/desktop")
-    runner = File.join(workspace, "mochi-test-desktop")
-    status = Process.run(
-      File.join(host, "build_host.sh"),
-      [gvm, File.join(host, "test/replay.m"), runner],
-      output: STDOUT,
-      error: STDERR
-    )
-    return status.exit_code unless status.success?
+  private def run_desktop(workspace, bundle_dir, plan_path, bundle_name) : Int32
+    tools = InstallationPaths.new.desktop_tools!
+    runner = tools.replay
+    unless runner
+      host = File.dirname(tools.packager)
+      runner = File.join(workspace, "mochi-test-desktop")
+      status = Process.run(File.join(host, "build_host.sh"),
+        [tools.gvm.not_nil!, File.join(host, "test/replay.m"), runner], output: STDOUT, error: STDERR)
+      return status.exit_code unless status.success?
+    end
 
-    resources = File.join(bundle_dir, "Mochi.app/Contents/Resources")
+    resources = File.join(bundle_dir, bundle_name, "Contents", "Resources")
     storage_dir = ENV["MOCHI_DESKTOP_STORAGE_DIR"]? || File.join(workspace, "storage")
     Process.run(runner, [resources, plan_path], chdir: workspace,
       env: {"MOCHI_DESKTOP_STORAGE_DIR" => File.expand_path(storage_dir)}, output: STDOUT, error: STDERR).exit_code

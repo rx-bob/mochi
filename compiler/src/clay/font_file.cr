@@ -1,3 +1,4 @@
+require "../tooling/installation_paths"
 require "file/tempfile"
 require "file_utils"
 
@@ -18,7 +19,8 @@ class PortableFontFile
         copy = File.join(directory, "face.woff2")
         FileUtils.cp(path, copy)
         error = IO::Memory.new
-        status = Process.run("woff2_decompress", [copy], output: error, error: error)
+        decoder = InstallationPaths.new.woff2_decoder || raise "woff2_decompress is missing; install the matching toolchain"
+        status = Process.run(decoder, [copy], output: error, error: error)
         raise "could not decompress WOFF2 (#{error.to_s.strip})" unless status.success?
         return new(File.read(File.join(directory, "face.ttf")).to_slice)
       ensure

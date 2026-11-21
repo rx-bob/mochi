@@ -186,18 +186,20 @@ class BuildMain
         raise "Input & output directory need to be specified"
       end
 
+      paths = InstallationPaths.new
       capacity_config = capacity_config_path.try { |path| CapacityConfig.read(path) }
       if render_target.desktop?
         raise "The desktop host currently builds on macOS" unless {{ flag?(:darwin) }}
         raise "The desktop target uses the default capacity profile" if capacity_config_path
       elsif capacity_config.nil? || capacity_config.fingerprint == CapacityConfig.default.fingerprint
-        InstallationPaths.new.validate_build_resources!
+        paths.validate_build_resources!
       end
       validate_build_paths(input_dir, output_dir)
       portable_project = PortableProject.read(input_dir)
       if render_target.desktop? && !portable_project
         raise "The desktop target requires #{PortableProject::FILE_NAME}"
       end
+      desktop_tools = paths.desktop_tools! if render_target.desktop?
       print_separator
       puts "1. input_dir:#{input_dir}, output_dir:#{output_dir}"
       builder_man = BuilderMan.new(input_dir, output_dir)
@@ -249,12 +251,12 @@ class BuildMain
 
       print_separator
       if render_target.desktop?
-        puts "6. Linking native application"
-        paths = InstallationPaths.new
-        gvm = paths.gvm_root || raise "Desktop builds need a matching mochi-gvm checkout (MOCHI_GVM_DIR)"
-        script = File.join(InstallationPaths::DEVELOPMENT_ROOT, "runtime/desktop/package.rb")
+        puts "6. Packaging native application"
+        tools = desktop_tools.not_nil!
         project = portable_project.not_nil!
-        args = [script, gvm, File.expand_path(input_dir), bundle_dir, File.expand_path(output_dir), project.app_id, project.display_name]
+        args = [tools.packager, tools.gvm || "", tools.host || "", tools.clay_license, tools.archive_root || "",
+                paths.woff2_decoder || "woff2_decompress", File.expand_path(input_dir), bundle_dir,
+                File.expand_path(output_dir), project.app_id, project.display_name, project.bundle_name] + tools.notices
         raise "Desktop packaging failed" unless Process.run("ruby", args, output: STDOUT, error: STDERR).success?
       else
         puts "6. Copying Entry Page & Static Assets"

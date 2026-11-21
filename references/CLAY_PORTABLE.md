@@ -60,9 +60,10 @@ widths, including widths measured from text.
 Use static WOFF2, OTF or TTF files under `public/` and declare each face's
 weight from 100 to 900 in steps of 100. A string path is shorthand for weight
 400 and picks up an adjacent `OFL.txt` when present. The weighted form can
-name a local license file explicitly. Install `woff2_decompress` to build
-projects that use WOFF2. Mochi packages the faces that can reach a text
-leaf and their licenses through the font resource graph.
+name a local license file explicitly. The macOS toolchain includes a WOFF2
+decoder. For a checkout-backed build, install `woff2_decompress` or set
+`MOCHI_WOFF2_DECOMPRESS`. Mochi packages the faces that can reach a text leaf
+and their licenses through the font resource graph.
 
 List local faces in order, for example
 `font-family: StationSans, StationSymbols, sans-serif;`. Mochi resolves the
@@ -158,14 +159,52 @@ Each `mochi test --target=desktop` invocation uses a temporary store. Use
 intentionally share storage across processes. See the
 [station storage fixture](../e2e/fixtures/clay_storage).
 
-## Native development build
+## Installed macOS toolchain
 
-The AppKit host links a matching `mochi-gvm` source checkout. Build its
-standalone Goose artifacts first and point `MOCHI_GVM_DIR` to that checkout
-when it is outside the default sibling directory. The host requires native
-ABI v3 and validates the scene's capacity fingerprint before loading Ruby.
-Hosted macOS CI uses the full upstream commit SHA in
-`MOCHI_NATIVE_GVM_REVISION`.
+Produce both archives from a built Mochi checkout with `task toolchain:package`.
+This uses Xcode command line tools, `woff2_decompress`, Goose, and a matching
+`mochi-gvm` checkout with current web and standalone Goose artifacts. Set
+`MOCHI_GVM_DIR` when that checkout is outside the default sibling directory.
+Run packaging on each target architecture, `arm64` or `x86_64`, with system
+and library deployment targets appropriate for the intended Macs. For the
+core archive alone, run `ruby scripts/package_toolchain.rb` after `task build`.
+
+Install from the directory containing the two archives. Choose a prefix on
+your PATH or invoke the installed launcher by its full path.
+
+```sh
+arch=$(uname -m)
+mkdir -p mochi-installer
+tar -xzf "mochi-macos-$arch.tar.gz" -C mochi-installer
+ruby mochi-installer/install.rb --prefix "$HOME/Tools/mochi" \
+  --desktop "mochi-desktop-macos-$arch.tar.gz"
+```
+
+Omit `--desktop` for a web-only install. From the same installer, use `update`
+with the new matching archive pair or `remove` with the existing prefix.
+The installed desktop CLI uses a prelinked AppKit and Clay executable and
+uses a separate prelinked runner for Ruby tests. The app checkout only needs
+its project sources and assets. App packaging uses system Ruby and `plutil`.
+
+The installer records absolute resource paths and validates the matching CPU,
+bundle and scene schemas, native ABI, and capacity fingerprint. Set
+`MOCHI_DESKTOP_TOOLCHAIN` to an extracted matching desktop archive to
+override the recorded package. An invalid explicit path fails the build.
+`MOCHI_WOFF2_DECOMPRESS` also takes precedence over the recorded decoder.
+
+`mochi --target=desktop -i . -o build/mac` uses the application's
+`display_name` for the bundle filename and its `app_id` for the bundle
+identifier. A successful build can replace a previous Mochi product with
+the same filename and identifier. You can move and launch the finished
+`.app` offline. Release signing and notarization are separate steps.
+
+## Checkout-backed native build
+
+`task desktop:demo` links the AppKit host using the matching GVM source
+checkout and writes `build/desktop-mvp/Stations.app`. Hosted macOS CI uses
+the full upstream commit SHA in `MOCHI_NATIVE_GVM_REVISION`. The host
+requires native ABI v3 and validates the scene's capacity fingerprint before
+loading Ruby.
 
 The ABI uses a single VM with serialized calls and loads identical Ruby
 packages once per process. Each successful mount owns

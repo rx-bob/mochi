@@ -5,6 +5,25 @@ void DesktopFailure(NSString *reason) {
     @throw [NSException exceptionWithName:@"MochiDesktopError" reason:reason userInfo:nil];
 }
 
+BOOL DesktopPrintToolchainInfo(int argc, const char **argv) {
+    if (argc != 2 || strcmp(argv[1], "--mochi-toolchain-info") != 0) return NO;
+#if defined(__arm64__)
+    NSString *architecture = @"arm64";
+#elif defined(__x86_64__)
+    NSString *architecture = @"x86_64";
+#else
+#error "Mochi desktop has no toolchain definition for this CPU"
+#endif
+    NSData *info = [NSJSONSerialization dataWithJSONObject:@{
+        @"platform":@"macos", @"target":@"desktop", @"architecture":architecture,
+        @"scene_schema":@(MOCHI_DESKTOP_SCENE_SCHEMA), @"native_abi":@(mochi_native_abi_version()),
+        @"capacity_fingerprint":@(mochi_native_capacity_fingerprint())
+    } options:0 error:NULL];
+    fwrite(info.bytes, 1, info.length, stdout);
+    putchar('\n');
+    return YES;
+}
+
 static MochiNativeBytes bytes(NSData *data) {
     return (MochiNativeBytes){data.bytes, data.length};
 }
@@ -81,7 +100,7 @@ static NSURL *storageDirectory(void) {
     if (![scene isKindOfClass:NSDictionary.class]) DesktopFailure(@"Invalid desktop scene");
     _scene = scene;
     NSDictionary *root = _scene[@"components"][_scene[@"root"] ?: @""] ?: _scene;
-    if (![_scene[@"version"] isEqual:@7]) failIn(root, @"initialize", @"unsupported desktop scene version");
+    if (![_scene[@"version"] isEqual:@(MOCHI_DESKTOP_SCENE_SCHEMA)]) failIn(root, @"initialize", @"unsupported desktop scene version");
     if (mochi_native_abi_version() != MOCHI_DESKTOP_NATIVE_ABI)
         failIn(root, @"initialize", @"incompatible native GVM ABI version");
     id fingerprint = _scene[@"capacity"];

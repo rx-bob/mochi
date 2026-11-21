@@ -1,10 +1,12 @@
 #!/usr/bin/env ruby
-# Installs a source-checkout-backed Mochi development launcher.
+# Installs Mochi from a development checkout or a prebuilt toolchain.
 require "fileutils"
 require "json"
 require "optparse"
 require "shellwords"
 require "digest"
+require "tmpdir"
+require_relative "toolchain_archive"
 
 OWNER = "mochi-development-install"
 SCHEMA_VERSION = 1
@@ -72,6 +74,7 @@ end
 
 def owned_install?(launcher, record_path, prefix)
   return false unless File.file?(launcher) && File.file?(record_path)
+  return false if File.symlink?(launcher) || File.symlink?(record_path)
   launcher_text = File.read(launcher)
   record = JSON.parse(File.read(record_path))
   launcher_text.include?(LAUNCHER_MARKER) &&
@@ -91,21 +94,122 @@ ensure
   File.delete(temporary) if temporary && File.file?(temporary)
 end
 
+def archive_record(core_source, desktop_source, prefix, generation)
+  cpu = ToolchainArchive.architecture
+  core = File.join(generation, "core")
+  ToolchainArchive.unpack(core_source, core)
+  metadata = ToolchainArchive.validate(core, "toolchain.json", ToolchainArchive.core_identity(cpu), ToolchainArchive::CORE_PATHS)
+  paths = metadata.fetch("paths").transform_values { |path| File.join(core, path) }
+  %w[compiler mrbc woff2_decoder].each do |name|
+    path = paths.fetch(name)
+    raise "#{path} is not executable" unless executable_file?(path)
+    ToolchainArchive.check_cpu(path, cpu)
+  end
+  wasm = paths.fetch("gvm_wasm")
+  profile = paths.fetch("gvm_capacity")
+  unless File.binread(wasm, 8) == "\0asm\x01\0\0\0".b && File.read(paths.fetch("gvm_js")).include?("MochiModule")
+    raise "#{wasm} or its companion JavaScript is not a Mochi GVM runtime"
+  end
+  capacity_profile = JSON.parse(File.read(profile))
+  capacity = capacity_profile.fetch("fingerprint")
+  unless profile == wasm.sub(/\.wasm\z/, ".capacity.json") && capacity_profile["schema_version"] == 1 &&
+      capacity.is_a?(String) && capacity.match?(/\A[0-9a-f]{64}\z/)
+    raise "invalid capacity profile #{profile}"
+  end
+  ToolchainArchive.match!(metadata, {"capacity_fingerprint" => capacity}, File.join(core, "toolchain.json"))
+  unless File.read(paths.fetch("loader")).match?(/MANIFEST_SCHEMA_VERSION\s*=\s*#{MANIFEST_SCHEMA_VERSION}\b/)
+    raise "#{paths.fetch('loader')} does not support bundle schema #{MANIFEST_SCHEMA_VERSION}"
+  end
+  adapters = metadata.fetch("host_adapters").to_h do |name, relative|
+    unless File.basename(relative) == name && metadata.fetch("files").key?(relative)
+      raise "invalid host adapter #{name} in #{core}/toolchain.json"
+    end
+    [name, File.join(core, relative)]
+  end
+  hashes = %w[compiler mrbc gvm_wasm gvm_js gvm_capacity].to_h do |key|
+    ["#{key}_sha256", ToolchainArchive.checksum(paths.fetch(key))]
+  end
+
+  desktop = nil
+  native = {}
+  if desktop_source
+    desktop = File.join(generation, "desktop")
+    ToolchainArchive.unpack(desktop_source, desktop)
+    native = ToolchainArchive.desktop_identity(cpu, capacity)
+    expected = native.merge(hashes.slice("compiler_sha256", "mrbc_sha256")).merge("schema_version" => ToolchainArchive::SCHEMA)
+    descriptor = ToolchainArchive.validate(desktop, "desktop.json", expected, ToolchainArchive::DESKTOP_PATHS)
+    %w[host replay].each do |name|
+      ToolchainArchive.verify_native(File.join(desktop, descriptor.fetch("paths").fetch(name)), native)
+    end
+    native = {
+      "descriptor" => File.join(desktop, "desktop.json"),
+      "schema_version" => descriptor.fetch("schema_version")
+    }.merge(native).merge(descriptor.fetch("paths").transform_values { |path| File.join(desktop, path) })
+  end
+
+  paths.merge(hashes).merge(
+    "owner" => OWNER, "schema_version" => SCHEMA_VERSION, "installation_kind" => "archive",
+    "install_prefix" => prefix, "toolchain_dir" => generation, "core_toolchain" => File.join(core, "toolchain.json"),
+    "architecture" => cpu, "platform" => "macos", "targets" => desktop ? ["dom", "desktop"] : ["dom"],
+    "desktop_toolchain" => desktop, "desktop_identity" => desktop ? native : nil,
+    "manifest_schema" => MANIFEST_SCHEMA_VERSION, "runtime_profile" => "default",
+    "capacity_fingerprint" => capacity, "format_host" => adapters["mochi-format.js"], "host_adapters" => adapters
+  )
+end
+
+def remove_toolchain_generation(share_dir, generation)
+  return unless generation.is_a?(String)
+  parent = File.join(share_dir, "toolchains")
+  return unless File.dirname(generation) == parent && File.basename(generation).match?(/\Ainstall-[A-Za-z0-9-]+\z/)
+  return unless File.directory?(generation) && !File.symlink?(parent) && !File.symlink?(generation)
+  FileUtils.remove_entry_secure(generation)
+  Dir.rmdir(parent) if Dir.empty?(parent)
+end
+
+def install_archive(core, desktop, prefix, share_dir, launcher, record_path, previous)
+  parent = File.join(share_dir, "toolchains")
+  raise "refusing to install through symlink #{parent}" if File.symlink?(parent)
+  FileUtils.mkdir_p(parent)
+  generation = Dir.mktmpdir("install-", parent)
+  record = archive_record(core, desktop, prefix, generation)
+  publish_record(launcher, record_path, record)
+  installed = true
+  remove_toolchain_generation(share_dir, previous["toolchain_dir"])
+  report_install(launcher, record_path)
+ensure
+  remove_toolchain_generation(share_dir, generation) if generation && !installed
+end
+
 def main
   action = %w[install update remove].include?(ARGV.first) ? ARGV.shift : "install"
-  unless %w[install update remove].include?(action)
-    fail_setup("usage: install_dev.rb [install|update|remove] [--prefix PATH]")
-  end
   prefix = ENV["MOCHI_INSTALL_PREFIX"] || File.join(Dir.home, ".local")
+  core = __dir__ if File.file?(File.join(__dir__, "toolchain.json"))
+  desktop = nil
   OptionParser.new do |options|
-    options.banner = "Usage: ruby scripts/install_dev.rb [install|update|remove] [--prefix PATH]"
+    options.banner = "Usage: ruby scripts/install_dev.rb [install|update|remove] [--prefix PATH] [--toolchain PATH] [--desktop PATH]"
     options.on("--prefix PATH", "User install prefix (default: ~/.local)") { |value| prefix = value }
+    options.on("--toolchain PATH", "Install a prebuilt core archive or extracted directory") { |value| core = value }
+    options.on("--desktop PATH", "Also install a matching desktop archive or extracted directory") { |value| desktop = value }
     options.on("-h", "--help", "Show help") { puts options; exit 0 }
   end.parse!
+  fail_setup("unexpected arguments: #{ARGV.join(' ')}") unless ARGV.empty?
+  fail_setup("--desktop requires --toolchain") if desktop && !core
 
   prefix = File.expand_path(prefix)
-  checkout_root = File.expand_path("..", __dir__)
-  compiler = File.join(checkout_root, "compiler/mochi")
+  share_dir = File.join(prefix, "share/mochi")
+
+  FileUtils.mkdir_p(share_dir) unless action == "remove"
+  if File.directory?(share_dir)
+    File.open(share_dir) do |lock|
+      lock.flock(File::LOCK_EX)
+      install_locked(action, prefix, core, desktop)
+    end
+  else
+    install_locked(action, prefix, core, desktop)
+  end
+end
+
+def install_locked(action, prefix, core, desktop)
   bin_dir = File.join(prefix, "bin")
   share_dir = File.join(prefix, "share/mochi")
   launcher = File.join(bin_dir, "mochi")
@@ -114,6 +218,7 @@ def main
   launcher_exists = File.exist?(launcher) || File.symlink?(launcher)
   record_exists = File.exist?(record_path) || File.symlink?(record_path)
   owned = owned_install?(launcher, record_path, prefix)
+  previous = owned ? JSON.parse(File.read(record_path)) : {}
 
   if action == "remove"
     if !launcher_exists && !record_exists
@@ -123,6 +228,7 @@ def main
     fail_setup("refusing to remove files not owned by Mochi at #{prefix}") unless owned
     File.delete(launcher)
     File.delete(record_path)
+    remove_toolchain_generation(share_dir, previous["toolchain_dir"])
     Dir.rmdir(bin_dir) if Dir.exist?(bin_dir) && Dir.empty?(bin_dir)
     Dir.rmdir(share_dir) if Dir.exist?(share_dir) && Dir.empty?(share_dir)
     puts "Removed Mochi development launcher and record from #{prefix}"
@@ -135,6 +241,12 @@ def main
   if (launcher_exists || record_exists) && !owned
     fail_setup("#{launcher} or #{record_path} already exists and is not an owned Mochi install; choose another --prefix")
   end
+  if core
+    install_archive(core, desktop, prefix, share_dir, launcher, record_path, previous)
+    return
+  end
+  checkout_root = File.expand_path("..", __dir__)
+  compiler = File.join(checkout_root, "compiler/mochi")
   fail_setup("compiler binary missing at #{compiler}; run `task build` first") unless executable_file?(compiler)
 
   if ENV["MOCHI_GVM_DIR"] && !File.directory?(ENV["MOCHI_GVM_DIR"])
@@ -212,6 +324,16 @@ def main
     "runtime_profile" => "default",
   }
 
+  publish_record(launcher, record_path, record)
+  remove_toolchain_generation(share_dir, previous["toolchain_dir"])
+  report_install(launcher, record_path)
+  puts "Playwright dependencies recorded" if record["playwright_node_modules"]
+  puts "Ruby tests need Playwright dependencies; run npm ci in #{File.join(checkout_root, "e2e").inspect}" unless record["playwright_node_modules"]
+end
+
+def publish_record(launcher, record_path, record)
+  previous = File.binread(record_path) if File.file?(record_path)
+  compiler = record.fetch("compiler")
   record_json = JSON.pretty_generate(record) + "\n"
   launcher_text = <<~SH
     #!/bin/sh
@@ -230,15 +352,28 @@ def main
     exec #{Shellwords.escape(compiler)} "$@"
   SH
   write_atomically(record_path, record_json, 0o600)
-  write_atomically(launcher, launcher_text, 0o755)
+  begin
+    write_atomically(launcher, launcher_text, 0o755)
+  rescue SystemCallError
+    previous ? write_atomically(record_path, previous, 0o600) : File.unlink(record_path)
+    raise
+  end
+end
+
+def report_install(launcher, record_path)
+  bin_dir = File.dirname(launcher)
 
   puts "Installed Mochi development launcher: #{launcher}"
   puts "Resource record: #{record_path}"
   unless ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).include?(bin_dir)
     puts "Add this to your shell environment: export PATH=#{Shellwords.escape(bin_dir)}:\"$PATH\""
   end
-  puts "Playwright dependencies recorded" if record["playwright_node_modules"]
-  puts "Ruby tests need Playwright dependencies; run npm ci in #{File.join(checkout_root, "e2e").inspect}" unless record["playwright_node_modules"]
 end
 
-main
+if $PROGRAM_NAME == __FILE__
+  begin
+    main
+  rescue RuntimeError, SystemCallError, OptionParser::ParseError, JSON::ParserError, KeyError => error
+    fail_setup(error.message)
+  end
+end

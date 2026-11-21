@@ -62,7 +62,9 @@ On first use, the loader fetches that component's descriptor, its shared style f
 | `task typecheck` | Typecheck the motestproj components with Sorbet |
 | `task framework:e2e` | Run portable framework browser regressions, including all UI fixtures |
 | `task framework:ui` | Run UI fixtures, feedback evidence, and related regressions in all three engines |
-| `task desktop:demo` | Build the experimental AppKit inspector in `build/desktop-mvp/Mochi.app` |
+| `task desktop:demo` | Build the experimental AppKit inspector in `build/desktop-mvp/Stations.app` |
+| `task toolchain:package` | Package the macOS CLI and prelinked desktop toolchain |
+| `task toolchain:test` | Verify the installed macOS CLI and offline launch |
 | `task desktop:test` | Verify inspector rebuilds, resource inventories, bytecode identity, and AppKit interactions on macOS |
 | `task desktop:parity` | Compare recorded inspector checkpoints in AppKit and all three browsers on macOS |
 | `task e2e` / `task app:e2e` | Run the separate Cowboy application integration (requires that checkout) |
@@ -146,10 +148,13 @@ connects.
 
 ### Experimental macOS inspector
 
-Run `task desktop:demo` and open `build/desktop-mvp/Mochi.app`. The build uses
+Run `task desktop:demo` and open `build/desktop-mvp/Stations.app`. The build uses
 Xcode command line tools, the matching `mochi-gvm` checkout with generated
 `dist/goose_vm.c`, and `woff2_decompress` for the fixture font. Set
 `MOCHI_GVM_DIR` to select the checkout.
+
+The [portable project guide](references/CLAY_PORTABLE.md#installed-macos-toolchain)
+describes how to package and install the prebuilt macOS toolchain.
 
 Build the same [station inspector](e2e/fixtures/clay_inspector) for the web with
 `mochi -i e2e/fixtures/clay_inspector -o build/station-web`. To choose the

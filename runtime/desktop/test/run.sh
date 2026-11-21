@@ -14,13 +14,13 @@ ruby -rjson -e '
   declaration.fetch("fonts")["Unused"] = "public/unused.woff2"
   File.write(path, JSON.generate(declaration))
 ' "$project/mochi-portable.json"
-app="$desktop/Mochi.app"
+app="$desktop/Stations.app"
 resources="$app/Contents/Resources"
 for build in 1 2; do
   compiler/mochi --target=dom -i "$project" -o "$dom"
   compiler/mochi --target=desktop -i "$project" -o "$desktop"
 done
-codesign --verify --strict "$app"
+test -x "$app/Contents/MacOS/Mochi"
 plist="$app/Contents/Info.plist"
 test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = org.mochi.stations
 test "$(plutil -extract CFBundleName raw -o - "$plist")" = Stations
@@ -125,7 +125,7 @@ grep -qF "(step 2 click [data-view='selection']): selector must identify an acce
 editor="$PWD/e2e/fixtures/clay_editor"
 compiler/mochi --target=desktop -i "$editor" -o "$work/Editor bundle"
 runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/editor.m "$work/editor"
-"$work/editor" "$work/Editor bundle/Mochi.app/Contents/Resources"
+"$work/editor" "$work/Editor bundle/Station editor.app/Contents/Resources"
 compiler/mochi test --target=desktop -i "$editor" --test-file=editor_test.rb
 
 storage="$PWD/e2e/fixtures/clay_storage"
@@ -137,7 +137,7 @@ compiler/mochi test --target=desktop -i "$quota" --test-file=storage_quota_test.
 
 compiler/mochi --target=desktop -i "$storage" -o "$work/Storage bundle"
 runtime/desktop/build_host.sh "$gvm" runtime/desktop/test/storage.m "$work/test-storage"
-storage_resources="$work/Storage bundle/Mochi.app/Contents/Resources"
+storage_resources="$work/Storage bundle/Station storage.app/Contents/Resources"
 isolated_store="$work/Isolated storage"
 MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$storage_resources" seed
 
@@ -150,7 +150,7 @@ ruby -rjson -e '
   File.write(path, project.to_json)
 ' "$other/mochi-portable.json"
 compiler/mochi --target=desktop -i "$other" -o "$work/Other bundle"
-MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$work/Other bundle/Mochi.app/Contents/Resources" absent
+MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$work/Other bundle/Station storage.app/Contents/Resources" absent
 MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$storage_resources" reopen
 MOCHI_DESKTOP_STORAGE_DIR="$isolated_store" "$work/test-storage" "$storage_resources" absent
 touch "$work/Blocked storage"

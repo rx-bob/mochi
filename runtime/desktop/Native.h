@@ -3,6 +3,7 @@
 #include <mochi_native.h>
 
 #define MOCHI_DESKTOP_NATIVE_ABI 3
+#define MOCHI_DESKTOP_SCENE_SCHEMA 7
 #if MOCHI_NATIVE_ABI_VERSION != MOCHI_DESKTOP_NATIVE_ABI
 #error "Mochi desktop requires native GVM ABI version 3"
 #endif
@@ -18,6 +19,7 @@ void mochi_clay_text_leaf(int offset, int length, int font, int line_height);
 float mochi_clay_end(void);
 void mochi_clay_paint(void);
 
+BOOL DesktopPrintToolchainInfo(int argc, const char **argv);
 void DesktopInstallEditMenu(NSMenu *mainMenu);
 void DesktopFailure(NSString *reason) __attribute__((noreturn));
 NSDictionary<NSNumber *, NSString *> *DesktopApplyPatches(

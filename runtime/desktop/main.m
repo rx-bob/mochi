@@ -2,6 +2,7 @@
 
 @interface DesktopApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(nonatomic, strong) NSWindow *window;
+@property(nonatomic) BOOL verifyLaunch;
 @end
 @implementation DesktopApp
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -18,6 +19,11 @@
         self.window.contentView = view;
         [self.window center];
         [self.window makeKeyAndOrderFront:nil];
+        if (self.verifyLaunch) {
+            [self.window display];
+            [NSApp terminate:nil];
+            return;
+        }
         [NSApp activateIgnoringOtherApps:YES];
     } @catch (NSException *e) {
         fprintf(stderr, "Mochi desktop: %s\n", e.reason.UTF8String);
@@ -28,10 +34,12 @@
 - (void)applicationWillTerminate:(NSNotification *)n { [(DesktopView *)self.window.contentView close]; }
 @end
 
-int main(void) {
+int main(int argc, const char **argv) {
     @autoreleasepool {
+        if (DesktopPrintToolchainInfo(argc, argv)) return 0;
+        BOOL verify = argc == 2 && strcmp(argv[1], "--mochi-verify-app") == 0;
         [NSApplication sharedApplication];
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [NSApp setActivationPolicy:(verify ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular)];
         NSMenu *menu = [NSMenu new];
         NSMenuItem *app = [menu addItemWithTitle:@"" action:nil keyEquivalent:@""];
         app.submenu = [NSMenu new];
@@ -39,6 +47,7 @@ int main(void) {
         DesktopInstallEditMenu(menu);
         NSApp.mainMenu = menu;
         DesktopApp *delegate = [DesktopApp new];
+        delegate.verifyLaunch = verify;
         NSApp.delegate = delegate;
         [NSApp run];
         (void)delegate.window;

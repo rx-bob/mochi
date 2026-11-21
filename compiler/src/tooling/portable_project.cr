@@ -96,6 +96,12 @@ struct PortableProject
     end
   end
 
+  def bundle_name : String
+    basename = display_name.gsub(/[\/:]/, "-").strip.lstrip('.')
+    basename = "Mochi" if basename.empty?
+    "#{basename}.app"
+  end
+
   def face(family : String, weight : Int32, project_dir : String) : PortableFace?
     value = fonts[family]?
     if value.is_a?(String)

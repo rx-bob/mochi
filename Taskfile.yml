@@ -114,6 +114,18 @@ tasks:
     cmds:
       - ruby scripts/install_dev_test.rb
 
+  toolchain:package:
+    desc: Package the macOS CLI and its optional prelinked desktop toolchain
+    deps: [build]
+    cmds:
+      - ruby scripts/package_toolchain.rb --desktop
+
+  toolchain:test:
+    desc: Build and launch an app using a prebuilt macOS toolchain in an isolated prefix
+    deps: [build]
+    cmds:
+      - ruby scripts/install_toolchain_test.rb
+
   specs:
     desc: Run Crystal compiler specs
     cmds:
@@ -179,7 +191,7 @@ tasks:
       - task: app:e2e
 
   desktop:demo:
-    desc: Build the experimental macOS inspector in build/desktop-mvp/Mochi.app
+    desc: Build the experimental macOS inspector in build/desktop-mvp/Stations.app
     deps: [build]
     cmds:
       - '{{.FRAG_CONFIG}} && "{{.COMPILER}}" --target=desktop -i e2e/fixtures/clay_inspector -o build/desktop-mvp'
