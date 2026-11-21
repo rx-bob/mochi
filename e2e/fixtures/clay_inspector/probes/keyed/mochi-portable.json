@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "root": "keyed-probe",
+  "app_id": "org.mochi.keyed-probe",
+  "display_name": "Keyed probe",
+  "fonts": {}
+}

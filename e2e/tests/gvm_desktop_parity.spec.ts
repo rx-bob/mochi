@@ -257,6 +257,19 @@ test("station inspector uses real DOM buttons and preserves keyed state through 
     await expect(details).toBeFocused();
     await expect(host.locator("canvas")).toHaveCount(0);
 
+    await page.setViewportSize({ width: 640, height: 660 });
+    await harbor.press("Space");
+    await expect(selection).toHaveText("Selected station 01");
+    await harbor.press("Space");
+    await expect(harbor).toHaveAttribute("aria-expanded", "true");
+    await host.getByRole("button", { name: "Hide Harbor" }).press("Space");
+    await expect(harbor).toHaveCount(0);
+    await expect(cafe).toBeFocused();
+    await cafe.press("Space");
+    await expect(selection).toHaveText("Selected station 02");
+    await original.evaluate(button => (button as HTMLButtonElement).click());
+    await expect(selection).toHaveText("Selected station 02");
+
     await host.evaluate(element => element.remove());
     await expect(host).toHaveCount(0);
     await page.evaluate(() => document.body.append(document.createElement("record-inspector")));
@@ -279,11 +292,21 @@ test("station inspector Ruby scenario reports a wrong assertion at the authored 
     fs.writeFileSync(scenario, source.replace('"Selected station 02"', '"Selected station 99"'));
 
     expect(() => runRubyProject(project, browserName, "inspector_test.rb")).toThrow(
-      "inspector_test.rb:7: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 6 assert_text [data-view='selection'])",
+      "inspector_test.rb:8: expected 'Selected station 99' at '[data-view='selection']', got 'Selected station 02' (step 7 assert_text [data-view='selection'])",
     );
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }
+});
+
+test("station rows preserve local state and move focus after removal", ({ browserName }) => {
+  expect(runRubyProject(fixture, browserName, "keyed_rows_test.rb"))
+    .toContain(`PASS [${browserName}] retains expanded station state and returns focus after removal`);
+});
+
+test("keyed child lifetime and duplicate rejection replay from Ruby", ({ browserName }) => {
+  expect(runRubyProject(path.join(fixture, "probes/keyed"), browserName, "keyed_lifetime_test.rb"))
+    .toContain(`PASS [${browserName}] validates row keys and disposes only the removed Ruby instances`);
 });
 
 test("station details replays typed props and events using the Ruby runner", ({ browserName }) => {

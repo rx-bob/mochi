@@ -5,7 +5,7 @@ require "../tooling/portable_project"
 # Serialize only typed compiler records. No browser markup or DOM paths
 # are part of the native scene schema.
 class DesktopScene
-  VERSION = 8
+  VERSION = 9
 
   def initialize(@manifest : ComponentManifest, @styles : PortableStyles, @fonts : PortableFonts)
   end
@@ -123,7 +123,19 @@ class DesktopScene
     json.field "type", type || "child"
     unless type
       json.field "tag", node.tag
-      json.field "connections", node.child_events.transform_values { |event| {method: event.method, args: event.event_args} }
+      json.field "connections" do
+        json.object do
+          node.child_events.each do |name, event|
+            json.field name do
+              json.object do
+                json.field "method", event.method
+                json.field "args", event.event_args
+                json.field "row_context", true if event.row_context
+              end
+            end
+          end
+        end
+      end
     end
     if edit = node.edit
       json.field "edit" do

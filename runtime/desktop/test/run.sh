@@ -48,7 +48,8 @@ ruby -rjson -e '
     resources_by_kind.transform_values(&:size) == { "font" => 3, "font-license" => 1, "document-style" => 2, "style" => 1 }
   expected = %w[index.html mochi-manifest.json mochi-gvm.wasm mochi-gvm.js mochi-loader.js
     components/record-inspector.json components/record-inspector.chi
-    components/station-details.json components/station-details.chi] +
+    components/station-details.json components/station-details.chi
+    components/station-row.json components/station-row.chi] +
     shared.map { |file| "components/#{file}" } +
     resources_by_kind.values.flatten.map { |resource| resource.fetch("file") }
   abort "unexpected DOM inventory: #{files.sort}" unless files.sort == expected.sort
@@ -84,6 +85,8 @@ test_file=inspector_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file="$test_file"
 compiler/mochi test --target=desktop -i "$project" --test-file=scroll_test.rb
 compiler/mochi test --target=desktop -i "$project" --test-file=details_test.rb
+compiler/mochi test --target=desktop -i "$project" --test-file=keyed_rows_test.rb
+compiler/mochi test --target=desktop -i e2e/fixtures/clay_inspector/probes/keyed --test-file=keyed_lifetime_test.rb
 
 rejected="$work/Rejected details"
 cp -R "$project" "$rejected"
@@ -118,7 +121,7 @@ log="$work/failed-replay.log"
 compiler/mochi test --target=desktop -i "$project" --test-file="$test_file" > "$log" 2>&1 || status=$?
 cat "$log"
 test "$status" -eq 1
-grep -qF "inspector_test.rb:7 (step 6 assert_text [data-view='selection']): expected text 'Selected station 99', got 'Selected station 02'" "$log"
+grep -qF "inspector_test.rb:8 (step 7 assert_text [data-view='selection']): expected text 'Selected station 99', got 'Selected station 02'" "$log"
 grep -qF "(step 2 click [data-id='99']): selector matched no accessible control or text" "$log"
 grep -qF "(step 2 click .record): unsupported desktop selector" "$log"
 grep -qF "(step 2 click [data-view='selection']): selector must identify an accessible button" "$log"

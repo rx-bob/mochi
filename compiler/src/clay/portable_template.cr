@@ -119,7 +119,7 @@ module PortableTemplate
       end
     end
 
-    private def annotate(nodes : Array(Node), text_leaf : Bool = false, in_row : Bool = false) : Nil
+    private def annotate(nodes : Array(Node), text_leaf : Bool = false) : Nil
       nodes.each do |node|
         case node
         when Text
@@ -130,7 +130,6 @@ module PortableTemplate
             reject(node.span, "buttons accept one handler with an optional $event argument") unless action.supported
           end
           if !node.tag.in?("div", "span", "button", "label", "input")
-            reject(node.span, "child components inside keyed rows require the portable keyed child lifecycle") if in_row
             if node.children.any? { |child| !child.is_a?(Comment) && !(child.is_a?(Text) && !child.visible?) }
               reject(node.span, "portable child components do not accept slotted content")
             end
@@ -141,18 +140,18 @@ module PortableTemplate
           node.child_events.each_value do |event|
             reject(node.span, "child connections accept one handler with an optional $event argument") unless event.supported
           end
-          annotate(node.children, node.tag.in?("span", "button", "label"), in_row)
+          annotate(node.children, node.tag.in?("span", "button", "label"))
         when Conditional
           locate(node, "cond")
           reject_leaf(node, text_leaf)
-          node.branches.each { |branch| annotate(branch, in_row: in_row) }
+          node.branches.each { |branch| annotate(branch) }
         when Rows
           locate(node, "each")
           reject_leaf(node, text_leaf)
           unless node.explicit_key && node.flat
             reject(node.span, "lists require an explicit key and a flat row template")
           end
-          annotate(node.children, in_row: true)
+          annotate(node.children)
         end
       end
     end

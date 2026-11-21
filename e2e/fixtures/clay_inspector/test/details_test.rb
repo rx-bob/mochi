@@ -14,7 +14,9 @@ Mochi::Test.test("updates one typed details panel and routes its confirmation") 
   assert_text "[data-confirmation='status']", "101: Harbor / 1 / parent"
   assert_text snapshot, "child / 1"
 
-  click "[data-id='02']"
+  cafe = "[data-station='02'] >>> [data-id='02']"
+  wait_for cafe
+  click cafe
   assert_text pair, "2: Café"
   assert_text opened, "Showing details for station 101: parent"
   assert_text snapshot, "child / 1"

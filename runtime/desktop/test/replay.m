@@ -151,8 +151,10 @@ static BOOL matchesSelector(NSString *selector, NSString *tag, NSDictionary *att
     if ([name hasPrefix:@"data-"]) return attrs[name];
     if ([element isKindOfClass:NSButton.class]) {
         if ([name isEqual:@"aria-label"]) return attrs[name] ? [element accessibilityLabel] : nil;
-        if ([name isEqual:@"aria-pressed"]) {
-            NSNumber *value = [element accessibilityValue];
+        if ([name isEqual:@"aria-pressed"] || [name isEqual:@"aria-expanded"]) {
+            if (!attrs[name]) return nil;
+            NSNumber *value = [name isEqual:@"aria-expanded"] ? @([element isAccessibilityExpanded]) :
+                [element accessibilityValue];
             return value ? (value.boolValue ? @"true" : @"false") : nil;
         }
     }

@@ -3542,7 +3542,7 @@
     return node.matches(FOCUSABLE_SELECTOR);
   }
 
-  function collectFocusables(container) {
+  function collectFocusables(container, includeContainer) {
     var result = [];
     function visitChildren(parent) {
       for (var child = parent.firstElementChild; child; child = child.nextElementSibling) {
@@ -3555,7 +3555,8 @@
       if (node.shadowRoot) visitChildren(node.shadowRoot);
       else visitChildren(node);
     }
-    if (container.shadowRoot) visitChildren(container.shadowRoot);
+    if (includeContainer) visit(container);
+    else if (container.shadowRoot) visitChildren(container.shadowRoot);
     else visitChildren(container);
     return result;
   }
@@ -4823,8 +4824,14 @@
       if (item.isNew) insertRowBefore(item.entry, anchor);
     });
 
+    var active = deepActiveElement(parent.getRootNode && parent.getRootNode());
+    var removedFocusIndex = -1;
     previous.forEach(function (entry, key) {
-      if (!next.has(key)) removeRowEntry(entry);
+      if (next.has(key)) return;
+      if (active && rowRange(entry).some(function (node) { return composedContainsNode(node, active); })) {
+        removedFocusIndex = entry.context.index;
+      }
+      removeRowEntry(entry);
     });
 
     var reference = state.start;
@@ -4834,6 +4841,19 @@
     });
 
     state.items = next;
+    if (removedFocusIndex >= 0) {
+      var candidates = planned.filter(function (item) { return !item.isNew; });
+      var following = candidates.filter(function (item) { return item.index >= removedFocusIndex; });
+      var preceding = candidates.filter(function (item) { return item.index < removedFocusIndex; }).reverse();
+      following.concat(preceding).some(function (item) {
+        return rowRange(item.entry).some(function (node) {
+          return collectFocusables(node, true).some(function (target) {
+            target.focus();
+            return deepActiveElement() === target;
+          });
+        });
+      });
+    }
   }
 
   function applyEachPatch(element, target, binding, value) {

@@ -15,15 +15,17 @@ File.write(File.join(project, "test", "rejected_details_test.rb"), <<~'TEST')
     click "station-details >>> [data-detail='confirm']"
     assert_text "[data-confirmation='status']", "No station confirmed"
 
+    cafe = "[data-station='02'] >>> [data-id='02']"
+    wait_for cafe
     expect_error 'prop "station_id" is required'
-    click "[data-id='02']"
+    click cafe
     assert_text pair, "1: Harbor"
     click details
     expect_error 'prop "station_id" is required'
     click details
     assert_text "[data-view='selection']", "Selected station 02"
 
-    click "[data-id='03']"
+    click "[data-station='03'] >>> [data-id='03']"
     assert_text "[data-view='selection']", "Selected station 03"
     click details
     click details

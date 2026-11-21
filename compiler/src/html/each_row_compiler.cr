@@ -138,6 +138,7 @@ class EachRowCompiler
       end
 
       actions << EventAction.new("call", handler, args: arguments, span: call.span) unless actions.empty? || handler.empty?
+      connection = portable && call.component? ? %( data-mochi-portable-on-#{call.event}="") : ""
       unless arguments.empty? && actions.empty?
         if arguments.any? { |argument| argument.kind == "element" }
           raise TemplateExpressionError.new(
@@ -159,9 +160,9 @@ class EachRowCompiler
           call.modifiers,
           actions
         )
-        %(data-mochi-#{call.event}="#{wrapper}"#{EventArgumentExtractor.render_modifiers(call)})
+        %(data-mochi-#{call.event}="#{wrapper}"#{EventArgumentExtractor.render_modifiers(call)}#{connection})
       else
-        %(data-mochi-#{call.event}="#{handler}"#{EventArgumentExtractor.render_modifiers(call)})
+        %(data-mochi-#{call.event}="#{handler}"#{EventArgumentExtractor.render_modifiers(call)}#{connection})
       end
     end
 
@@ -236,7 +237,10 @@ class EachRowCompiler
       EachRowConditional.new(id, conditions, branches, parser.locator.try(&.locate(block.condition)))
     end
     sentinel_template = TemplateAttributes.rewrite(sentinel_template, parser) do |attribute|
-      attribute.name.starts_with?("data-mochi-bind-") ? "" : nil
+      if attribute.name.starts_with?("data-mochi-bind-") ||
+         (portable && attribute.name.starts_with?("data-mochi-portable-on-"))
+        ""
+      end
     end
     fragment = EachRowFragment.new(
       fragment_id,
@@ -296,17 +300,16 @@ class EachRowCompiler
       PortableTemplate::Comment.new
     else
       attrs = DomAttributes.read(node)
-      action = if method = attrs["data-mochi-click"]?
-                 event = events.find { |candidate| candidate.wrapper_sym == method }
-                 if event
-                   supported = event.actions.size <= 1 && event.args.size <= 1 && event.args.all? { |arg| arg.kind == "event" }
-                   PortableTemplate::Action.new(method, event.args.size, true, supported)
-                 else
-                   PortableTemplate::Action.new(method, 0, false)
-                 end
+      action = if (method = attrs["data-mochi-click"]?) && !attrs.has_key?("data-mochi-portable-on-click")
+                 row_action(method, events)
                end
       operands = {} of String => PortableTemplate::Parts
+      child_events = {} of String => PortableTemplate::Action
       attrs.each do |name, value|
+        if name.starts_with?("data-mochi-portable-on-")
+          event = name.lchop("data-mochi-portable-on-")
+          child_events[event] = row_action(attrs["data-mochi-#{event}"], events)
+        end
         kind = attrs.has_key?("data-mochi-bind-#{name}") ? "prop" : "attr"
         parts = row_parts(value, token, classification, {kind, name})
         operands[name] = parts unless name.starts_with?("data-mochi-")
@@ -319,7 +322,17 @@ class EachRowCompiler
           edit = PortableTemplate::Edit.new(property, value, method, true)
         end
       end
-      PortableTemplate::Element.new(tag, operands, children, action, edit: edit)
+      PortableTemplate::Element.new(tag, operands, children, action, child_events, edit)
+    end
+  end
+
+  private def self.row_action(method : String, events : Array(EachRowEventDescriptor)) : PortableTemplate::Action
+    event = events.find { |candidate| candidate.wrapper_sym == method }
+    if event
+      supported = event.actions.size <= 1 && event.args.size <= 1 && event.args.all? { |arg| arg.kind == "event" }
+      PortableTemplate::Action.new(method, event.args.size, true, supported)
+    else
+      PortableTemplate::Action.new(method, 0, false)
     end
   end
 

@@ -44,12 +44,14 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
   });
   const capture = await root.locator(selectors).evaluateAll((elements): Capture => {
     const panel = elements[0].getBoundingClientRect();
-    const focused = elements[0].getRootNode() as ShadowRoot;
+    const shadow = elements[0].getRootNode() as ShadowRoot;
+    let focused = shadow.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
     let focus: string | null = null;
     const controls = elements.map((el): Control => {
       const { view, action, id } = (el as HTMLElement).dataset;
       const key = view || (action ? `action-${action}` : `station-${id}`);
-      if (focused.activeElement === el) focus = key;
+      if (focused === el) focus = key;
       const bounds = el.getBoundingClientRect();
       const container = view === "panel" || view === "actions";
       const lines: string[] = [];
@@ -96,7 +98,7 @@ export async function captureDOM(page: Page, stem: string): Promise<Capture> {
         ink: style.color.match(/\d+/g)!.map(Number) as RGB, lineFrames,
       };
     });
-    const viewport = focused.querySelector<HTMLElement>("[data-scroll=stations]");
+    const viewport = shadow.querySelector<HTMLElement>("[data-scroll=stations]");
     const bounds = viewport?.getBoundingClientRect();
     const scroll = viewport && bounds ? {
       rect: [bounds.x, bounds.y, bounds.width, bounds.height] as Rect,

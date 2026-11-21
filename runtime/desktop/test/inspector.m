@@ -188,7 +188,7 @@ static void inspect(NSURL *resources, NSString *capture) {
     checkPatchBatches(program.scene[@"components"][program.scene[@"root"]]);
     DesktopView *view = [[DesktopView alloc] initWithProgram:program];
     DesktopView *other = [[DesktopView alloc] initWithProgram:program];
-    check(mochi_component_count() == 2 && label(other, @"Selected station 01"), @"two independent mounted views");
+    check(mochi_component_count() == 8 && label(other, @"Selected station 01"), @"two independent inspector roots with three row VMs each");
     NSWindow *window = [[NSWindow alloc] initWithContentRect:view.bounds
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     window.title = @"Mochi desktop regression";
@@ -216,13 +216,13 @@ static void inspect(NSURL *resources, NSString *capture) {
     check(label(view, @"Selected station 02"), @"selection survives reorder");
     [window makeFirstResponder:button(view, @"Details")];
     press(window, @" ", 49);
-    check(label(view, @"Showing details for station 02") && mochi_component_count() == 3, @"Space mounts one details VM");
+    check(label(view, @"Showing details for station 02") && mochi_component_count() == 9, @"Space mounts one details VM");
     NSButton *confirm = button(view, @"Confirm station");
     check([confirm accessibilityPerformPress] && label(view, @"102: Café / 1 / parent"),
           @"child routes exactly one typed event to its owning parent");
     check(label(other, @"Selected station 01"), @"child event stays scoped to the first view");
     press(window, @"\r", 36);
-    check(!label(view, @"Showing details for station 02") && mochi_component_count() == 2, @"Return disposes details");
+    check(!label(view, @"Showing details for station 02") && mochi_component_count() == 8, @"Return disposes details");
     check(![confirm accessibilityPerformPress], @"disconnected child control cannot dispatch");
     press(window, @" ", 49);
     NSButton *retainedConfirm = button(view, @"Confirm station");
@@ -235,7 +235,7 @@ static void inspect(NSURL *resources, NSString *capture) {
     check(window.firstResponder == button(view, @"West"), @"tab order follows reversed rows");
     press(window, @" ", 49);
     check(label(view, @"Showing details for station 03"), @"keyboard event resolves the moved row");
-    check(retainedConfirm != confirm && mochi_component_count() == 3, @"reopening creates exactly one new child");
+    check(retainedConfirm != confirm && mochi_component_count() == 9, @"reopening creates exactly one new child");
     check(button(view, @"Confirm station") == retainedConfirm, @"prop updates keep the mounted child control");
     if (capture) {
         NSBitmapImageRep *rep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
@@ -243,8 +243,29 @@ static void inspect(NSURL *resources, NSString *capture) {
         NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
         check([png writeToFile:capture atomically:YES], @"capture native drawing");
     }
+    [window setContentSize:NSMakeSize(560, 620)];
+    [window makeFirstResponder:harbor];
+    press(window, @" ", 49);
+    press(window, @" ", 49);
+    check(harbor.isAccessibilityExpanded, @"station expands in its own VM");
+    NSButton *hide = button(view, @"Hide Harbor");
+    NSButton *reverse = button(view, @"Reverse");
+    check([reverse accessibilityPerformPress] && window.firstResponder == harbor &&
+          button(view, @"Hide Harbor") == hide, @"first move retains focus and expanded controls");
+    press(window, @"\t", 48);
+    check(window.firstResponder == hide, @"Tab follows the expanded station");
+    press(window, @"\t", 48);
+    check(window.firstResponder == cafe, @"Tab continues in the reordered list");
+    [window makeFirstResponder:harbor];
+    check([reverse accessibilityPerformPress] && window.firstResponder == harbor &&
+          button(view, @"Hide Harbor") == hide, @"second move retains focus and expanded controls");
+    press(window, @"\t", 48);
+    check(window.firstResponder == hide, @"Tab reaches the moved remove control");
+    press(window, @" ", 49);
+    check(window.firstResponder == cafe && mochi_component_count() == 8 &&
+          ![hide accessibilityPerformPress] && ![harbor accessibilityPerformPress], @"removal focuses the preceding row and releases the removed VM");
     [view close];
-    check(mochi_component_count() == 1, @"closing the view unregisters only its Ruby instance");
+    check(mochi_component_count() == 4, @"closing the view unregisters its root and remaining child VMs");
     check(!cafe.superview && !cafe.enabled && !cafe.target && !cafe.action &&
           ![cafe accessibilityPerformPress], @"detached native row cannot dispatch");
     check([button(other, @"West") accessibilityPerformPress] && label(other, @"Selected station 03"),
@@ -252,7 +273,7 @@ static void inspect(NSURL *resources, NSString *capture) {
     [other close];
     DesktopView *replacement = [[DesktopView alloc] initWithProgram:program];
     window.contentView = replacement;
-    check(mochi_component_count() == 1 && button(replacement, @"Café") != cafe &&
+    check(mochi_component_count() == 4 && button(replacement, @"Café") != cafe &&
           ![cafe accessibilityPerformPress] && label(replacement, @"Selected station 01"),
           @"stale row cannot dispatch after remount");
     checkScrolling(replacement, window);

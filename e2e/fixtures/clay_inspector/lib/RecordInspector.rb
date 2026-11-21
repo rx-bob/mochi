@@ -29,9 +29,13 @@ class RecordInspector
   end
 
   def select_record(event)
-    dataset = event["current_target_dataset"]
-    @selected = dataset["id"]
-    @station_name = dataset["name"]
+    @selected = event["id"]
+    @station_name = event["name"]
+  end
+
+  def hide_record(event)
+    hidden_id = event["id"]
+    @records = @records.select { |record| record["id"] != hidden_id }
   end
 
   def reverse_records
@@ -73,7 +77,7 @@ class RecordInspector
         </div>
         <div class="stations" data-scroll="stations">
           {each @records as record, key: record["id"]}
-            <button class="{if @selected == record['id']}selected{end} record" tabindex="0" aria-pressed="{@selected == record['id']}" data-id="{record['id']}" data-name="{record['name']}" onclick="{select_record($event)}">{record["name"]}{record["label"]}</button>
+            <station-row data-station="{record['id']}" station-id="{record['id']}" station-name="{record['name']}" description="{record['label']}" selected="{@selected == record['id']}" on:select="{select_record($event)}" on:hide="{hide_record($event)}"></station-row>
           {end}
         </div>
         <span class="selection" data-view="selection">Selected st&#97;tion {@selected}</span>
@@ -135,19 +139,6 @@ class RecordInspector
       .action-fixed {
         width: 108px;
         height: 38px;
-      }
-      .record {
-        width: auto;
-        font-family: StationSans, StationSymbols, sans-serif;
-        font-size: 16px;
-        line-height: 24px;
-        padding: 8px;
-        border: 0;
-        text-align: left;
-        background-color: #ffffff;
-      }
-      .selected {
-        background-color: #c9e7d9;
       }
     }
   end

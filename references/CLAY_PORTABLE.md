@@ -113,7 +113,7 @@ and single-class flex styles.
 
 ## Child components
 
-Mount an empty child tag in a component or conditional branch. Declare its
+Mount an empty child tag in a component, conditional branch, or keyed row. Declare its
 inputs with `prop` and connect its declared events with
 `on:confirm="{confirm_station($event)}"`. Use dashed attribute names for
 declared props with underscores. Each mounted child owns its own Ruby
@@ -124,8 +124,15 @@ The child can emit the same typed payload to its owning parent on either host.
 A bad mount leaves the other controls active. A rejected input update keeps
 the previous child inputs. An invalid event reports its declaration and
 skips the parent handler. Closing a branch disposes its child. Reopening
-creates a fresh instance with the current parent inputs. The portable
-profile currently supports child tags outside keyed rows.
+creates a fresh instance with the current parent inputs.
+
+A keyed row retains its mounted children, local state and controls when it
+moves. Key identity includes the parent mount, the list site and the key's
+type. Duplicate keys report the template location and leave the previous list
+in place. A removed row unmounts once. Tab follows the current row order. If
+the focused row disappears, focus moves to the first focusable control in a
+surviving row at or after the old position, then tries preceding rows. If no
+surviving row has a focusable control, focus leaves the list.
 See the [station inspector](../e2e/fixtures/clay_inspector) for a working
 project and its shared Ruby scenario.
 

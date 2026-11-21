@@ -134,13 +134,30 @@ void DesktopInstallEditMenu(NSMenu *mainMenu) {
 }
 @end
 
+@class DesktopRow;
 @interface DesktopMount : NSObject
 @property(nonatomic, strong) DesktopVM *vm;
 @property(nonatomic, weak) DesktopMount *parent;
 @property(nonatomic, copy) NSString *key;
 @property(nonatomic, copy) NSDictionary *connections, *attemptedAttributes;
+@property(nonatomic, strong) DesktopRow *parentRow;
 @end
 @implementation DesktopMount
+@end
+
+@interface DesktopRow : NSObject
+@property(nonatomic, copy) NSString *identity;
+@property(nonatomic, copy) NSArray *slots, *arguments;
+@end
+@implementation DesktopRow
+@end
+
+@interface DesktopList : NSObject
+@property(nonatomic, copy) NSString *wire;
+@property(nonatomic, copy) NSArray<DesktopRow *> *rows;
+@property(nonatomic, copy) NSDictionary<NSString *, NSNumber *> *indices;
+@end
+@implementation DesktopList
 @end
 
 @interface DesktopBox : NSObject
@@ -149,7 +166,7 @@ void DesktopInstallEditMenu(NSMenu *mainMenu) {
 @property(nonatomic, strong) NSColor *color, *background;
 @property(nonatomic, copy) NSString *key, *label, *formValue;
 @property(nonatomic, copy) NSDictionary *attrs, *definition;
-@property(nonatomic, copy) NSArray *rowArguments;
+@property(nonatomic, strong) DesktopRow *row;
 @property(nonatomic, strong) DesktopMount *owner;
 @property(nonatomic) BOOL insideScroll;
 #ifdef MOCHI_DESKTOP_CAPTURE
@@ -260,6 +277,9 @@ static NSString *displayValue(id value) {
     NSDictionary *_graphicsFonts;
     NSMutableDictionary<NSArray *, DesktopTypography *> *_typography;
     NSMutableDictionary<NSString *, NSControl *> *_controls;
+    NSDictionary<NSString *, DesktopLabel *> *_labels;
+    NSDictionary<NSString *, DesktopList *> *_rowLists;
+    NSMutableDictionary<NSString *, DesktopList *> *_frameLists;
     NSArray<NSDictionary *> *_labelTargets;
     NSArray *_commands, *_accessibles;
     NSScrollView *_scrollView;
@@ -465,7 +485,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
 }
 
 - (DesktopMount *)reconcileChild:(NSDictionary *)node key:(NSString *)key owner:(DesktopMount *)owner
-                     attributes:(NSDictionary *)attributes {
+                     attributes:(NSDictionary *)attributes row:(DesktopRow *)row {
     DesktopMount *mount = _children[key];
     if (!mount) {
         mount = [DesktopMount new];
@@ -474,6 +494,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         mount.connections = node[@"connections"];
         _children[key] = mount;
     }
+    mount.parentRow = row;
     if ([mount.attemptedAttributes isEqual:attributes]) return mount;
     mount.attemptedAttributes = attributes;
     @try {
@@ -518,7 +539,11 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             NSDictionary *connection = owner.connections[name];
             if (!connection) continue;
             DesktopMount *parent = owner.parent;
-            NSArray *args = [connection[@"args"] boolValue] ? @[payload] : nil;
+            NSArray *args = nil;
+            if ([connection[@"row_context"] boolValue])
+                args = [owner.parentRow.arguments arrayByAddingObject:payload];
+            else if ([connection[@"args"] boolValue])
+                args = @[payload];
             [parent.vm activate:connection[@"method"] arguments:args payload:payload];
             [self enqueueEvents:parent];
             // The handler may have removed the sender. Reconcile before
@@ -529,8 +554,52 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
     return NO;
 }
 
+- (DesktopList *)planList:(NSDictionary *)node key:(NSString *)key owner:(DesktopMount *)owner {
+    NSString *wire = owner.vm.values[node[@"binding"]];
+    DesktopList *previous = _rowLists[key];
+    if (previous && [previous.wire isEqual:wire]) return previous;
+
+    DesktopList *list = [DesktopList new];
+    list.wire = wire;
+    @try {
+        NSData *json = [wire dataUsingEncoding:NSUTF8StringEncoding];
+        NSError *error = nil;
+        NSArray *rows = json ? [NSJSONSerialization JSONObjectWithData:json options:0 error:&error] : nil;
+        if (![rows isKindOfClass:NSArray.class]) DesktopFailure(error.localizedDescription ?: @"Invalid Ruby row patch");
+        NSMutableDictionary<NSString *, NSNumber *> *indices = [NSMutableDictionary dictionary];
+        NSMutableArray<DesktopRow *> *planned = [NSMutableArray arrayWithCapacity:rows.count];
+        for (NSArray *row in rows) {
+            NSUInteger index = planned.count;
+            if (![row isKindOfClass:NSArray.class] || row.count < 4 || ![row[1] isKindOfClass:NSArray.class])
+                DesktopFailure(@"Invalid keyed row from GVM");
+            if (row[3] == NSNull.null)
+                DesktopFailure([NSString stringWithFormat:@"keyed list row at index %lu is missing a key", (unsigned long)index]);
+            NSData *encoded = [NSJSONSerialization dataWithJSONObject:@[row[3]] options:NSJSONWritingSortedKeys error:&error];
+            if (!encoded) DesktopFailure(error.localizedDescription);
+            NSString *identity = [[encoded base64EncodedStringWithOptions:0] stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+            NSNumber *first = indices[identity];
+            if (first)
+                DesktopFailure([NSString stringWithFormat:@"duplicate list key \"%@\" at rows %@ and %lu", row[3], first, (unsigned long)index]);
+            indices[identity] = @(index);
+            DesktopRow *entry = [DesktopRow new];
+            entry.identity = identity;
+            entry.slots = row[1];
+            entry.arguments = @[row[0], @(index)];
+            [planned addObject:entry];
+        }
+        list.rows = planned;
+        list.indices = indices;
+    } @catch (NSException *e) {
+        NSDictionary *span = node[@"span"];
+        [self reportComponentFailure:[NSString stringWithFormat:@"%@:%@:%@: %@", span[@"file"], span[@"line"], span[@"column"], e.reason]];
+        list.rows = previous.rows;
+        list.indices = previous.indices;
+    }
+    return list;
+}
+
 - (void)layoutNodes:(NSArray *)nodes parent:(NSDictionary *)parent stretch:(BOOL)stretch
-              scope:(NSString *)scope slots:(NSArray *)slots arguments:(NSArray *)rowArgs
+              scope:(NSString *)scope slots:(NSArray *)slots row:(DesktopRow *)row
               owner:(DesktopMount *)owner seen:(NSMutableSet<NSString *> *)seen insideScroll:(BOOL)insideScroll {
     DesktopVM *vm = owner.vm;
     for (NSDictionary *node in nodes) {
@@ -541,27 +610,16 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
             NSInteger index = [value isEqual:@"true"] ? 0 : value.integerValue;
             if (([value isEqual:@"true"] || [value isEqual:@(index).stringValue]) && index >= 0 && index < (NSInteger)[node[@"branches"] count])
                 [self layoutNodes:node[@"branches"][index] parent:parent stretch:stretch scope:key slots:slots
-                       arguments:rowArgs owner:owner seen:seen insideScroll:insideScroll];
+                       row:row owner:owner seen:seen insideScroll:insideScroll];
             continue;
         }
         if ([type isEqual:@"each"]) {
-            NSString *value = vm.values[node[@"binding"]];
-            NSData *json = [value dataUsingEncoding:NSUTF8StringEncoding];
-            NSError *error = nil;
-            NSArray *rows = json ? [NSJSONSerialization JSONObjectWithData:json options:0 error:&error] : nil;
-            if (![rows isKindOfClass:NSArray.class]) DesktopFailure(error.localizedDescription ?: @"Invalid Ruby row patch");
-            NSMutableSet *keys = [NSMutableSet set];
-            NSUInteger index = 0;
-            for (NSArray *row in rows) {
-                if (![row isKindOfClass:NSArray.class] || row.count < 4 || ![row[1] isKindOfClass:NSArray.class])
-                    DesktopFailure(@"Invalid keyed row from GVM");
-                NSData *encoded = [NSJSONSerialization dataWithJSONObject:@[row[3]] options:NSJSONWritingSortedKeys error:&error];
-                NSString *identity = [encoded base64EncodedStringWithOptions:0];
-                if ([keys containsObject:identity]) DesktopFailure([NSString stringWithFormat:@"%@: duplicate row key %@", vm.scene[@"source"], row[3]]);
-                [keys addObject:identity];
+            DesktopList *list = [self planList:node key:key owner:owner];
+            _frameLists[key] = list;
+            for (DesktopRow *entry in list.rows) {
                 [self layoutNodes:node[@"nodes"] parent:parent stretch:stretch
-                            scope:[key stringByAppendingFormat:@":%@", identity] slots:row[1]
-                        arguments:@[row[0], @(index++)] owner:owner seen:seen insideScroll:insideScroll];
+                            scope:[key stringByAppendingFormat:@":%@", entry.identity] slots:entry.slots
+                              row:entry owner:owner seen:seen insideScroll:insideScroll];
             }
             continue;
         }
@@ -570,14 +628,14 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         DesktopMount *child = nil;
         if (childNode) {
             [seen addObject:key];
-            child = [self reconcileChild:node key:key owner:owner attributes:attrs];
+            child = [self reconcileChild:node key:key owner:owner attributes:attrs row:row];
         }
         NSDictionary *style = [self styleFor:node slots:slots parent:parent vm:vm];
         DesktopBox *box = [DesktopBox new];
         box.key = key;
         box.definition = node;
         box.attrs = attrs;
-        box.rowArguments = rowArgs;
+        box.row = row;
         box.owner = owner;
         box.insideScroll = insideScroll;
 #ifdef MOCHI_DESKTOP_CAPTURE
@@ -617,10 +675,10 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
                             pad, pad, pad, pad, [style[@"gap"] intValue]);
         if (childNode) {
             [self layoutNodes:child.vm.scene[@"nodes"] parent:@{} stretch:column
-                        scope:key slots:@[] arguments:nil owner:child seen:seen insideScroll:insideScroll];
+                        scope:key slots:@[] row:row owner:child seen:seen insideScroll:insideScroll];
         } else if ([type isEqual:@"box"]) {
             [self layoutNodes:node[@"nodes"] parent:style stretch:column scope:key slots:slots
-                     arguments:rowArgs owner:owner seen:seen insideScroll:insideScroll || scroll];
+                     row:row owner:owner seen:seen insideScroll:insideScroll || scroll];
         } else if (!edit) {
             box.typography = [self typographyFor:style scene:vm.scene];
             NSMutableString *label = [NSMutableString string];
@@ -677,6 +735,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
     frameBoxes = [NSMutableArray arrayWithObject:[DesktopBox new]];
     paintCommands = [NSMutableArray array];
     scrollCommands = [NSMutableArray array];
+    _frameLists = [NSMutableDictionary dictionary];
     layoutScene = _root.vm.scene;
     @try {
         CGFloat width = self.bounds.size.width;
@@ -692,16 +751,18 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         _scrollNode = 0;
         NSMutableSet *seen = [NSMutableSet set];
         [self layoutNodes:_root.vm.scene[@"nodes"] parent:@{} stretch:YES scope:@"" slots:@[]
-                 arguments:nil owner:_root seen:seen insideScroll:NO];
+                 row:nil owner:_root seen:seen insideScroll:NO];
         mochi_clay_close_box();
         layoutScene = _root.vm.scene;
         layoutNode = nil;
         mochi_clay_end();
         mochi_clay_paint();
+        NSDictionary *previousLists = _rowLists;
+        _rowLists = _frameLists;
         [self disposeChildrenExcept:seen];
         _commands = [paintCommands copy];
         [self updateScrollViewport];
-        [self syncControls:frameBoxes];
+        [self syncControls:frameBoxes previousLists:previousLists];
 #ifdef MOCHI_DESKTOP_CAPTURE
         _observedBoxes = [frameBoxes copy];
 #endif
@@ -710,6 +771,7 @@ static id partValue(id part, NSArray *slots, DesktopVM *vm) {
         frameBoxes = nil;
         paintCommands = nil;
         scrollCommands = nil;
+        _frameLists = nil;
         layoutScene = nil;
         layoutNode = nil;
     }
@@ -869,6 +931,8 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
             if (button.state != state) button.state = state;
         } else {
             button.accessibilityValue = box.attrs[@"aria-pressed"] ? @([box.attrs[@"aria-pressed"] isEqual:@"true"]) : nil;
+            if (box.attrs[@"aria-expanded"])
+                button.accessibilityExpanded = [box.attrs[@"aria-expanded"] isEqual:@"true"];
         }
         control = button;
     }
@@ -885,8 +949,67 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
     return control;
 }
 
-- (void)syncControls:(NSArray<DesktopBox *> *)boxes {
+static NSString *rowIdentityInList(NSString *scope, NSString *controlKey) {
+    if (![controlKey hasPrefix:scope]) return nil;
+    NSRange tail = NSMakeRange(scope.length, controlKey.length - scope.length);
+    NSRange boundary = [controlKey rangeOfString:@"/" options:0 range:tail];
+    if (boundary.location == NSNotFound) return nil;
+    return [controlKey substringWithRange:NSMakeRange(scope.length, boundary.location - scope.length)];
+}
+
+- (void)restoreRemovedRowFocus:(NSString *)focusKey previousLists:(NSDictionary<NSString *, DesktopList *> *)previousLists
+                         order:(NSArray<NSControl *> *)order {
+    // A focused control can belong to a list inside a child row. Find the
+    // nearest surviving list that lost an enclosing row of that control.
+    NSString *listScope = nil;
+    NSNumber *formerIndex = nil;
+    DesktopList *focusedList = nil, *previousList = nil;
+    for (NSString *key in previousLists) {
+        DesktopList *list = _rowLists[key];
+        if (!list || key.length < listScope.length) continue;
+        NSString *scope = [key stringByAppendingString:@":"];
+        NSString *identity = rowIdentityInList(scope, focusKey);
+        if (!identity || list.indices[identity]) continue;
+        DesktopList *prior = previousLists[key];
+        NSNumber *index = prior.indices[identity];
+        if (!index) continue;
+        listScope = scope;
+        formerIndex = index;
+        focusedList = list;
+        previousList = prior;
+    }
+    if (!listScope) return;
+
+    NSControl *fallback = nil;
+    NSNumber *previousIndex = nil;
+    for (NSControl *control in order) {
+        NSString *key = controlBox(control).key;
+        NSString *identity = rowIdentityInList(listScope, key);
+        if (!identity || !previousList.indices[identity]) continue;
+        NSNumber *index = focusedList.indices[identity];
+        if (index.unsignedIntegerValue >= formerIndex.unsignedIntegerValue) {
+            fallback = control;
+            break;
+        }
+        if (![index isEqual:previousIndex]) fallback = control;
+        previousIndex = index;
+    }
+    [self.window makeFirstResponder:fallback];
+}
+
+- (void)syncControls:(NSArray<DesktopBox *> *)boxes previousLists:(NSDictionary *)previousLists {
+    NSResponder *firstResponder = self.window.firstResponder;
+    NSString *focusKey = controlBox(firstResponder).key;
+    if (!focusKey && [firstResponder isKindOfClass:NSTextView.class]) {
+        for (NSControl *control in _controls.allValues) {
+            if (control.currentEditor == firstResponder) {
+                focusKey = controlBox(control).key;
+                break;
+            }
+        }
+    }
     NSMutableDictionary *retained = [NSMutableDictionary dictionary];
+    NSMutableDictionary *retainedLabels = [NSMutableDictionary dictionary];
     NSMutableDictionary *labels = [NSMutableDictionary dictionary];
     NSMutableArray *targets = [NSMutableArray array];
     NSMutableArray *accessible = [NSMutableArray array];
@@ -912,7 +1035,7 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
             for (DesktopBox *label in associated)
                 [targets addObject:@{@"box":label, @"control":control}];
         } else if (box.label) {
-            DesktopLabel *label = [DesktopLabel new];
+            DesktopLabel *label = _labels[box.key] ?: [DesktopLabel new];
             label.accessibilityRole = NSAccessibilityStaticTextRole;
             label.accessibilityValue = box.label;
             label.accessibilityParent = box.insideScroll ? _scrollDocument : self;
@@ -921,11 +1044,19 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
             label.accessibilityFrameInParentSpace = frame;
             label.attributes = box.attrs;
             label.owner = box.owner;
+            retainedLabels[box.key] = label;
             [accessible addObject:label];
         }
     }
+    if (focusKey && !retained[focusKey]) [self restoreRemovedRowFocus:focusKey previousLists:previousLists order:order];
     for (NSString *key in _controls) if (!retained[key]) detachControl(_controls[key]);
+    for (NSString *key in _labels) {
+        if (retainedLabels[key]) continue;
+        _labels[key].accessibilityParent = nil;
+        _labels[key].owner = nil;
+    }
     _controls = retained;
+    _labels = retainedLabels;
     _labelTargets = [targets copy];
     _accessibles = accessible;
     for (NSUInteger i = 0; i < order.count; i++) order[i].nextKeyView = order[(i+1) % order.count];
@@ -992,7 +1123,7 @@ static NSArray *labelKey(DesktopBox *box, NSString *identifier) {
     }
     NSDictionary *entry = edit ?: box.definition;
     NSArray *args = nil;
-    if ([entry[@"row_context"] boolValue] && box.rowArguments) args = [box.rowArguments arrayByAddingObject:payload];
+    if ([entry[@"row_context"] boolValue]) args = [box.row.arguments arrayByAddingObject:payload];
     else if (edit || [entry[@"event_args"] intValue]) args = @[payload];
     @try {
         [box.owner.vm activate:method arguments:args payload:payload];
@@ -1066,11 +1197,17 @@ static void paintDesktopCommands(NSArray *commands) {
     for (NSControl *control in _controls.allValues) detachControl(control);
     _labelTargets = nil;
     [_controls removeAllObjects];
+    _rowLists = nil;
     [_scrollView removeFromSuperview];
     _scrollView = nil;
     _scrollDocument = nil;
     _scrollKey = nil;
     _accessibles = nil;
+    for (DesktopLabel *label in _labels.allValues) {
+        label.accessibilityParent = nil;
+        label.owner = nil;
+    }
+    _labels = nil;
     _commands = nil;
 #ifdef MOCHI_DESKTOP_CAPTURE
     _observedBoxes = nil;
