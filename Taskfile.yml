@@ -126,6 +126,12 @@ tasks:
     cmds:
       - ruby scripts/install_toolchain_test.rb
 
+  stations:candidate:
+    desc: Build and replay the station release archives using an isolated macOS toolchain install
+    deps: ["toolchain:package"]
+    cmds:
+      - ruby scripts/stations_release.rb build build/toolchains build/stations-candidate
+
   specs:
     desc: Run Crystal compiler specs
     cmds:

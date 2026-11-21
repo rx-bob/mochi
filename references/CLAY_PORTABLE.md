@@ -140,9 +140,19 @@ Ruby packages and shared CSS imports. Diagnostics name the component and the
 Ruby or stylesheet line. Both builds compile the root's package closure.
 Projects without the declaration use the ordinary DOM build.
 
-Version 1 covers the station inspector's `div`, `span` and `button` templates,
-local Ruby state, conditionals, explicitly keyed flat rows, click handlers
-and single-class flex styles.
+| Feature | Browser and AppKit |
+| --- | --- |
+| Layout and styling | `div` and `span`, single-class flex styles, one vertical scroll region, and a root container-width rule |
+| Controls | Text labels, buttons, text inputs, and checkboxes with accessible names, disabled state, and keyboard focus |
+| Composition | Ruby state, conditionals, keyed flat rows, typed child props, and scoped child events |
+| Editing and persistence | Live field bindings, focus refs, polite status messages, and confirmed local storage writes |
+| Fonts | Declared static faces and a generic platform fallback |
+
+The first profile covers the features in this table. Rich text, arbitrary
+DOM access, SVG and general CSS are outside it. For a rejected feature, read
+the component and Ruby, template, or stylesheet location in the compiler
+message. Check inactive template branches, stylesheet imports and the
+declared package closure as well as the visible screen.
 
 ## Child components
 
@@ -209,10 +219,12 @@ station. Try again.** and keeps the current controls, draft and focus.
 **Cancel** discards the draft and returns focus to the same button.
 
 Run the authored scenario from the repository root. Each invocation uses
-isolated storage by default.
+isolated storage by default. An archive-installed CLI needs the Playwright
+dependencies from the checkout for browser tests.
 
 ```sh
-mochi test -i e2e/fixtures/clay_inspector --test-file=editor_test.rb --browsers=all
+MOCHI_E2E_NODE_MODULES="$PWD/e2e/node_modules" \
+  mochi test -i e2e/fixtures/clay_inspector --test-file=editor_test.rb --browsers=all
 mochi test --target=desktop -i e2e/fixtures/clay_inspector --test-file=editor_test.rb
 task desktop:parity
 ```
@@ -282,7 +294,80 @@ override the recorded package. An invalid explicit path fails the build.
 `display_name` for the bundle filename and its `app_id` for the bundle
 identifier. A successful build can replace a previous Mochi product with
 the same filename and identifier. You can move and launch the finished
-`.app` offline. Release signing and notarization are separate steps.
+`.app` offline.
+
+## Distributing Stations
+
+`task stations:candidate` packages the toolchains and installs them under a
+temporary prefix. It builds the static directory and `Stations.app` from
+one copy of the project, then unpacks the resulting ZIPs into a separate
+directory. The shared [Ruby editor scenario](../e2e/fixtures/clay_inspector/test/editor_test.rb)
+runs against the web entry under `/deployments/tenant/stations/` in Chromium,
+Firefox and WebKit. The AppKit runner uses the extracted app's resources and
+a fresh storage directory. The extracted executable also mounts its own
+resources with networking denied. The macOS CI job stages the verified
+candidate ZIPs and matching toolchain archives as build artifacts.
+
+The local candidate was verified on **Apple silicon (arm64), macOS 26.6.2**.
+Its Mach-O deployment minimum is **macOS 15.5**. The candidate log reports
+both versions. Use `xcrun vtool -show-build Stations.app/Contents/MacOS/Mochi`
+to confirm the deployment minimum for the app you plan to ship. Claim other
+versions or architectures after the same artifact checks and recipient test
+pass there.
+
+The bundled regular and bold faces cover printable ASCII and precomposed
+é. The bold symbol face covers Ω. Other glyphs use the host fallback.
+The Clay frame allows 510 boxes and nonempty text leaves, including the
+app wrapper, and 65,536 UTF-8 text bytes. See the
+[fixed VM capacities](../docs/fixed-capacities.md) and [app storage](#app-storage)
+for runtime and write limits. The [parity report](../e2e/fixtures/clay_inspector/PARITY.md)
+records the widths and scales checked. Measured box edges and line metrics
+agree within one logical point. The native field bezel, checkbox glyph,
+focus rings, window chrome and system popovers keep host appearance.
+
+### Sign and verify the recipient ZIP
+
+On the signing Mac, install a Developer ID Application certificate in the
+Keychain and create a `notarytool` profile interactively. Use Xcode's
+`notarytool` and `stapler` tools. Keep the private key and Apple credentials
+in the Keychain.
+
+```sh
+security find-identity -v -p codesigning
+xcrun notarytool store-credentials mochi-release
+MOCHI_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+  MOCHI_NOTARY_PROFILE=mochi-release \
+  ruby runtime/desktop/distribute.rb package \
+  build/stations-mac/Stations.app build/stations-macos-arm64.zip
+ruby runtime/desktop/distribute.rb verify build/stations-macos-arm64.zip
+```
+
+The packager signs a staged copy with hardened runtime and a secure
+timestamp, submits it to Apple, staples the accepted ticket to the app
+and creates the recipient ZIP. The verifier checks the extracted app's
+Developer ID signature, ticket and Gatekeeper assessment. [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
+
+Run the same release contract on the final ZIP pair with the matching
+toolchain archives from the same revision.
+
+```sh
+ruby scripts/stations_release.rb verify build/toolchains \
+  /path/to/stations-web.zip build/stations-macos-arm64.zip
+```
+
+On a separate clean Mac for each supported architecture, download the final
+ZIP through a browser to retain quarantine and extract it with Finder.
+Disconnect the network before first launch. Open **Stations**, select **Café**,
+click **Edit station**, and save **Café North** with **Open to public** checked.
+Quit and reopen the app, then reopen the editor and confirm both values.
+Record the macOS version, architecture and ZIP SHA-256 with the result.
+
+When publication is authorized, attach the verified web and signed Mac ZIPs,
+the matching toolchain archives and this guide to the project's tagged GitHub
+release. Use the app ZIP that passed the recipient check. For static hosting,
+deploy the extracted `stations/` directory under the chosen prefix. The
+[payload audit](PAYLOAD_BUDGETS.md#open-raw-ceiling-overage-at-portable-prefix-deployment-e6s2)
+tracks the existing core raw-byte overage.
 
 ## Checkout-backed native build
 

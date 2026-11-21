@@ -322,7 +322,7 @@ async function settleFrames(page) {
   }));
 }
 
-async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
+async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint, publishedEntry = false) {
   let page;
   let origin = sourceLabel(testCase.ruby_file ? testCase : testCase.steps[0] || { ruby_file: "<ruby test>", line: 1 });
   let stepDescription = "";
@@ -380,7 +380,8 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
     let expectedError = null;
     let activePointer = null;
     let expectationOrigin = null;
-    await page.goto(`${baseUrl}/`);
+    const entryUrl = `${baseUrl}/`;
+    await page.goto(entryUrl);
     await page.waitForFunction(() => window.MochiLoader && window.MochiLoader.manifest);
     assertDiagnostics(await drainDiagnostics(), origin);
 
@@ -402,7 +403,11 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
       try {
         if (step.operation === "mount") {
           if (host) throw new Error(`${origin}: each test can mount one root component`);
-          await page.evaluate(({ tag, props }) => {
+          if (publishedEntry) {
+            if (Object.keys(step.props || {}).length > 0) throw new Error("the published entry owns its root inputs");
+            const rootCount = await page.locator(`body > ${step.tag}`).count();
+            if (rootCount !== 1) throw new Error(`expected one published root '${step.tag}', found ${rootCount}`);
+          } else await page.evaluate(({ tag, props }) => {
             const element = document.createElement(tag);
             Object.entries(props || {}).forEach(([name, value]) => {
               if (!/^[a-zA-Z][a-zA-Z0-9:_-]*$/.test(name)) {
@@ -657,7 +662,12 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
           if (step.operation === "unmount" && !host) throw new Error(`${origin}: mount a component before unmount`);
           if (step.operation === "remount" && !host && !detachedHost && !step.tag) throw new Error(`${origin}: remount requires a prior unmount or component tag`);
           const targetTag = host || detachedHost || step.tag;
-          await page.evaluate(({ tag, operation, nextTag, props }) => {
+          if (publishedEntry && step.operation === "remount") {
+            if (!host || step.tag || Object.keys(step.props || {}).length > 0) {
+              throw new Error("reopening a published entry requires its current root and inputs");
+            }
+            await page.reload();
+          } else await page.evaluate(({ tag, operation, nextTag, props }) => {
             const current = document.querySelector(tag);
             if (current) current.remove();
             if (operation === "remount") {
@@ -711,18 +721,24 @@ async function runCase(browser, browserName, baseUrl, testCase, onCheckpoint) {
 }
 
 async function main() {
-  const [bundleDir, planPath, browserList = "chromium,firefox,webkit"] = process.argv.slice(2);
+  const [bundleDir, planPath, browserList = "chromium,firefox,webkit", deploymentPrefix] = process.argv.slice(2);
   if (!bundleDir || !planPath) {
-    console.error("usage: mochi_test_runner.cjs <bundle-dir> <test-plan.json> [browsers]");
+    console.error("usage: mochi_test_runner.cjs <bundle-dir> <test-plan.json> [browsers] [deployment-prefix]");
     process.exitCode = 2;
     return;
   }
+  if (deploymentPrefix !== undefined && !/^(?:\/[a-zA-Z0-9_-]+)+$/.test(deploymentPrefix)) {
+    throw new Error("deployment prefix must be an absolute URL path without a trailing slash");
+  }
+  const root = path.resolve(bundleDir);
+  const prefix = `${deploymentPrefix || ""}/`;
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   const server = http.createServer((request, response) => {
     const pathname = decodeURIComponent((request.url || "/").split("?")[0]);
-    const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-    const filePath = path.resolve(bundleDir, relative);
-    if (filePath !== bundleDir && !filePath.startsWith(bundleDir + path.sep)) {
+    if (!pathname.startsWith(prefix)) return void response.writeHead(404).end();
+    const relative = pathname.slice(prefix.length).replace(/^\/+/, "") || "index.html";
+    const filePath = path.resolve(root, relative);
+    if (!filePath.startsWith(root + path.sep)) {
       response.writeHead(403).end();
       return;
     }
@@ -745,7 +761,7 @@ async function main() {
       server.listen(0, "127.0.0.1", resolve);
     });
     const address = server.address();
-    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const baseUrl = `http://127.0.0.1:${address.port}${deploymentPrefix || ""}`;
     for (const browserName of browserList.split(",").map((name) => name.trim()).filter(Boolean)) {
       const browserType = playwright[browserName];
       let browser;
@@ -759,7 +775,7 @@ async function main() {
       try {
         for (const testCase of plan.tests || []) {
           try {
-            await runCase(browser, browserName, baseUrl, testCase);
+            await runCase(browser, browserName, baseUrl, testCase, undefined, deploymentPrefix !== undefined);
           } catch (error) {
             failed = true;
             console.error(`FAIL [${browserName}] ${testCase.name}: ${error.message}`);
