@@ -366,14 +366,14 @@ When publication is authorized, attach the verified web and signed Mac ZIPs,
 the matching toolchain archives and this guide to the project's tagged GitHub
 release. Use the app ZIP that passed the recipient check. For static hosting,
 deploy the extracted `stations/` directory under the chosen prefix. The
-[payload audit](PAYLOAD_BUDGETS.md#open-raw-ceiling-overage-at-portable-prefix-deployment-e6s2)
-tracks the existing core raw-byte overage.
+[payload audit](PAYLOAD_BUDGETS.md#shipped-loader-formatting) verifies the
+shared web runtime and existing size ceilings.
 
 ## Checkout-backed native build
 
 `task desktop:demo` links the AppKit host using the matching GVM source
-checkout and writes `build/desktop-mvp/Stations.app`. Hosted macOS CI uses
-the full upstream commit SHA in `MOCHI_NATIVE_GVM_REVISION`. The host
+checkout and writes `build/desktop-mvp/Stations.app`. The macOS CI workflow
+pins the matching companion source revision by full commit SHA. The host
 requires native ABI v3 and validates the scene's capacity fingerprint before
 loading Ruby.
 

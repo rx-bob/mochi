@@ -44,6 +44,15 @@ The compiler copies the current runtime artifacts:
 - `runtime/mochi-format.js` when the formatting capability is reachable
 - `runtime/mochi-fetch.js` when the network capability is reachable
 
+The shipped loader is generated from `runtime/src/mochi-loader.js` with the
+pinned Terser dependency in `runtime/package-lock.json`. Generation removes
+formatting and comments while preserving names and code logic. It escapes
+non-ASCII literals so the loader can run from pages using other encodings.
+After editing the source, run `npm ci` and `npm run build:loader` in
+`runtime/`, then include the regenerated file with the source change. CI
+checks that the shipped file matches the source. App builds copy that file
+directly.
+
 Compression uses Ruby `Zlib::GzipWriter` at level 9 with the gzip modification
 time fixed to 1. Raw byte counts are file sizes.
 
@@ -68,7 +77,7 @@ WASM from the current shared worktree:
 | Network initial | 433,344 | 138,800 | 8 |
 | Network total | 433,344 | 138,800 | 8 |
 
-### Open raw ceiling overage at portable prefix deployment (E6.S2)
+### Raw ceiling overage recorded at portable prefix deployment (E6.S2)
 
 The audit on incoming Mochi revision `4cbed74` with the local GVM artifacts
 from the `0151bc5` checkout already reported a raw core of **436,941 bytes**.
@@ -83,10 +92,10 @@ ceiling at 435,948 bytes. The keyed-row focus change in `4cbed74` accounts for
 With E6.S2, the ordinary minimal fixture matches the incoming build
 byte-for-byte. Its loader, GVM JavaScript and WASM also match those in the
 portable inspector by SHA-256. Prefix deployment adds zero core or desktop
-renderer bytes. The raw gate still fails with the existing measurements
-below. The later formatting load remains at its existing ceiling.
+renderer bytes. The raw gate failed at the measurements below. The later
+formatting load remained at its existing ceiling.
 
-| Set | Existing raw ceiling | Incoming and current raw | Overage |
+| Set | Existing raw ceiling | Incoming raw | Overage |
 | --- | ---: | ---: | ---: |
 | Core runtime | 424,531 | 436,941 | 12,410 |
 | Minimal initial | 428,209 | 440,619 | 12,410 |
@@ -101,9 +110,16 @@ editing adapter on first open. These three files measure **11,441 raw /
 3,912 gzip bytes**. The entry shares the editor's font files with the station
 rows. The inspector adds its record helper to the entry closure so it can
 read saved names during initialization. Portable focus and announcements reuse
-the existing browser focus and ARIA behavior. The ordinary DOM core is still
-**436,941 raw / 133,251 gzip bytes**, and the open raw ceiling overage above
-continues to fail the gate.
+the existing browser focus and ARIA behavior. The ordinary DOM core stayed at
+**436,941 raw / 133,251 gzip bytes** at that revision.
+
+### Shipped loader formatting
+
+The generated loader saves **68,055 raw / 12,814 gzip bytes**. The DOM core
+now measures **368,886 raw / 120,437 gzip bytes**. `task payload` passes the
+existing ceilings along with runtime identity, exact file membership, and
+deterministic output checks. Ordinary and portable apps share the same
+generated loader.
 
 ### Stable generated host bridge properties (Ruby reliability audit)
 

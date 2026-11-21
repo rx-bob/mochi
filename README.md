@@ -61,6 +61,22 @@ configuration, exit codes, rule defaults, and suppression forms.
 `mochi test -i . --browsers=chromium` for a single engine, or add `--typecheck`
 to the build command to check your Ruby with Sorbet.
 
+### Build the Stations example for web and macOS
+
+With the [installed macOS toolchain](references/CLAY_PORTABLE.md#installed-macos-toolchain),
+run these commands from the Mochi checkout. Both outputs use the same Ruby
+components and templates.
+
+```sh
+mochi -i e2e/fixtures/clay_inspector -o build/stations-web
+mochi --target=desktop -i e2e/fixtures/clay_inspector -o build/stations-mac
+```
+
+Serve the web directory with a static server or launch
+`build/stations-mac/Stations.app` on the Mac. The
+[portable project guide](references/CLAY_PORTABLE.md) covers shared tests,
+supported features, and distribution.
+
 ## Example Component
 
 A component declares its HTML tag, keeps state in Ruby instance variables,

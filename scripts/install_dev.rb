@@ -117,7 +117,7 @@ def archive_record(core_source, desktop_source, prefix, generation)
     raise "invalid capacity profile #{profile}"
   end
   ToolchainArchive.match!(metadata, {"capacity_fingerprint" => capacity}, File.join(core, "toolchain.json"))
-  unless File.read(paths.fetch("loader")).match?(/MANIFEST_SCHEMA_VERSION\s*=\s*#{MANIFEST_SCHEMA_VERSION}\b/)
+  unless File.binread(paths.fetch("loader")).match?(/MANIFEST_SCHEMA_VERSION\s*=\s*#{MANIFEST_SCHEMA_VERSION}\b/)
     raise "#{paths.fetch('loader')} does not support bundle schema #{MANIFEST_SCHEMA_VERSION}"
   end
   adapters = metadata.fetch("host_adapters").to_h do |name, relative|
@@ -286,7 +286,7 @@ def install_locked(action, prefix, core, desktop)
          capacity_profile["fingerprint"].is_a?(String) && capacity_profile["fingerprint"].match?(/\A[0-9a-f]{64}\z/)
     fail_setup("#{files.fetch("gvm_capacity")} is not a valid GVM capacity profile; rebuild with `task gvm:wasm`")
   end
-  loader_text = File.read(files.fetch("loader"))
+  loader_text = File.binread(files.fetch("loader"))
   unless loader_text.match?(/MANIFEST_SCHEMA_VERSION\s*=\s*#{MANIFEST_SCHEMA_VERSION}\b/)
     fail_setup("loader at #{files.fetch("loader")} does not support schema #{MANIFEST_SCHEMA_VERSION}; update Mochi runtime resources")
   end

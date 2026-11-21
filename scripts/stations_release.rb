@@ -55,6 +55,8 @@ module StationsRelease
     puts DesktopDistribution.checked("/usr/bin/sw_vers", "-productVersion").strip.prepend("Tested macOS ")
     puts DesktopDistribution.checked("/usr/bin/xcrun", "vtool", "-show-build", host)
     puts "Verified #{architecture} AppKit replay and offline app launch"
+    puts "SHA-256 #{ToolchainArchive.checksum(web_zip)}  #{File.basename(web_zip)}"
+    puts "SHA-256 #{ToolchainArchive.checksum(mac_zip)}  #{File.basename(mac_zip)}"
   end
 
   def build(output, prefix, work, environment)

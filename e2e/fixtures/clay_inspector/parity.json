@@ -1,5 +1,7 @@
 {
   "widths": [
+    285,
+    320,
     333,
     363,
     366,
@@ -27,7 +29,7 @@
     "chromium": {
       "regions": {
         "panel": 0.052,
-        "title": 0.043,
+        "title": 0.052,
         "actions": 0.113,
         "action-reverse": 0.086,
         "action-details": 0.095,

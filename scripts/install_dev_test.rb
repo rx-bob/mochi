@@ -46,8 +46,12 @@ begin
   raise "build touched output before validating resources" unless File.read(sentinel) == "keep"
 
   File.write(File.join(prefix, "bin", "user-owned-file"), "keep")
-  stdout, stderr, status = run(env, "ruby", installer, "update", chdir: outside)
+  unicode_loader = File.join(temp_root, "UTF-8 loader.js")
+  File.binwrite(unicode_loader, File.binread(record.fetch("loader")) + "\n// Café\n".b)
+  stdout, stderr, status = run(env.merge("LC_ALL" => "C", "MOCHI_LOADER" => unicode_loader),
+    "ruby", installer, "update", chdir: outside)
   raise "update failed: #{stdout}\n#{stderr}" unless status.success?
+  raise "loader override missing from record" unless JSON.parse(File.read(record_path)).fetch("loader") == unicode_loader
   stdout, stderr, status = run(env, "ruby", installer, "remove", chdir: outside)
   raise "remove failed: #{stdout}\n#{stderr}" unless status.success?
   raise "owned launcher was not removed" if File.exist?(launcher)

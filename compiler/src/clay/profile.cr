@@ -302,8 +302,12 @@ class ClayProfile
   def self.validate_ruby(source : String, path : String, line : Int32, component : String, capability_receivers : Set(String)) : Bool
     return false unless source.includes?("Mochi") || capability_receivers.any? { |receiver| source.includes?(receiver) }
 
-    tree = TreeSitter::RubyParser.new.parse(source)
+    parser = TreeSitter::RubyParser.new
+    tree = parser.parse(source)
     check_calls(tree.root_node, path, line, component, capability_receivers)
+  ensure
+    tree.try(&.close)
+    parser.try(&.close)
   end
 
   private def self.check_calls(node, path, line, component, capability_receivers) : Bool

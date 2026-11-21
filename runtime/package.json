@@ -4,9 +4,12 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "build:loader": "node build_loader.cjs --write",
+    "check:loader": "node build_loader.cjs --check",
+    "test": "npm run check:loader && node --test test/*.test.js"
   },
   "devDependencies": {
-    "jsdom": "^31.0.0"
+    "jsdom": "^31.0.0",
+    "terser": "5.39.0"
   }
 }

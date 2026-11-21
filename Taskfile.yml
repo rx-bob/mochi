@@ -21,6 +21,8 @@ vars:
       llvm_bin="${EMSDK_LLVM_BIN:-${emscripten_prefix}/libexec/llvm/bin}"
       printf 'export EMSDK_PYTHON="%s"' "$python"
       if [ -n "$llvm_bin" ] && [ -d "$llvm_bin" ]; then
+        # Match the physical LLVM path used by the GVM build subprocess.
+        llvm_bin=$(cd "$llvm_bin" && pwd -P)
         printf ' && export PATH="%s:$PATH"' "$llvm_bin"
       fi
   SPEC_LINK_FLAGS: '--link-flags="-L{{.ROOT_DIR}}/fragments/libs"'
@@ -341,22 +343,7 @@ tasks:
     desc: Rebuild the mochi-gvm WASM and JS artifacts
     dir: '{{.GVM_DIR}}'
     cmds:
-      - |
-        set -e
-        if [ -z "${EMSDK_PYTHON:-}" ]; then
-          if [ -x /opt/homebrew/bin/python3 ]; then
-            EMSDK_PYTHON=/opt/homebrew/bin/python3
-          else
-            EMSDK_PYTHON=$(command -v python3)
-          fi
-        fi
-        export EMSDK_PYTHON
-        emscripten_prefix="${EMSCRIPTEN_PREFIX:-$(brew --prefix emscripten 2>/dev/null || true)}"
-        llvm_bin="${EMSDK_LLVM_BIN:-${emscripten_prefix}/libexec/llvm/bin}"
-        if [ -d "$llvm_bin" ]; then
-          export PATH="$llvm_bin:$PATH"
-        fi
-        goose run scripts/build_wasm.goose
+      - '{{.EMCC_CONFIG}} && goose run scripts/build_wasm.goose'
 
   generate-batteries:
     desc: Regenerate the built-in battery sources

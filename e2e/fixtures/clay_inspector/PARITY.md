@@ -8,13 +8,13 @@ directory even when a comparison fails. Ordinary browser regression tests run
 on their own.
 
 The Ruby scenario records the initial, selected and reversed states. Both
-drivers replay it at viewport widths of 333, 363, 366, 368, 567, 568 and 640
-logical points with 2× captures. They also capture at 363 and 366 points at
-1×. The project's 24px inset and 520px width cap apply in both builds. The
-last three widths test just below, exactly at and above the cap. The crop
-includes the full viewport width and both vertical insets. It excludes window
-chrome. AppKit converts the bitmap to sRGB and browser images are decoded to
-sRGB for comparison.
+drivers replay it at viewport widths of 285, 320, 333, 363, 366, 368, 567,
+568 and 640 logical points with 2× captures. They also capture at 363 and
+366 points at 1×. Both builds apply the project's 24px inset and 520px width
+cap. The last three widths test just below, exactly at and above the cap.
+The crop includes the full viewport width and both vertical insets. It
+excludes window chrome. AppKit converts the bitmap to sRGB and browser
+images are decoded to sRGB for comparison.
 
 The comparison checks every measured edge within one logical point. Control
 order, focus, accessible roles and names, pressed state, inherited text color,
@@ -36,28 +36,33 @@ The inspector exercises this at a panel width of 320 points.
 
 [`parity.json`](parity.json) records the per-engine limits for pixels with a
 channel difference above 32. The table lists measured maximum percentages across
-the 21 reviewed 2× capture pairs for each engine on arm64 macOS 26.6.2 with the
+the 27 reviewed 2× capture pairs for each engine on arm64 macOS 26.6.2 with the
 browsers from the Playwright lockfile. The limits allow some raster variation
 around those measurements.
 
 | Region | Chromium | Firefox | WebKit |
 |---|---:|---:|---:|
-| Panel including controls | 3.71% | 4.05% | 3.31% |
-| Title | 3.87% | 3.97% | 0.00% |
-| Actions container | 7.04% | 8.97% | 4.95% |
+| Panel including controls | 3.29% | 3.80% | 2.62% |
+| Title | 4.78% | 4.90% | 0.00% |
+| Actions container | 7.40% | 10.06% | 7.36% |
 | Reverse button | 2.83% | 6.59% | 0.00% |
 | Details button | 2.68% | 6.45% | 0.00% |
 | Details button focused | 19.66% | 14.56% | 8.11% |
-| Station 01 | 2.23% | 1.99% | 0.00% |
-| Station 02 | 2.62% | 3.19% | 0.00% |
+| Edit station button | 3.88% | 7.04% | 0.60% |
+| Station 01 | 2.51% | 2.46% | 0.00% |
+| Station 02 | 2.78% | 3.19% | 0.00% |
 | Station 02 focused | 13.61% | 8.83% | 5.33% |
-| Station 03 | 1.20% | 1.29% | 0.00% |
-| Selection label | 2.81% | 2.63% | 0.00% |
-| Details label | 2.52% | 2.69% | 0.00% |
+| Station 03 | 1.42% | 1.59% | 0.00% |
+| Selection label | 3.47% | 3.24% | 0.00% |
+| Details label | 2.66% | 2.83% | 0.00% |
+
+At 285 points the Chromium title reaches 4.78% along glyph edges. Its 2×
+ceiling allows 5.2%. The title's line text, metrics and bounds keep their
+existing checks.
 
 The 1× policy records separate limits where the six additional captures
 show more raster variation. Chromium peaks at 4.82% for the title and 28.87%
-for focused Details. Firefox peaks at 12.49% for the actions, 11.38% for
+for focused Details. Firefox peaks at 16.02% for the actions, 11.38% for
 Reverse, 11.48% for Details, and 27.50% for focused Details. WebKit peaks
 at 7.45% for the focused Café row.
 
